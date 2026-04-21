@@ -1,0 +1,149 @@
+"""
+Action encoding + validation + masking.
+
+Action space (matches ARCHITECTURE §9.3):
+  action = type_idx * MAX_SLOTS * MAX_SLOTS + src * MAX_SLOTS + tgt   (send)
+  action = NOOP_INDEX                                                 (no-op)
+
+Total size = 4 × 32 × 32 + 1 = 4097.
+
+One action per decision. A "decision" happens every DECISION_INTERVAL_TICKS ticks.
+An action can only be issued for a player who owns the source building AND
+whose source has enough garrison to send at least MIN_SEND_INTERNAL.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+
+from sim import config as C
+from sim.state import State
+
+
+NUM_TYPES = len(C.SEND_PERCENTAGES)
+SLOTS_SQ  = C.MAX_BUILDING_SLOTS * C.MAX_BUILDING_SLOTS
+NOOP_INDEX = NUM_TYPES * SLOTS_SQ              # 4 * 1024 = 4096
+ACTION_SPACE_SIZE = NOOP_INDEX + 1              # 4097
+
+
+@dataclass(frozen=True)
+class Action:
+    """Decoded action. `kind` is "send" or "noop"."""
+    kind: str
+    type_idx: int = 0         # 0..NUM_TYPES-1, indexes SEND_PERCENTAGES
+    src: int = 0
+    tgt: int = 0
+
+    @property
+    def percentage(self) -> int:
+        return C.SEND_PERCENTAGES[self.type_idx]
+
+
+def encode(type_idx: int, src: int, tgt: int) -> int:
+    """Pack (type, src, tgt) into a single action index."""
+    return type_idx * SLOTS_SQ + src * C.MAX_BUILDING_SLOTS + tgt
+
+
+def decode(action_idx: int) -> Action:
+    """Unpack action index into an Action struct."""
+    if action_idx == NOOP_INDEX:
+        return Action(kind="noop")
+    type_idx, rem = divmod(action_idx, SLOTS_SQ)
+    src, tgt = divmod(rem, C.MAX_BUILDING_SLOTS)
+    return Action(kind="send", type_idx=type_idx, src=src, tgt=tgt)
+
+
+# ---------------------------------------------------------------------------
+# Send amount — fixed-point, always integer real units (multiples of SCALE)
+# ---------------------------------------------------------------------------
+
+def send_amount(garrison_internal: int, percentage: int) -> int:
+    """How many internal units to send for a (garrison, pct) pair.
+
+    Always a multiple of SCALE (i.e. a whole number of real units).
+    Respects MIN_GARRISON_AFTER_SEND (0 in v0.1; reserved for future rule).
+    """
+    # Cap by max sendable (respects the "leave at least X behind" future rule).
+    max_sendable = max(0, garrison_internal - C.MIN_GARRISON_AFTER_SEND)
+    # Compute requested amount in real units, floor to integer, then scale back.
+    real_units = (max_sendable * percentage) // (100 * C.SCALE)
+    return real_units * C.SCALE
+
+
+# ---------------------------------------------------------------------------
+# Validation + masking
+# ---------------------------------------------------------------------------
+
+def is_valid(state: State, player: int, action: Action) -> bool:
+    """Is this action legal for `player` in the current state?"""
+    if action.kind == "noop":
+        return True
+    src, tgt = action.src, action.tgt
+    if src == tgt:
+        return False
+    if src < 0 or src >= C.MAX_BUILDING_SLOTS:
+        return False
+    if tgt < 0 or tgt >= C.MAX_BUILDING_SLOTS:
+        return False
+
+    b = state.buildings
+    if not b["alive"][src] or not b["alive"][tgt]:
+        return False
+    if b["owner"][src] != player:
+        return False
+    if b["upgrade_timer"][src] != 0:          # can't send from upgrading building (v0.2+)
+        return False
+
+    pct = C.SEND_PERCENTAGES[action.type_idx]
+    if send_amount(int(b["garrison"][src]), pct) < C.MIN_SEND_INTERNAL:
+        return False
+
+    # Free slot required for the unit group.
+    if not np.any(state.unit_groups["alive"] == 0):
+        return False
+
+    return True
+
+
+def compute_mask(state: State, player: int) -> np.ndarray:
+    """(ACTION_SPACE_SIZE,) bool mask — True where the action is legal.
+
+    Used to zero out invalid-action logits before the agent samples.
+    """
+    mask = np.zeros(ACTION_SPACE_SIZE, dtype=bool)
+    mask[NOOP_INDEX] = True                     # noop always valid
+
+    b = state.buildings
+    g = state.unit_groups
+    has_free_group = bool(np.any(g["alive"] == 0))
+    if not has_free_group:
+        return mask
+
+    alive = b["alive"].astype(bool)
+    owned = alive & (b["owner"] == player) & (b["upgrade_timer"] == 0)
+    valid_tgt = alive                          # any alive building; self-pairs removed below
+
+    for type_idx, pct in enumerate(C.SEND_PERCENTAGES):
+        # Source eligibility also requires enough garrison for this pct.
+        garrison = b["garrison"]
+        # Vectorized send_amount check.
+        max_sendable = np.maximum(0, garrison - C.MIN_GARRISON_AFTER_SEND)
+        real_units = (max_sendable.astype(np.int32) * pct) // (100 * C.SCALE)
+        enough = (real_units * C.SCALE) >= C.MIN_SEND_INTERNAL
+        src_ok = owned & enough                  # (N,) bool
+
+        if not np.any(src_ok):
+            continue
+
+        # Build a (N, N) eligibility matrix: rows=src, cols=tgt.
+        pair_ok = src_ok[:, None] & valid_tgt[None, :]
+        np.fill_diagonal(pair_ok, False)
+
+        # Flatten to action indices for this type.
+        base = type_idx * SLOTS_SQ
+        flat = pair_ok.reshape(-1)
+        mask[base:base + SLOTS_SQ] = flat
+
+    return mask
