@@ -39,7 +39,7 @@ DEFAULT_CAPACITY      = 30 * SCALE    # 30 real units max garrison
 # ---------------------------------------------------------------------------
 # Movement
 # ---------------------------------------------------------------------------
-TRAVEL_SPEED          = 100           # map-units moved per tick (1 sec)
+TRAVEL_SPEED          = 200           # map-units moved per tick (1 sec)
 MIN_TRAVEL_TICKS      = 1
 MAX_TRAVEL_TICKS      = 8             # map is sized so corner-to-corner ≤ 8
 

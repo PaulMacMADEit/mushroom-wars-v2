@@ -1,0 +1,21 @@
+{
+  "name": "timeout by units",
+  "setup_summary": "1 building each, p1 has more units at timeout",
+  "expected_summary": "p1 wins on timeout by units",
+  "steps": 200,
+  "buildings": [
+    { "slot": 0, "owner": "p1", "garrison_real": 20, "capacity_real": 20, "x": 0, "y": 0 },
+    { "slot": 1, "owner": "p2", "garrison_real": 10, "capacity_real": 10, "x": 350, "y": 0 }
+  ],
+  "expected": {
+    "tick_eq": 200,
+    "phase": "p1_wins",
+    "unit_groups_alive_eq": 0,
+    "reward_p1_total_eq": 1.0,
+    "reward_p2_total_eq": -1.0,
+    "buildings": [
+      { "slot": 0, "owner": "p1", "garrison_internal_eq": 200 },
+      { "slot": 1, "owner": "p2", "garrison_internal_eq": 100 }
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "reinforce over cap",
+  "setup_summary": "friendly target 30/30, reinforced by 40",
+  "expected_summary": "30 + 40 = 70 on target",
+  "steps": 1,
+  "buildings": [
+    { "slot": 0, "owner": "p1", "garrison_real": 40, "capacity_real": 100, "x": 0, "y": 0 },
+    { "slot": 1, "owner": "p1", "garrison_real": 30, "capacity_real": 30, "x": 100, "y": 0 },
+    { "slot": 2, "owner": "p2", "garrison_real": 0, "capacity_real": 0, "x": 1000, "y": 0 }
+  ],
+  "actions": [
+    { "tick": 0, "player": "p1", "type_idx": 3, "src": 0, "tgt": 1 }
+  ],
+  "expected": {
+    "tick_eq": 1,
+    "phase": "playing",
+    "unit_groups_alive_eq": 0,
+    "reward_p1_total_eq": 0.0,
+    "reward_p2_total_eq": 0.0,
+    "buildings": [
+      { "slot": 0, "owner": "p1", "garrison_internal_eq": 10 },
+      { "slot": 1, "owner": "p1", "garrison_internal_eq": 700 }
+    ]
+  }
+}

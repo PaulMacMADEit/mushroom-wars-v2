@@ -5,7 +5,7 @@ Per-tick phases:
   1. apply actions       (if caller provided any)
   2. advance production  (owned buildings regenerate garrison up to capacity)
   3. advance movement    (unit groups progress; collect arrivals)
-  4. resolve arrivals    (field cancel → reinforce or combat)
+  4. resolve arrivals    (sequential reinforce/combat)
   5. check victory
 
 All five phases are wrapped in perf_counter timers (state.perf). The total cost
@@ -71,7 +71,7 @@ def step_tick(
     tb = time.perf_counter_ns()
     state.perf["movement_ns"] += tb - ta
 
-    # 4. Resolve arrivals (field cancel + combat). Produces capture/loss rewards.
+    # 4. Resolve arrivals (sequential reinforce/combat). Produces capture/loss rewards.
     ta = time.perf_counter_ns()
     dr1, dr2 = _resolve_arrivals(state, arrivals)
     r1 += dr1
@@ -131,11 +131,17 @@ def _apply_send(state: State, player: int, action: Action) -> None:
 
 
 def _advance_production(state: State) -> None:
-    """Each owned + alive building regenerates garrison, capped at capacity."""
+    """Each owned + alive building regenerates garrison up to capacity.
+
+    Buildings may already sit above capacity due to friendly reinforcement or a
+    large capture. In that case production should stop, not clamp them back
+    down.
+    """
     b = state.buildings
     alive = b["alive"] == 1
     owned = (b["owner"] == C.OWNER_P1) | (b["owner"] == C.OWNER_P2)
-    eligible = alive & owned
+    below_cap = b["garrison"] < b["capacity"]
+    eligible = alive & owned & below_cap
 
     # v0.1: all buildings are TYPE_BASIC with one rate. When more types land,
     # this becomes a per-type rate lookup (cheap — 32-entry gather).
@@ -173,13 +179,13 @@ def _advance_movement(state: State) -> list:
 
 
 def _resolve_arrivals(state: State, arrivals: list) -> tuple[float, float]:
-    """Apply field cancellation + combat for all arrivals this tick.
+    """Apply arrivals in sequence, matching the reference playable sim.
 
-    Group arrivals by target. For each target:
-      1. Sum arrivals by owner (A1 from P1, A2 from P2).
-      2. Field cancel: A1' = max(0, A1-A2), A2' = max(0, A2-A1).
-      3. If survivors are friendly to the building → reinforce (cap by capacity).
-      4. If survivors are enemy → combat with defense bonus.
+    Arrivals are processed in the order produced by `_advance_movement`, which
+    is deterministic because unit-group slots are fixed. Friendly arrivals
+    reinforce without a cap. Hostile arrivals resolve combat against the
+    building's current owner/garrison at that moment, so same-tick contests
+    can capture and then immediately be counterattacked.
 
     Returns (reward_p1, reward_p2) from capture/loss events.
     """
@@ -189,44 +195,25 @@ def _resolve_arrivals(state: State, arrivals: list) -> tuple[float, float]:
     b = state.buildings
     r1 = r2 = 0.0
 
-    # Aggregate per target.
-    by_target: dict[int, list[int]] = {}   # tgt → [A1_total, A2_total]
     for tgt, owner, count in arrivals:
-        entry = by_target.setdefault(tgt, [0, 0])
-        if owner == C.OWNER_P1:
-            entry[0] += count
-        elif owner == C.OWNER_P2:
-            entry[1] += count
-
-    for tgt, (a1, a2) in by_target.items():
         if not b["alive"][tgt]:
-            continue
-
-        # Field cancel.
-        a1p = max(0, a1 - a2)
-        a2p = max(0, a2 - a1)
-        if a1p == 0 and a2p == 0:
             continue
 
         owner_before = int(b["owner"][tgt])
         garrison = int(b["garrison"][tgt])
-        capacity = int(b["capacity"][tgt])
 
-        attacker = C.OWNER_P1 if a1p > 0 else C.OWNER_P2
-        survivors = a1p if a1p > 0 else a2p
-
-        if owner_before == attacker:
+        if owner_before == owner:
             # Reinforce — not combat.
-            b["garrison"][tgt] = min(capacity, garrison + survivors)
+            b["garrison"][tgt] = garrison + count
             continue
 
-        new_garrison, new_owner = _combat(garrison, survivors, attacker, owner_before)
+        new_garrison, new_owner = _combat(garrison, count, owner, owner_before)
         b["owner"][tgt] = new_owner
-        b["garrison"][tgt] = min(capacity, new_garrison)
+        b["garrison"][tgt] = new_garrison
 
         # Reward bookkeeping.
-        if new_owner == attacker:
-            if attacker == C.OWNER_P1:
+        if new_owner == owner:
+            if owner == C.OWNER_P1:
                 r1 += C.REWARD_CAPTURE
             else:
                 r2 += C.REWARD_CAPTURE
@@ -240,19 +227,37 @@ def _resolve_arrivals(state: State, arrivals: list) -> tuple[float, float]:
 
 
 def _combat(garrison: int, attackers: int, attacker_owner: int, owner_before: int) -> tuple[int, int]:
-    """Ratio-fight combat with integer fixed-point. Returns (new_garrison, new_owner).
+    """Proportional combat with integer fixed-point. Returns (new_garrison, new_owner).
 
-    effective_defender = garrison * DEF_NUM // DEF_DEN
-    if attackers < eff_def: defender holds, new_garrison = eff_def − attackers
-    if attackers > eff_def: attacker takes it, new_garrison = attackers − eff_def
-    if equal: building becomes neutral with 0 garrison
+    Buildings defend at a constant multiplier:
+
+      effective_defense = garrison * DEF_NUM / DEF_DEN
+
+    Outcomes:
+      attack <  effective_defense → defender holds, remaining garrison is reduced
+                                  proportionally: (defense - attack) / defense_multiplier
+      attack == effective_defense → both wiped, neutral
+      attack >  effective_defense → attacker captures, survivors = attack - defense
+
+    We round to the nearest internal unit so the sim can preserve chip damage
+    using fixed-point integers instead of floats.
     """
-    eff_def = (garrison * C.DEF_BONUS_NUM) // C.DEF_BONUS_DEN
-    if attackers < eff_def:
-        return (eff_def - attackers, owner_before)
-    if attackers > eff_def:
-        return (attackers - eff_def, attacker_owner)
-    return (0, C.OWNER_NEUTRAL)
+    if attackers <= 0:
+        return (garrison, owner_before)
+
+    attack_scaled = attackers * C.DEF_BONUS_DEN
+    defense_scaled = garrison * C.DEF_BONUS_NUM
+
+    if attack_scaled < defense_scaled:
+        remaining_scaled = defense_scaled - attack_scaled
+        remaining = (remaining_scaled + (C.DEF_BONUS_NUM // 2)) // C.DEF_BONUS_NUM
+        return (int(remaining), owner_before)
+    if attack_scaled == defense_scaled:
+        return (0, C.OWNER_NEUTRAL)
+
+    remaining_scaled = attack_scaled - defense_scaled
+    remaining = (remaining_scaled + (C.DEF_BONUS_DEN // 2)) // C.DEF_BONUS_DEN
+    return (int(remaining), attacker_owner)
 
 
 def _check_victory(state: State) -> tuple[float, float, bool]:

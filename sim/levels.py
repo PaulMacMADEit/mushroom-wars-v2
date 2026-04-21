@@ -40,14 +40,20 @@ LEVELS: dict[str, list] = {
 
 def apply(state: State, level_name: str = "crossroads_6") -> None:
     """Populate `state.buildings` from a level definition. Runs precompute_distances()."""
+    if level_name not in LEVELS:
+        raise ValueError(f"Unknown level: {level_name}")
     level = LEVELS[level_name]
     if len(level) > C.MAX_BUILDING_SLOTS:
         raise ValueError(f"Level has {len(level)} buildings; max is {C.MAX_BUILDING_SLOTS}")
 
     b = state.buildings
+    g = state.unit_groups
     b[:] = 0  # clear all slots
+    g[:] = 0  # clear all in-flight groups
 
     for slot, (owner, x, y, garrison_real, type_id) in enumerate(level):
+        if type_id not in C.BUILDING_STATS:
+            raise ValueError(f"Unknown building type_id: {type_id}")
         stats = C.BUILDING_STATS[type_id]
         b[slot]["alive"]    = 1
         b[slot]["owner"]    = owner
@@ -58,6 +64,10 @@ def apply(state: State, level_name: str = "crossroads_6") -> None:
         b[slot]["y"]        = y
 
     # Slots len(level)..MAX are left as alive=0 (empty).
+    state.tick = 0
+    state.phase = C.PHASE_PLAYING
+    for key in state.perf:
+        state.perf[key] = 0
     precompute_distances(state)
 
 

@@ -43,11 +43,19 @@ class Action:
 
 def encode(type_idx: int, src: int, tgt: int) -> int:
     """Pack (type, src, tgt) into a single action index."""
+    if type_idx < 0 or type_idx >= NUM_TYPES:
+        raise ValueError(f"type_idx out of range: {type_idx}")
+    if src < 0 or src >= C.MAX_BUILDING_SLOTS:
+        raise ValueError(f"src out of range: {src}")
+    if tgt < 0 or tgt >= C.MAX_BUILDING_SLOTS:
+        raise ValueError(f"tgt out of range: {tgt}")
     return type_idx * SLOTS_SQ + src * C.MAX_BUILDING_SLOTS + tgt
 
 
 def decode(action_idx: int) -> Action:
     """Unpack action index into an Action struct."""
+    if action_idx < 0 or action_idx > NOOP_INDEX:
+        raise ValueError(f"action_idx out of range: {action_idx}")
     if action_idx == NOOP_INDEX:
         return Action(kind="noop")
     type_idx, rem = divmod(action_idx, SLOTS_SQ)
@@ -80,6 +88,10 @@ def is_valid(state: State, player: int, action: Action) -> bool:
     """Is this action legal for `player` in the current state?"""
     if action.kind == "noop":
         return True
+    if action.kind != "send":
+        return False
+    if action.type_idx < 0 or action.type_idx >= NUM_TYPES:
+        return False
     src, tgt = action.src, action.tgt
     if src == tgt:
         return False

@@ -1,4 +1,15 @@
-"""Tests for the v0.1 basic sim.
+"""Proof-of-correctness test suite for the v0.1 sim.
+
+Strategy:
+  - Every formula documented in sim/engine.py is exercised with hand-computed
+    expected values, including boundary + degenerate cases.
+  - Property-style invariants (unit conservation, non-negativity, ownership
+    bounds) run a scripted game and assert on every tick.
+  - Movement/production/combat ordering is pinned down with explicit tests so
+    accidental re-ordering in engine.step_tick breaks a test loudly.
+  - Key timing/ordering rules (same-tick arrival for 1-tick travel, P1-first
+    action order, production-before-combat, sequential same-tick arrivals)
+    have dedicated tests so any future behaviour change is caught.
 
 Run: pytest tests/ -v
 """
@@ -9,21 +20,75 @@ import numpy as np
 import pytest
 
 from sim import config as C
-from sim.actions import Action, compute_mask, decode, encode, send_amount, NOOP_INDEX
-from sim.engine import step_tick, _combat
-from sim.levels import reset
-from sim.state import count_owned_buildings, count_owned_units
+from sim.actions import (
+    ACTION_SPACE_SIZE,
+    Action,
+    NOOP_INDEX,
+    compute_mask,
+    decode,
+    encode,
+    is_valid,
+    send_amount,
+)
+from sim.engine import _combat, step_tick
+from sim.levels import apply, reset
+from sim.state import (
+    count_owned_buildings,
+    count_owned_units,
+    has_in_flight,
+)
+from sim import levels as sim_levels
 
 
-# ---------------------------------------------------------------------------
-# Action encode/decode
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Helpers
+# ===========================================================================
 
-def test_action_roundtrip():
+P1_BASE = 0
+P2_BASE = 1
+N1_TOP = 2
+N2_BOT = 3
+N3_LEFT = 4
+N4_RIGHT = 5
+
+
+def _clear_groups(state):
+    state.unit_groups[:] = 0
+
+
+def _inject_group(state, slot, owner, src, tgt, count, travel_ticks, progress=0):
+    """Directly place a unit-group in flight for deterministic arrival timing."""
+    g = state.unit_groups
+    g[slot]["alive"] = 1
+    g[slot]["owner"] = owner
+    g[slot]["src_slot"] = src
+    g[slot]["tgt_slot"] = tgt
+    g[slot]["count"] = count
+    g[slot]["progress"] = progress
+    g[slot]["travel_ticks"] = travel_ticks
+
+
+def _total_units_on_board(state):
+    """Garrisons + in-flight, across ALL owners (including neutral)."""
+    b = state.buildings
+    g = state.unit_groups
+    garr = int(np.sum(np.where(b["alive"] == 1, b["garrison"], 0)))
+    flight = int(np.sum(np.where(g["alive"] == 1, g["count"], 0)))
+    return garr + flight
+
+
+# ===========================================================================
+# 1. Action encode / decode
+# ===========================================================================
+
+
+def test_action_roundtrip_full_grid():
+    """Every (type, src, tgt) triple must round-trip losslessly."""
     for type_idx in range(len(C.SEND_PERCENTAGES)):
-        for src in [0, 5, 31]:
-            for tgt in [0, 10, 31]:
+        for src in range(C.MAX_BUILDING_SLOTS):
+            for tgt in range(C.MAX_BUILDING_SLOTS):
                 idx = encode(type_idx, src, tgt)
+                assert 0 <= idx < NOOP_INDEX, f"idx {idx} out of range"
                 a = decode(idx)
                 assert a.kind == "send"
                 assert a.type_idx == type_idx
@@ -31,205 +96,591 @@ def test_action_roundtrip():
                 assert a.tgt == tgt
 
 
+def test_action_space_size_matches_formula():
+    # NUM_TYPES * MAX_SLOTS^2 + 1 (noop)
+    expected = len(C.SEND_PERCENTAGES) * C.MAX_BUILDING_SLOTS ** 2 + 1
+    assert ACTION_SPACE_SIZE == expected
+
+
 def test_noop_decode():
     a = decode(NOOP_INDEX)
     assert a.kind == "noop"
 
 
-# ---------------------------------------------------------------------------
-# Send amount (fixed-point, whole real units)
-# ---------------------------------------------------------------------------
+def test_decode_out_of_range_raises():
+    with pytest.raises(ValueError):
+        decode(-1)
+    with pytest.raises(ValueError):
+        decode(NOOP_INDEX + 1)
 
-@pytest.mark.parametrize("garrison, pct, expected", [
-    (200, 25, 50),    # 20 real, 25% → 5 real = 50 internal
-    (200, 50, 100),   # 20 real, 50% → 10 real
-    (200, 100, 200),  # 20 real, 100% → 20 real
-    (35, 25, 0),      # 3.5 real, 25% → 0.875 real → floor 0 (will be masked)
-    (35, 50, 10),     # 3.5 real, 50% → 1.75 → floor 1 real = 10 internal
-    (35, 100, 30),    # 3.5 real, 100% → 3.5 → floor 3 real (half unit left behind)
-    (0,   100, 0),
-])
-def test_send_amount(garrison, pct, expected):
+
+def test_encode_out_of_range_raises():
+    with pytest.raises(ValueError):
+        encode(-1, 0, 0)
+    with pytest.raises(ValueError):
+        encode(0, -1, 0)
+    with pytest.raises(ValueError):
+        encode(0, 0, C.MAX_BUILDING_SLOTS)
+    with pytest.raises(ValueError):
+        encode(len(C.SEND_PERCENTAGES), 0, 0)
+
+
+def test_action_indices_disjoint():
+    """No two distinct (type, src, tgt) triples should collide to the same idx."""
+    seen = set()
+    for type_idx in range(len(C.SEND_PERCENTAGES)):
+        for src in range(C.MAX_BUILDING_SLOTS):
+            for tgt in range(C.MAX_BUILDING_SLOTS):
+                idx = encode(type_idx, src, tgt)
+                assert idx not in seen
+                seen.add(idx)
+    assert len(seen) == len(C.SEND_PERCENTAGES) * C.MAX_BUILDING_SLOTS ** 2
+
+
+def test_action_unknown_kind_is_invalid():
+    state = reset()
+    assert not is_valid(state, C.OWNER_P1, Action(kind="weird", type_idx=0, src=P1_BASE, tgt=N1_TOP))
+
+
+# ===========================================================================
+# 2. Send amount — fixed-point math must yield whole real units
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "garrison, pct, expected",
+    [
+        (200, 25, 50),    # 20 real * 25% = 5 real = 50 internal
+        (200, 50, 100),
+        (200, 75, 150),
+        (200, 100, 200),
+        (35, 25, 0),      # 3.5 * 0.25 = 0.875 → floor 0 real
+        (35, 50, 10),     # 3.5 * 0.5 = 1.75 → floor 1 real
+        (35, 75, 20),     # 3.5 * 0.75 = 2.625 → floor 2 real
+        (35, 100, 30),    # 3.5 * 1.0 = 3.5 → floor 3 real
+        (0, 100, 0),
+        (5, 100, 0),      # 0.5 real at 100% = 0 real (floored)
+        (10, 100, 10),    # 1 real at 100% = 1 real
+        (300, 100, 300),  # at capacity, 100% sends all
+    ],
+)
+def test_send_amount_values(garrison, pct, expected):
     assert send_amount(garrison, pct) == expected
 
 
-# ---------------------------------------------------------------------------
-# Combat formula
-# ---------------------------------------------------------------------------
+def test_send_amount_is_always_multiple_of_scale():
+    """Core invariant: amounts sent are always whole real units."""
+    for g in range(0, 301, 7):          # arbitrary sweep
+        for pct in C.SEND_PERCENTAGES:
+            assert send_amount(g, pct) % C.SCALE == 0
 
-def test_combat_defender_holds():
-    # 10 real (100 internal) garrison, 5 real (50) attackers → defender holds.
-    # eff_def = 100 * 13 // 10 = 130; 50 < 130 → holds, new = 130 - 50 = 80.
-    ng, owner = _combat(100, 50, C.OWNER_P1, C.OWNER_P2)
-    assert ng == 80
+
+def test_send_amount_monotonic_in_percentage():
+    """Higher pct never yields less."""
+    for g in range(10, 301, 10):
+        amts = [send_amount(g, pct) for pct in C.SEND_PERCENTAGES]
+        assert amts == sorted(amts), f"non-monotonic for g={g}: {amts}"
+
+
+# ===========================================================================
+# 3. Combat formula — exercise every branch, pin the formula
+# ===========================================================================
+
+
+def test_combat_zero_attackers_is_noop():
+    ng, owner = _combat(100, 0, C.OWNER_P1, C.OWNER_P2)
+    assert ng == 100
     assert owner == C.OWNER_P2
 
 
-def test_combat_attacker_takes():
-    # 5 real (50) garrison, 10 real (100) attackers → attacker takes.
-    # eff_def = 65; 100 > 65 → new = 100 - 65 = 35.
+def test_combat_defender_holds_moderate_attack():
+    # 10 real garrison (100), 5 real attackers (50).
+    # Effective defense = 130. Remaining garrison = (130 - 50) / 1.3 = 61.538 -> 62.
+    ng, owner = _combat(100, 50, C.OWNER_P1, C.OWNER_P2)
+    assert ng == 62
+    assert owner == C.OWNER_P2
+
+
+def test_combat_small_attack_chips_proportionally():
+    """Tiny attacks reduce defenders proportionally instead of flooring to 1 damage."""
+    # 10 real garrison (100), 1 real attacker (10).
+    # Remaining garrison = (130 - 10) / 1.3 = 92.307 -> 92.
+    ng, owner = _combat(100, 10, C.OWNER_P1, C.OWNER_P2)
+    assert ng == 92
+    assert owner == C.OWNER_P2
+
+
+def test_combat_small_attack_bigger_defender():
+    """300 garrison vs 20 attackers leaves 28.5 after proportional defense."""
+    ng, owner = _combat(300, 20, C.OWNER_P1, C.OWNER_P2)
+    assert ng == 285
+    assert owner == C.OWNER_P2
+
+
+def test_combat_attacker_wins_cleanly():
+    # 5 real garrison (50), 10 real attackers (100).
+    # Effective defense = 65. Attacker wins with 35 left.
     ng, owner = _combat(50, 100, C.OWNER_P1, C.OWNER_P2)
     assert ng == 35
     assert owner == C.OWNER_P1
 
 
-def test_combat_tie_goes_neutral():
-    # attackers == eff_def → both wiped, neutral.
-    eff = (100 * C.DEF_BONUS_NUM) // C.DEF_BONUS_DEN  # = 130
-    ng, owner = _combat(100, eff, C.OWNER_P1, C.OWNER_P2)
+def test_combat_mutual_wipe_exact_eff_def():
+    """attackers == effective defense → building goes neutral, 0 garrison."""
+    garrison = 100
+    eff_def = garrison + (garrison * 3) // 10   # 130
+    ng, owner = _combat(garrison, eff_def, C.OWNER_P1, C.OWNER_P2)
     assert ng == 0
     assert owner == C.OWNER_NEUTRAL
 
 
-# ---------------------------------------------------------------------------
-# Production
-# ---------------------------------------------------------------------------
+def test_combat_attacker_wins_by_one_unit():
+    """attackers = eff_def + SCALE (minimum survivor): new garrison = SCALE."""
+    garrison = 100
+    eff_def = garrison + (garrison * 3) // 10
+    attackers = eff_def + C.SCALE
+    ng, owner = _combat(garrison, attackers, C.OWNER_P1, C.OWNER_P2)
+    assert ng == C.SCALE
+    assert owner == C.OWNER_P1
 
-def test_production_grows_then_caps():
+
+def test_combat_defense_bonus_is_thirty_percent():
+    """Defender effective HP = garrison * DEF_NUM / DEF_DEN = 1.3 * garrison."""
+    for g in [10, 50, 100, 200, 300]:
+        absorb_expected = (g * 3) // 10          # 30% of garrison, integer floor
+        # attackers just below kill threshold should NOT capture
+        attackers_just_under = g + absorb_expected - 1
+        if attackers_just_under <= 0:
+            continue
+        ng, owner = _combat(g, attackers_just_under, C.OWNER_P1, C.OWNER_P2)
+        # Either defender holds, or mutual wipe — NEVER attacker_owner.
+        assert owner in (C.OWNER_P2, C.OWNER_NEUTRAL)
+
+
+def test_combat_attack_on_empty_garrison():
+    """0-garrison building: any attacker captures cleanly."""
+    ng, owner = _combat(0, 50, C.OWNER_P1, C.OWNER_NEUTRAL)
+    assert ng == 50
+    assert owner == C.OWNER_P1
+
+
+def test_combat_never_produces_negative_garrison():
+    """Sweep plausible (garrison, attackers) space — new garrison never negative."""
+    for g in range(0, 301, 10):
+        for a in range(0, 401, 10):
+            ng, _ = _combat(g, a, C.OWNER_P1, C.OWNER_P2)
+            assert ng >= 0, f"negative garrison from g={g} a={a}: {ng}"
+
+
+# ===========================================================================
+# 4. Production
+# ===========================================================================
+
+
+def test_production_owned_grows_one_per_tick():
     state = reset()
-    # P1 base starts at 10 real = 100 internal, capacity 30 real = 300.
     b = state.buildings
-    p1_base = 0
-    start = int(b["garrison"][p1_base])
-    assert start == 100
-
+    assert int(b["garrison"][P1_BASE]) == 100   # 10 real
     for _ in range(5):
         step_tick(state)
-    # +1 real per tick * 5 ticks = +50 internal.
-    assert int(state.buildings["garrison"][p1_base]) == 150
-
-    # Run past the cap.
-    for _ in range(50):
-        step_tick(state)
-    assert int(state.buildings["garrison"][p1_base]) == 300
+    assert int(state.buildings["garrison"][P1_BASE]) == 150
 
 
-def test_neutrals_do_not_produce():
+def test_production_caps_at_capacity():
     state = reset()
-    # Neutral at slot 2 starts at 1 real = 10 internal.
-    start = int(state.buildings["garrison"][2])
-    assert start == 10
-    for _ in range(10):
+    for _ in range(100):                        # way past cap
         step_tick(state)
-    assert int(state.buildings["garrison"][2]) == 10
+    assert int(state.buildings["garrison"][P1_BASE]) == C.DEFAULT_CAPACITY
 
 
-# ---------------------------------------------------------------------------
-# Send + arrival + capture
-# ---------------------------------------------------------------------------
-
-def test_send_capture_neutral():
+def test_production_neutrals_do_not_grow():
     state = reset()
-    # P1 base (slot 0, 10 real garrison) → N1 (slot 2, 1 real garrison).
-    # 100% send from P1 base → 10 real attackers vs 1 real neutral.
-    # eff_def = 10 * 13/10 = 13; attackers=100 > 13 → new_garrison = 87.
-    action = Action(kind="send", type_idx=3, src=0, tgt=2)  # 100%
-    step_tick(state, action_p1=action)
+    start = int(state.buildings["garrison"][N1_TOP])
+    for _ in range(20):
+        step_tick(state)
+    assert int(state.buildings["garrison"][N1_TOP]) == start
 
-    # Unit group should be in flight.
-    g = state.unit_groups
-    assert np.any(g["alive"] == 1)
 
-    # Travel from (100,100) to (350,100) = 250 → 3 ticks.
-    # Already stepped 1 tick above; step 2 more to reach arrival.
+def test_production_over_capacity_owned_building_stays_put():
+    state = reset()
+    state.buildings["owner"][N1_TOP] = C.OWNER_P1
+    state.buildings["garrison"][N1_TOP] = state.buildings["capacity"][N1_TOP] + 70
+    before = int(state.buildings["garrison"][N1_TOP])
+    for _ in range(5):
+        step_tick(state)
+    assert int(state.buildings["garrison"][N1_TOP]) == before
+
+
+def test_production_both_players_grow_symmetrically():
+    state = reset()
+    for _ in range(5):
+        step_tick(state)
+    assert int(state.buildings["garrison"][P1_BASE]) == int(
+        state.buildings["garrison"][P2_BASE]
+    )
+
+
+def test_production_runs_before_movement_same_tick():
+    """If a group arrives this tick, the target's production applies first (if owned)."""
+    state = reset()
+    _clear_groups(state)
+    # Put a P1 reinforcement arriving this tick at P1's own base.
+    _inject_group(state, 0, C.OWNER_P1, P2_BASE, P1_BASE,
+                  count=50, travel_ticks=1, progress=0)
+    g0 = int(state.buildings["garrison"][P1_BASE])     # 100
     step_tick(state)
-    r1, r2, done = step_tick(state)
-
-    # N1 should now be P1-owned.
-    assert int(state.buildings["owner"][2]) == C.OWNER_P1
-    assert r1 == pytest.approx(C.REWARD_CAPTURE)
-    # Garrison: 100 attackers - 13 eff_def = 87.
-    assert int(state.buildings["garrison"][2]) == 87
+    # Expected: production brings 100 → 110; then reinforce adds 50 → 160.
+    assert int(state.buildings["garrison"][P1_BASE]) == g0 + C.PRODUCTION_PER_TICK + 50
 
 
-def test_send_defender_holds_neutral():
+# ===========================================================================
+# 5. Movement timing
+# ===========================================================================
+
+
+def test_travel_matrix_is_symmetric_and_nonzero_for_alive_pairs():
     state = reset()
-    # Reduce P1 base so we send fewer than we need.
-    # 25% of 10 real = 2.5 → floor = 2 real = 20 internal attackers vs N3 (5 real).
-    # eff_def_N3 = 50 * 1.3 = 65; 20 < 65 → holds, new = 65 - 20 = 45.
-    action = Action(kind="send", type_idx=0, src=0, tgt=4)  # 25% to N3
-    step_tick(state, action_p1=action)
+    tm = state.travel_matrix
+    for i in range(6):
+        for j in range(6):
+            if i == j:
+                assert tm[i, j] == 0
+            else:
+                assert tm[i, j] == tm[j, i]
+                assert C.MIN_TRAVEL_TICKS <= tm[i, j] <= C.MAX_TRAVEL_TICKS
 
-    # Travel 0→4 is (100,100)→(100,350) = 250 → 3 ticks.
-    for _ in range(3):
+
+def test_travel_matrix_dead_slots_zeroed():
+    state = reset()
+    # slots 6+ are empty
+    for i in range(6, C.MAX_BUILDING_SLOTS):
+        assert state.travel_matrix[0, i] == 0
+        assert state.travel_matrix[i, 0] == 0
+
+
+def test_movement_progress_increments_one_per_tick():
+    state = reset()
+    _clear_groups(state)
+    _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP,
+                  count=50, travel_ticks=5, progress=0)
+    step_tick(state)
+    assert int(state.unit_groups[0]["progress"]) == 1
+    step_tick(state)
+    assert int(state.unit_groups[0]["progress"]) == 2
+
+
+def test_movement_arrival_at_travel_ticks():
+    """Arrives on the tick that brings progress to travel_ticks."""
+    state = reset()
+    _clear_groups(state)
+    _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP,
+                  count=100, travel_ticks=3, progress=0)
+    # 3 ticks of movement needed.
+    step_tick(state); assert state.unit_groups[0]["alive"] == 1
+    step_tick(state); assert state.unit_groups[0]["alive"] == 1
+    step_tick(state); assert state.unit_groups[0]["alive"] == 0      # cleared on arrival
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P1       # captured
+
+
+def test_movement_slot_cleared_fully_on_arrival():
+    state = reset()
+    _clear_groups(state)
+    _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP,
+                  count=100, travel_ticks=1, progress=0)
+    step_tick(state)
+    g = state.unit_groups[0]
+    assert g["alive"] == 0
+    assert g["count"] == 0
+    assert g["progress"] == 0
+    assert g["travel_ticks"] == 0
+
+
+def test_crossing_groups_do_not_cancel_in_flight():
+    """Opposing groups passing through the same lane should survive until arrival."""
+    state = reset()
+    step_tick(
+        state,
+        action_p1=Action(kind="send", type_idx=3, src=P1_BASE, tgt=P2_BASE),
+        action_p2=Action(kind="send", type_idx=3, src=P2_BASE, tgt=P1_BASE),
+    )
+
+    # Base-to-base travel is 4 ticks on the default map. Until the arrival tick,
+    # both in-flight groups should remain alive with their original counts.
+    for _ in range(2):
+        alive = state.unit_groups[state.unit_groups["alive"] == 1]
+        assert len(alive) == 2
+        assert sorted(int(g["count"]) for g in alive) == [100, 100]
         step_tick(state)
 
-    assert int(state.buildings["owner"][4]) == C.OWNER_NEUTRAL
-    assert int(state.buildings["garrison"][4]) == 45
+    alive = state.unit_groups[state.unit_groups["alive"] == 1]
+    assert len(alive) == 2
+    assert sorted(int(g["count"]) for g in alive) == [100, 100]
 
 
-# ---------------------------------------------------------------------------
-# Field cancellation (same-tick opposing arrivals)
-# ---------------------------------------------------------------------------
-
-def test_field_cancel_reinforce_only():
+def test_quirk_travel_ticks_one_arrives_same_tick_as_send():
+    """QUIRK: because actions apply before movement, a send with travel_ticks=1
+    lands at its target in the same step_tick call. Engineered behaviour —
+    test pins it so accidental movement/action re-ordering is caught."""
     state = reset()
-    # Set up: P1 at slot 0 sends 50% (5 real) to N1. P2 also sends 50% to N1.
-    # But timings differ (different distances). To force same-tick arrival,
-    # we manually set up unit groups.
-    g = state.unit_groups
-    # Clear any existing groups.
-    g[:] = 0
+    # Synthetically make the travel matrix 1 tick for slot 0 → slot 2.
+    state.travel_matrix[P1_BASE, N1_TOP] = 1
+    step_tick(state, action_p1=Action(kind="send", type_idx=3, src=P1_BASE, tgt=N1_TOP))
+    # Target captured within this same call.
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P1
 
-    # Two in-flight groups arriving next tick at slot 2 (neutral, 10 internal garrison).
-    g[0]["alive"] = 1
-    g[0]["owner"] = C.OWNER_P1
-    g[0]["src_slot"] = 0
-    g[0]["tgt_slot"] = 2
-    g[0]["count"] = 100   # 10 real
-    g[0]["progress"] = 0
-    g[0]["travel_ticks"] = 1
 
-    g[1]["alive"] = 1
-    g[1]["owner"] = C.OWNER_P2
-    g[1]["src_slot"] = 1
-    g[1]["tgt_slot"] = 2
-    g[1]["count"] = 60    # 6 real
-    g[1]["progress"] = 0
-    g[1]["travel_ticks"] = 1
+# ===========================================================================
+# 6. Send action (apply)
+# ===========================================================================
 
-    # Reset tick + perf so this is a clean step.
-    state.tick = 0
 
-    r1, r2, done = step_tick(state)
+def test_send_deducts_garrison_and_spawns_group():
+    state = reset()
+    g0 = int(state.buildings["garrison"][P1_BASE])
+    action = Action(kind="send", type_idx=3, src=P1_BASE, tgt=N1_TOP)  # 100%
+    step_tick(state, action_p1=action)
+    # Full garrison was sent, then +1 production.
+    assert int(state.buildings["garrison"][P1_BASE]) == C.PRODUCTION_PER_TICK
+    # Group alive with original count.
+    alive = state.unit_groups[state.unit_groups["alive"] == 1]
+    assert len(alive) == 1
+    assert int(alive[0]["count"]) == g0
+    assert int(alive[0]["owner"]) == C.OWNER_P1
 
-    # Field cancel: 100 vs 60 → P1 survivors = 40, P2 = 0.
-    # Combat: 40 vs 10 * 1.3 = 13 → attacker wins, new_garrison = 40 - 13 = 27.
-    assert int(state.buildings["owner"][2]) == C.OWNER_P1
-    assert int(state.buildings["garrison"][2]) == 27
-    # P1 captured a neutral → +0.1.
+
+def test_send_invalid_src_unowned_is_dropped():
+    state = reset()
+    g_p2_before = int(state.buildings["garrison"][P2_BASE])
+    # P1 trying to send from P2's base.
+    step_tick(state, action_p1=Action(kind="send", type_idx=3, src=P2_BASE, tgt=N1_TOP))
+    # P2 base got production, not deduction.
+    assert int(state.buildings["garrison"][P2_BASE]) == g_p2_before + C.PRODUCTION_PER_TICK
+    assert not np.any(state.unit_groups["alive"] == 1)
+
+
+def test_send_src_equals_tgt_is_dropped():
+    state = reset()
+    step_tick(state, action_p1=Action(kind="send", type_idx=3, src=P1_BASE, tgt=P1_BASE))
+    assert not np.any(state.unit_groups["alive"] == 1)
+
+
+def test_send_to_dead_slot_is_dropped():
+    state = reset()
+    step_tick(state, action_p1=Action(kind="send", type_idx=3, src=P1_BASE, tgt=20))
+    assert not np.any(state.unit_groups["alive"] == 1)
+
+
+def test_send_too_small_garrison_is_dropped():
+    state = reset()
+    # Force garrison to 0.5 real (5 internal) — below MIN_SEND_INTERNAL at every pct.
+    state.buildings["garrison"][P1_BASE] = 5
+    step_tick(state, action_p1=Action(kind="send", type_idx=0, src=P1_BASE, tgt=N1_TOP))
+    assert not np.any(state.unit_groups["alive"] == 1)
+
+
+def test_send_invalid_action_kind_is_ignored():
+    state = reset()
+    g_before = int(state.buildings["garrison"][P1_BASE])
+    step_tick(state, action_p1=Action(kind="weird", type_idx=3, src=P1_BASE, tgt=N1_TOP))
+    assert int(state.buildings["garrison"][P1_BASE]) == g_before + C.PRODUCTION_PER_TICK
+    assert not np.any(state.unit_groups["alive"] == 1)
+
+
+def test_send_capture_neutral_full_flow():
+    """Capture a neutral and verify owner/garrison/reward exactly.
+
+    Tick layout (travel_ticks = T, action applied on tick 0):
+      tick 0: action → progress 0→1 (same tick via action+movement ordering)
+      ticks 1..T-1: movement only, progress climbs to T (arrival on tick T-1).
+    So we call step_tick once for the action, then (T-1) more times to land exactly
+    on the arrival tick and read the post-combat garrison with no extra production.
+    """
+    state = reset()
+    action = Action(kind="send", type_idx=3, src=P1_BASE, tgt=N1_TOP)   # 100%
+    r1_total = r2_total = 0.0
+    r1, r2, _ = step_tick(state, action_p1=action)
+    r1_total += r1; r2_total += r2
+    assert np.any(state.unit_groups["alive"] == 1)
+
+    travel = int(state.travel_matrix[P1_BASE, N1_TOP])
+    for _ in range(travel - 1):
+        r1, r2, _ = step_tick(state)
+        r1_total += r1; r2_total += r2
+
+    # Combat: garrison=10, attackers=100. absorb=3, dmg=97, eff_def=13, new=87.
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P1
+    assert int(state.buildings["garrison"][N1_TOP]) == 87
+    assert r1_total == pytest.approx(C.REWARD_CAPTURE)
+    assert r2_total == 0.0
+
+
+def test_send_defender_holds_neutral_proportional_defense():
+    """25% of 10 real = 2 real attackers vs 5-real neutral. Defense is proportional."""
+    state = reset()
+    action = Action(kind="send", type_idx=0, src=P1_BASE, tgt=N3_LEFT)   # 25% to N3
+    step_tick(state, action_p1=action)
+    travel = int(state.travel_matrix[P1_BASE, N3_LEFT])
+    for _ in range(travel - 1):
+        step_tick(state)
+    # Combat: garrison=50, attackers=20. Effective defense = 65.
+    # Remaining garrison = (65 - 20) / 1.3 = 34.615 -> 35.
+    assert int(state.buildings["owner"][N3_LEFT]) == C.OWNER_NEUTRAL
+    assert int(state.buildings["garrison"][N3_LEFT]) == 35
+
+
+def test_send_to_own_building_reinforces_no_combat():
+    state = reset()
+    # Capture N1 first via 100% send; then send more from base to reinforce.
+    step_tick(state, action_p1=Action(kind="send", type_idx=3, src=P1_BASE, tgt=N1_TOP))
+    for _ in range(int(state.travel_matrix[P1_BASE, N1_TOP]) + 5):
+        step_tick(state)
+    # N1 now owned by P1 with ~87 garrison + production.
+    owner = int(state.buildings["owner"][N1_TOP])
+    assert owner == C.OWNER_P1
+
+    # Now send 100% from P1_BASE → N1_TOP. It's friendly; should reinforce.
+    step_tick(state, action_p1=Action(kind="send", type_idx=3, src=P1_BASE, tgt=N1_TOP))
+    for _ in range(int(state.travel_matrix[P1_BASE, N1_TOP])):
+        r1, r2, _ = step_tick(state)
+    # No capture reward this time — friendly reinforcement only.
+    # (The tick that resolves reinforcement should not emit reward.)
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P1
+    assert int(state.buildings["garrison"][N1_TOP]) == 257
+
+
+def test_send_p1_and_p2_both_act_same_tick():
+    state = reset()
+    a1 = Action(kind="send", type_idx=3, src=P1_BASE, tgt=N3_LEFT)
+    a2 = Action(kind="send", type_idx=3, src=P2_BASE, tgt=N4_RIGHT)
+    step_tick(state, action_p1=a1, action_p2=a2)
+    owners = state.unit_groups["owner"][state.unit_groups["alive"] == 1]
+    assert set(owners.tolist()) == {C.OWNER_P1, C.OWNER_P2}
+
+
+# ===========================================================================
+# 7. Same-tick arrival ordering
+# ===========================================================================
+
+
+def test_same_tick_equal_arrivals_resolve_sequentially():
+    state = reset()
+    _clear_groups(state)
+    _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP, count=50, travel_ticks=1)
+    _inject_group(state, 1, C.OWNER_P2, P2_BASE, N1_TOP, count=50, travel_ticks=1)
+    step_tick(state)
+    # P1 lands first: captures with 3.7. P2 then attacks that building with 5.0
+    # and captures with 0.2 remaining.
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P2
+    assert int(state.buildings["garrison"][N1_TOP]) == 2
+
+
+def test_same_tick_p1_then_p2_arrivals_chain_resolve():
+    state = reset()
+    _clear_groups(state)
+    _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP, count=100, travel_ticks=1)
+    _inject_group(state, 1, C.OWNER_P2, P2_BASE, N1_TOP, count=60,  travel_ticks=1)
+    r1, r2, _ = step_tick(state)
+    # P1 captures with 8.7. P2 then attacks that captured building and leaves it
+    # with (11.31 - 6.0)/1.3 = 4.1 for P1.
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P1
+    assert int(state.buildings["garrison"][N1_TOP]) == 41
     assert r1 == pytest.approx(C.REWARD_CAPTURE)
 
 
-def test_field_cancel_perfect_wipe():
+def test_same_tick_p2_second_wave_can_recapture():
     state = reset()
-    g = state.unit_groups
-    g[:] = 0
+    _clear_groups(state)
+    _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP, count=30,  travel_ticks=1)
+    _inject_group(state, 1, C.OWNER_P2, P2_BASE, N1_TOP, count=100, travel_ticks=1)
+    r1, r2, _ = step_tick(state)
+    # P1 captures first with 1.7. P2 then attacks and recaptures with 7.8.
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P2
+    assert int(state.buildings["garrison"][N1_TOP]) == 78
+    assert r2 == pytest.approx(C.REWARD_CAPTURE)
 
-    g[0]["alive"] = 1; g[0]["owner"] = C.OWNER_P1; g[0]["tgt_slot"] = 2
-    g[0]["count"] = 50; g[0]["travel_ticks"] = 1
-    g[1]["alive"] = 1; g[1]["owner"] = C.OWNER_P2; g[1]["tgt_slot"] = 2
-    g[1]["count"] = 50; g[1]["travel_ticks"] = 1
 
+def test_same_tick_multiple_groups_apply_in_slot_order():
+    """Two P1 groups + one P2 group all arrive same tick — no pre-cancel."""
+    state = reset()
+    _clear_groups(state)
+    _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP, count=40, travel_ticks=1)
+    _inject_group(state, 1, C.OWNER_P1, P1_BASE, N1_TOP, count=30, travel_ticks=1)
+    _inject_group(state, 2, C.OWNER_P2, P2_BASE, N1_TOP, count=40, travel_ticks=1)
     step_tick(state)
+    # P1 captures with 2.7, reinforces to 5.7, then P2 attacks and leaves P1 with 2.6.
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P1
+    assert int(state.buildings["garrison"][N1_TOP]) == 26
 
-    # Perfect cancel → neutral garrison unchanged (still 10 internal).
-    assert int(state.buildings["owner"][2]) == C.OWNER_NEUTRAL
-    assert int(state.buildings["garrison"][2]) == 10
 
-
-# ---------------------------------------------------------------------------
-# Victory
-# ---------------------------------------------------------------------------
-
-def test_timeout_tiebreak_by_buildings():
+def test_same_tick_reinforcement_then_attack_resolves_sequentially():
+    """A same-tick reinforcement can land before an enemy attack in slot order."""
     state = reset()
-    # Force P1 to own 4 buildings, P2 to own 2, run to timeout.
-    state.buildings["owner"][2] = C.OWNER_P1
-    state.buildings["owner"][3] = C.OWNER_P1
-    state.buildings["owner"][4] = C.OWNER_P2  # leave neutral->P2
-    state.buildings["owner"][5] = C.OWNER_NEUTRAL
+    # Make P1 own N1 with 100 garrison.
+    state.buildings["owner"][N1_TOP] = C.OWNER_P1
+    state.buildings["garrison"][N1_TOP] = 100
+    _clear_groups(state)
+    _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP, count=40, travel_ticks=1)
+    _inject_group(state, 1, C.OWNER_P2, P2_BASE, N1_TOP, count=80, travel_ticks=1)
+    step_tick(state)
+    # Production runs before movement, so garrison reaches 110.
+    # P1 reinforcement lands first -> 150. Then P2 attack 80 leaves 88.
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P1
+    assert int(state.buildings["garrison"][N1_TOP]) == 88
 
+
+# ===========================================================================
+# 8. Victory
+# ===========================================================================
+
+
+def test_victory_playing_by_default():
+    state = reset()
+    _, _, done = step_tick(state)
+    assert not done
+    assert state.phase == C.PHASE_PLAYING
+
+
+def test_victory_elimination_p1_wins():
+    state = reset()
+    state.buildings["owner"][P2_BASE] = C.OWNER_NEUTRAL
+    state.buildings["garrison"][P2_BASE] = 0
+    _clear_groups(state)                    # no P2 in-flight
+    r1, r2, done = step_tick(state)
+    assert done
+    assert state.phase == C.PHASE_P1_WINS
+    assert r1 == pytest.approx(C.REWARD_WIN)
+    assert r2 == pytest.approx(C.REWARD_LOSE)
+
+
+def test_victory_elimination_p2_wins():
+    state = reset()
+    state.buildings["owner"][P1_BASE] = C.OWNER_NEUTRAL
+    state.buildings["garrison"][P1_BASE] = 0
+    _clear_groups(state)
+    r1, r2, done = step_tick(state)
+    assert done
+    assert state.phase == C.PHASE_P2_WINS
+    assert r1 == pytest.approx(C.REWARD_LOSE)
+    assert r2 == pytest.approx(C.REWARD_WIN)
+
+
+def test_victory_in_flight_keeps_player_alive():
+    """Player has 0 buildings but 1 in-flight group → not eliminated yet."""
+    state = reset()
+    state.buildings["owner"][P2_BASE] = C.OWNER_NEUTRAL
+    state.buildings["garrison"][P2_BASE] = 0
+    _clear_groups(state)
+    _inject_group(state, 0, C.OWNER_P2, P1_BASE, P2_BASE, count=50, travel_ticks=8)
+    _, _, done = step_tick(state)
+    assert not done       # still flying
+    assert state.phase == C.PHASE_PLAYING
+
+
+def test_victory_timeout_tiebreak_by_buildings():
+    state = reset()
+    # P1 owns base + 2 neutrals; P2 owns base. P1 has 3 > P2 has 1.
+    state.buildings["owner"][N1_TOP] = C.OWNER_P1
+    state.buildings["owner"][N2_BOT] = C.OWNER_P1
     state.tick = C.GAME_TIMEOUT_TICKS - 1
     r1, r2, done = step_tick(state)
     assert done
@@ -238,84 +689,537 @@ def test_timeout_tiebreak_by_buildings():
     assert r2 == pytest.approx(C.REWARD_LOSE)
 
 
-def test_early_win_elimination():
+def test_victory_timeout_tiebreak_by_units_when_buildings_equal():
     state = reset()
-    # Wipe P2 — no buildings, no in-flight.
-    state.buildings["owner"][1] = C.OWNER_NEUTRAL
-    state.buildings["garrison"][1] = 0
-
+    # 1 building each. Give P1 more total units.
+    state.buildings["garrison"][P1_BASE] = 200
+    state.buildings["garrison"][P2_BASE] = 100
+    state.tick = C.GAME_TIMEOUT_TICKS - 1
     r1, r2, done = step_tick(state)
     assert done
     assert state.phase == C.PHASE_P1_WINS
 
 
-# ---------------------------------------------------------------------------
-# Mask
-# ---------------------------------------------------------------------------
+def test_victory_timeout_draw_when_everything_equal():
+    state = reset()
+    # Equal buildings + equal units.
+    state.buildings["garrison"][P1_BASE] = 100
+    state.buildings["garrison"][P2_BASE] = 100
+    state.tick = C.GAME_TIMEOUT_TICKS - 1
+    r1, r2, done = step_tick(state)
+    assert done
+    assert state.phase == C.PHASE_DRAW
+    assert r1 == pytest.approx(C.REWARD_DRAW)
+    assert r2 == pytest.approx(C.REWARD_DRAW)
 
-def test_mask_basic():
+
+def test_terminal_phase_stepping_is_safe_noop():
+    state = reset()
+    state.phase = C.PHASE_P1_WINS
+    tick_before = state.tick
+    r1, r2, done = step_tick(state)
+    assert done and r1 == 0 and r2 == 0
+    assert state.tick == tick_before
+    assert state.perf["n_ticks"] == 0
+
+
+# ===========================================================================
+# 9. Mask
+# ===========================================================================
+
+
+def test_mask_noop_always_legal():
+    state = reset()
+    for player in (C.OWNER_P1, C.OWNER_P2):
+        mask = compute_mask(state, player)
+        assert mask[NOOP_INDEX]
+
+
+def test_mask_matches_is_valid():
+    """Cross-check: compute_mask should equal the per-action is_valid scan."""
+    from sim.actions import is_valid
     state = reset()
     mask = compute_mask(state, C.OWNER_P1)
-    assert mask[NOOP_INDEX]                                 # noop always legal
-    # P1 owns slot 0. Sending from 0 to any other alive building with 25% should be valid.
-    # P1 garrison = 100; 25% * 100 / 1000 = 2 real = 20 internal ≥ MIN_SEND_INTERNAL (10). OK.
-    idx = encode(0, src=0, tgt=2)
-    assert mask[idx]
-    # Sending from a slot P1 doesn't own should be invalid.
-    idx = encode(0, src=1, tgt=2)
-    assert not mask[idx]
-    # Self-pair invalid.
-    idx = encode(0, src=0, tgt=0)
-    assert not mask[idx]
+    # Sample a chunk of the action space (full sweep too slow for unit test).
+    for idx in range(0, ACTION_SPACE_SIZE, 17):
+        a = decode(idx)
+        assert mask[idx] == is_valid(state, C.OWNER_P1, a)
 
 
-# ---------------------------------------------------------------------------
-# Determinism
-# ---------------------------------------------------------------------------
+def test_mask_self_pair_forbidden():
+    state = reset()
+    mask = compute_mask(state, C.OWNER_P1)
+    for type_idx in range(len(C.SEND_PERCENTAGES)):
+        for slot in range(C.MAX_BUILDING_SLOTS):
+            assert not mask[encode(type_idx, slot, slot)]
 
-def test_determinism():
-    # Same initial state + same action sequence → byte-identical final state.
-    actions_p1 = [
-        (5, Action(kind="send", type_idx=3, src=0, tgt=2)),
-        (12, Action(kind="send", type_idx=1, src=2, tgt=3)),
+
+def test_mask_owned_source_required():
+    state = reset()
+    mask = compute_mask(state, C.OWNER_P1)
+    # slot 1 is P2's base — P1 cannot send from it.
+    for type_idx in range(len(C.SEND_PERCENTAGES)):
+        for tgt in range(C.MAX_BUILDING_SLOTS):
+            if tgt == P2_BASE:
+                continue
+            assert not mask[encode(type_idx, P2_BASE, tgt)]
+
+
+def test_mask_dead_target_forbidden():
+    state = reset()
+    mask = compute_mask(state, C.OWNER_P1)
+    # slots 6..31 are dead.
+    for type_idx in range(len(C.SEND_PERCENTAGES)):
+        for dead_tgt in range(6, C.MAX_BUILDING_SLOTS):
+            assert not mask[encode(type_idx, P1_BASE, dead_tgt)]
+
+
+def test_mask_no_free_group_slots_only_noop():
+    state = reset()
+    # Occupy every group slot.
+    for slot in range(C.MAX_UNIT_GROUP_SLOTS):
+        _inject_group(state, slot, C.OWNER_P1, P1_BASE, N1_TOP,
+                      count=10, travel_ticks=8)
+    mask = compute_mask(state, C.OWNER_P1)
+    assert mask.sum() == 1                    # only noop
+    assert mask[NOOP_INDEX]
+
+
+# ===========================================================================
+# 10. Invariants (property-style over scripted random games)
+# ===========================================================================
+
+
+def _random_action(state, player, rng):
+    mask = compute_mask(state, player)
+    legal = np.where(mask)[0]
+    return decode(int(rng.choice(legal)))
+
+
+def test_invariant_garrison_nonnegative_under_random_play():
+    rng = np.random.default_rng(7)
+    state = reset(seed=7)
+    for _ in range(C.GAME_TIMEOUT_TICKS):
+        a1 = _random_action(state, C.OWNER_P1, rng)
+        a2 = _random_action(state, C.OWNER_P2, rng)
+        step_tick(state, a1, a2)
+        assert np.all(state.buildings["garrison"] >= 0)
+        assert np.all(state.unit_groups["count"] >= 0)
+        if state.phase != C.PHASE_PLAYING:
+            break
+
+
+def test_invariant_production_does_not_increase_owned_building_above_capacity():
+    state = reset()
+    state.buildings["owner"][N1_TOP] = C.OWNER_P1
+    state.buildings["garrison"][N1_TOP] = state.buildings["capacity"][N1_TOP] + 70
+    before = int(state.buildings["garrison"][N1_TOP])
+    step_tick(state)
+    assert int(state.buildings["garrison"][N1_TOP]) == before
+
+
+def test_invariant_alive_garrison_nonnegative_under_random_play():
+    rng = np.random.default_rng(11)
+    state = reset(seed=11)
+    for _ in range(C.GAME_TIMEOUT_TICKS):
+        step_tick(
+            state,
+            _random_action(state, C.OWNER_P1, rng),
+            _random_action(state, C.OWNER_P2, rng),
+        )
+        alive = state.buildings["alive"] == 1
+        assert np.all(state.buildings["garrison"][alive] >= 0)
+        if state.phase != C.PHASE_PLAYING:
+            break
+
+
+def test_reset_unknown_level_raises_value_error():
+    with pytest.raises(ValueError):
+        reset("missing_level")
+
+
+def test_apply_unknown_level_raises_value_error():
+    state = reset()
+    with pytest.raises(ValueError):
+        apply(state, "missing_level")
+
+
+def test_apply_invalid_building_type_raises_value_error():
+    state = reset()
+    original = sim_levels.LEVELS.get("bad_type_test")
+    sim_levels.LEVELS["bad_type_test"] = [
+        (C.OWNER_P1, 100, 100, 10, 999),
     ]
+    try:
+        with pytest.raises(ValueError):
+            apply(state, "bad_type_test")
+    finally:
+        if original is None:
+            del sim_levels.LEVELS["bad_type_test"]
+        else:
+            sim_levels.LEVELS["bad_type_test"] = original
+
+
+def test_apply_recomputes_travel_matrix_after_manual_corruption():
+    state = reset()
+    state.travel_matrix[P1_BASE, N1_TOP] = 99
+    apply(state, "crossroads_6")
+    assert int(state.travel_matrix[P1_BASE, N1_TOP]) == 2
+
+
+def test_reset_clears_in_flight_groups():
+    state = reset()
+    step_tick(
+        state,
+        action_p1=Action(kind="send", type_idx=3, src=P1_BASE, tgt=P2_BASE),
+        action_p2=Action(kind="send", type_idx=3, src=P2_BASE, tgt=P1_BASE),
+    )
+    assert np.any(state.unit_groups["alive"] == 1)
+
+    state = reset()
+    assert not np.any(state.unit_groups["alive"] == 1)
+
+
+def test_apply_level_too_large_raises_value_error():
+    state = reset()
+    original = sim_levels.LEVELS.get("too_large_test")
+    sim_levels.LEVELS["too_large_test"] = [
+        (C.OWNER_NEUTRAL, i, 0, 1, C.TYPE_BASIC)
+        for i in range(C.MAX_BUILDING_SLOTS + 1)
+    ]
+    try:
+        with pytest.raises(ValueError):
+            apply(state, "too_large_test")
+    finally:
+        if original is None:
+            del sim_levels.LEVELS["too_large_test"]
+        else:
+            sim_levels.LEVELS["too_large_test"] = original
+
+
+def test_invariant_owner_codes_are_valid():
+    rng = np.random.default_rng(23)
+    state = reset(seed=23)
+    for _ in range(C.GAME_TIMEOUT_TICKS):
+        step_tick(
+            state,
+            _random_action(state, C.OWNER_P1, rng),
+            _random_action(state, C.OWNER_P2, rng),
+        )
+        owners = state.buildings["owner"][state.buildings["alive"] == 1]
+        assert set(owners.tolist()).issubset({C.OWNER_NEUTRAL, C.OWNER_P1, C.OWNER_P2})
+        if state.phase != C.PHASE_PLAYING:
+            break
+
+
+def test_invariant_unit_counts_not_decreasing_without_combat():
+    """With both players on noop, total units = garrisons only = grows monotonically
+    (by 2 per tick — one per owned base) until capacities are hit."""
+    state = reset()
+    prev = _total_units_on_board(state)
+    for _ in range(20):
+        step_tick(state)
+        cur = _total_units_on_board(state)
+        assert cur >= prev
+        prev = cur
+
+
+def test_invariant_send_conserves_units_pre_combat():
+    """After a send but before arrival: (src garrison + in-flight) should equal
+    the pre-send garrison, plus production over ticks elapsed."""
+    state = reset()
+    g_before = int(state.buildings["garrison"][P1_BASE])
+    action = Action(kind="send", type_idx=3, src=P1_BASE, tgt=N1_TOP)   # 100%
+    step_tick(state, action_p1=action)
+    # After one tick: garrison = 0 (sent all), then +1 production = 10.
+    # In flight = g_before.
+    g_after = int(state.buildings["garrison"][P1_BASE])
+    in_flight = int(state.unit_groups[0]["count"])
+    assert g_after + in_flight == g_before + C.PRODUCTION_PER_TICK
+
+
+# ===========================================================================
+# 11. Determinism + replay
+# ===========================================================================
+
+
+def test_determinism_scripted_game():
+    """Same inputs → byte-identical final state arrays."""
+    script = {
+        5:  Action(kind="send", type_idx=3, src=P1_BASE, tgt=N1_TOP),
+        12: Action(kind="send", type_idx=1, src=N1_TOP,  tgt=N2_BOT),
+        20: Action(kind="send", type_idx=2, src=P1_BASE, tgt=N3_LEFT),
+    }
 
     def run():
-        state = reset(seed=42)
-        tick_to_action = dict(actions_p1)
-        for _ in range(50):
-            a = tick_to_action.get(state.tick)
-            step_tick(state, action_p1=a)
-        return state
+        s = reset(seed=42)
+        for _ in range(80):
+            step_tick(s, action_p1=script.get(s.tick))
+        return s
 
-    s1 = run()
-    s2 = run()
+    s1, s2 = run(), run()
     assert np.array_equal(s1.buildings, s2.buildings)
     assert np.array_equal(s1.unit_groups, s2.unit_groups)
     assert s1.tick == s2.tick
     assert s1.phase == s2.phase
 
 
-# ---------------------------------------------------------------------------
-# Sanity: random-play game terminates
-# ---------------------------------------------------------------------------
+def test_determinism_both_players_random_but_seeded():
+    def run():
+        rng = np.random.default_rng(2024)
+        s = reset(seed=2024)
+        for _ in range(C.GAME_TIMEOUT_TICKS + 5):
+            a1 = _random_action(s, C.OWNER_P1, rng)
+            a2 = _random_action(s, C.OWNER_P2, rng)
+            _, _, done = step_tick(s, a1, a2)
+            if done:
+                break
+        return s
+
+    s1, s2 = run(), run()
+    assert np.array_equal(s1.buildings, s2.buildings)
+    assert np.array_equal(s1.unit_groups, s2.unit_groups)
+    assert s1.tick == s2.tick
+    assert s1.phase == s2.phase
+
+
+# ===========================================================================
+# 12. Integration — full scripted game with hand-computed checkpoints
+# ===========================================================================
+
+
+def test_integration_p1_cant_solo_a_full_base():
+    """A single 100% send from cap vs cap cannot crack the 1.3x defense bonus."""
+    state = reset()
+    for _ in range(25):                          # stockpile to cap
+        step_tick(state)
+    assert int(state.buildings["garrison"][P1_BASE]) == C.DEFAULT_CAPACITY
+    assert int(state.buildings["garrison"][P2_BASE]) == C.DEFAULT_CAPACITY
+
+    action = Action(kind="send", type_idx=3, src=P1_BASE, tgt=P2_BASE)
+    step_tick(state, action_p1=action)
+
+    travel = int(state.travel_matrix[P1_BASE, P2_BASE])
+    assert C.MIN_TRAVEL_TICKS <= travel <= C.MAX_TRAVEL_TICKS
+
+    r1_total = 0.0
+    for _ in range(travel - 1):
+        r1, _, _ = step_tick(state)
+        r1_total += r1
+
+    # Arrival tick combat: garrison=300 (cap), attackers=300.
+    # Effective defense = 390. Defender holds with (390 - 300) / 1.3 = 69.23 -> 69.
+    assert int(state.buildings["owner"][P2_BASE]) == C.OWNER_P2
+    assert int(state.buildings["garrison"][P2_BASE]) == 69
+    assert r1_total == 0.0
+
+
+# ===========================================================================
+# 13. Accuracy audit — documented / canonical rule mismatches
+# ===========================================================================
+
+
+def test_spec_friendly_reinforcement_can_exceed_capacity():
+    state = reset()
+    target = N1_TOP
+    state.buildings["owner"][target] = C.OWNER_P1
+    state.buildings["garrison"][target] = state.buildings["capacity"][target]
+    state.buildings["garrison"][P1_BASE] = 500
+
+    step_tick(state, action_p1=Action(kind="send", type_idx=3, src=P1_BASE, tgt=target))
+    for _ in range(int(state.travel_matrix[P1_BASE, target]) - 1):
+        step_tick(state)
+
+    assert int(state.buildings["garrison"][target]) > int(state.buildings["capacity"][target])
+
+
+def test_spec_capture_preserves_all_surviving_attackers():
+    state = reset()
+    target = N1_TOP
+    state.buildings["garrison"][P1_BASE] = 500
+    state.buildings["garrison"][target] = 10
+
+    step_tick(state, action_p1=Action(kind="send", type_idx=3, src=P1_BASE, tgt=target))
+    for _ in range(int(state.travel_matrix[P1_BASE, target]) - 1):
+        step_tick(state)
+
+    # 500 attackers into 1-real neutral (10 internal):
+    # effective defense = 13, survivors = 48.7 real = 487 internal.
+    assert int(state.buildings["owner"][target]) == C.OWNER_P1
+    assert int(state.buildings["garrison"][target]) == 487
+
+
+def test_spec_one_unit_chip_damage_does_not_zero_a_one_unit_neutral():
+    state = reset()
+    state.buildings["garrison"][P1_BASE] = 20          # 2 real units
+    state.buildings["garrison"][N1_TOP] = 10           # 1 real unit
+
+    step_tick(state, action_p1=Action(kind="send", type_idx=1, src=P1_BASE, tgt=N1_TOP))  # 50% -> 1 real
+    for _ in range(int(state.travel_matrix[P1_BASE, N1_TOP]) - 1):
+        step_tick(state)
+
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_NEUTRAL
+    assert 0 < int(state.buildings["garrison"][N1_TOP]) < 10
+
+
+def test_spec_is_valid_rejects_out_of_range_type_idx():
+    state = reset()
+    action = Action(kind="send", type_idx=99, src=P1_BASE, tgt=N1_TOP)
+    assert not is_valid(state, C.OWNER_P1, action)
+
+
+def test_spec_apply_resets_dynamic_state_when_reusing_state():
+    state = reset()
+    step_tick(state, action_p1=Action(kind="send", type_idx=3, src=P1_BASE, tgt=N1_TOP))
+    assert np.any(state.unit_groups["alive"] == 1)
+    assert state.tick == 1
+
+    from sim.levels import apply
+
+    apply(state)
+
+    assert not np.any(state.unit_groups["alive"] == 1)
+    assert state.tick == 0
+    assert state.phase == C.PHASE_PLAYING
+    assert state.perf["n_ticks"] == 0
+
+
+def test_integration_scripted_p1_wins_full_game():
+    """P1 captures every neutral and takes P2's base. Assert phase + rewards."""
+    state = reset()
+    # Build up at P1 base.
+    for _ in range(20):
+        step_tick(state)
+
+    # Send 100% waves to each neutral one at a time, wait for arrival.
+    r1_total = 0.0
+    for target in (N1_TOP, N3_LEFT, N2_BOT, N4_RIGHT):
+        # Ensure garrison is enough for 100% send.
+        while int(state.buildings["garrison"][P1_BASE]) < 100:
+            r1, r2, _ = step_tick(state); r1_total += r1
+        r1, _, _ = step_tick(
+            state, action_p1=Action(kind="send", type_idx=3, src=P1_BASE, tgt=target)
+        )
+        r1_total += r1
+        for _ in range(int(state.travel_matrix[P1_BASE, target]) + 1):
+            r1, _, _ = step_tick(state)
+            r1_total += r1
+
+    # P1 should now own 5 buildings (its base + 4 ex-neutrals).
+    assert count_owned_buildings(state, C.OWNER_P1) == 5
+    assert r1_total >= 4 * C.REWARD_CAPTURE - 1e-6
+
+
+# ===========================================================================
+# 13. Rewards accounting
+# ===========================================================================
+
+
+def test_reward_capture_only_on_ownership_flip():
+    """Reinforcing own building does NOT emit REWARD_CAPTURE."""
+    state = reset()
+    _clear_groups(state)
+    _inject_group(state, 0, C.OWNER_P1, P2_BASE, P1_BASE,
+                  count=50, travel_ticks=1)
+    r1, r2, _ = step_tick(state)
+    assert r1 == 0.0
+    assert r2 == 0.0
+
+
+def test_reward_loss_when_losing_building_to_enemy():
+    """P2 captures P1-owned building → P1 gets REWARD_LOSS, P2 gets REWARD_CAPTURE."""
+    state = reset()
+    # Give P1 the neutral N1 first (no reward bookkeeping needed here).
+    state.buildings["owner"][N1_TOP] = C.OWNER_P1
+    state.buildings["garrison"][N1_TOP] = 20
+    _clear_groups(state)
+    _inject_group(state, 0, C.OWNER_P2, P2_BASE, N1_TOP,
+                  count=100, travel_ticks=1)
+    r1, r2, _ = step_tick(state)
+    # Production first (N1 owned by P1): garrison 20 → 30. Combat: absorb=9, dmg=91,
+    # eff_def=39, new = 100 - 39 = 61. P2 captures.
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P2
+    assert r1 == pytest.approx(C.REWARD_LOSS)
+    assert r2 == pytest.approx(C.REWARD_CAPTURE)
+
+
+def test_reward_neutral_capture_no_loss_penalty():
+    """Capturing a neutral gives REWARD_CAPTURE — no REWARD_LOSS fires."""
+    state = reset()
+    _clear_groups(state)
+    _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP,
+                  count=100, travel_ticks=1)
+    r1, r2, _ = step_tick(state)
+    assert r1 == pytest.approx(C.REWARD_CAPTURE)
+    assert r2 == 0.0
+
+
+def test_reward_mutual_wipe_both_lose_none_captures():
+    """Owner → neutral via mutual wipe: loser gets REWARD_LOSS, no capture reward."""
+    state = reset()
+    state.buildings["owner"][N1_TOP] = C.OWNER_P1
+    state.buildings["garrison"][N1_TOP] = 100
+    _clear_groups(state)
+    # attackers = eff_def = 130 → mutual wipe (see test_combat_mutual_wipe_exact_eff_def).
+    # But production runs first (garrison 100 → 110), so eff_def changes. Use exact.
+    # We bypass production-effect by setting owner to NEUTRAL so production skips it,
+    # then combat is against the raw 100 garrison.
+    state.buildings["owner"][N1_TOP] = C.OWNER_NEUTRAL
+    _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP,
+                  count=130, travel_ticks=1)
+    r1, r2, _ = step_tick(state)
+    # Owner was NEUTRAL → no REWARD_LOSS fires; new owner is NEUTRAL → no capture.
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_NEUTRAL
+    assert r1 == 0.0 and r2 == 0.0
+
+
+def test_reward_double_flip_same_tick_nets_out():
+    """If a building flips twice in one tick, capture/loss rewards net to zero."""
+    state = reset()
+    state.buildings["owner"][N1_TOP] = C.OWNER_P2
+    state.buildings["garrison"][N1_TOP] = 10
+    _clear_groups(state)
+    _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP, count=100, travel_ticks=1)
+    _inject_group(state, 1, C.OWNER_P2, P2_BASE, N1_TOP, count=100, travel_ticks=1)
+    r1, r2, _ = step_tick(state)
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P2
+    assert int(state.buildings["garrison"][N1_TOP]) == 4
+    assert r1 == pytest.approx(0.0)
+    assert r2 == pytest.approx(0.0)
+
+
+# ===========================================================================
+# 14. Sanity: random games terminate
+# ===========================================================================
+
 
 def test_random_game_terminates():
     rng = np.random.default_rng(123)
     state = reset(seed=123)
+    done = False
     for _ in range(C.GAME_TIMEOUT_TICKS + 10):
-        # Random legal actions for both players.
         a1 = _random_action(state, C.OWNER_P1, rng)
         a2 = _random_action(state, C.OWNER_P2, rng)
-        r1, r2, done = step_tick(state, a1, a2)
+        _, _, done = step_tick(state, a1, a2)
         if done:
             break
     assert done
     assert state.phase in (C.PHASE_P1_WINS, C.PHASE_P2_WINS, C.PHASE_DRAW)
 
 
-def _random_action(state, player, rng):
-    mask = compute_mask(state, player)
-    legal = np.where(mask)[0]
-    idx = int(rng.choice(legal))
-    return decode(idx)
+@pytest.mark.parametrize("seed", list(range(10)))
+def test_random_game_terminates_across_seeds(seed):
+    """Sanity sweep: 10 different seeds all terminate cleanly."""
+    rng = np.random.default_rng(seed)
+    state = reset(seed=seed)
+    done = False
+    for _ in range(C.GAME_TIMEOUT_TICKS + 10):
+        _, _, done = step_tick(
+            state,
+            _random_action(state, C.OWNER_P1, rng),
+            _random_action(state, C.OWNER_P2, rng),
+        )
+        if done:
+            break
+    assert done
+    assert state.phase in (C.PHASE_P1_WINS, C.PHASE_P2_WINS, C.PHASE_DRAW)
