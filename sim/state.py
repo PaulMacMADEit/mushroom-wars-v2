@@ -24,16 +24,13 @@ from sim import config as C
 
 # Smallest sensible types per field. See ARCHITECTURE §8.1 + discussion.
 BUILDING_DTYPE = np.dtype([
-    ("alive",         np.int8),    # 0 = empty slot, 1 = in-play
-    ("owner",         np.int8),    # 0=neutral, 1=P1, 2=P2
-    ("type_id",       np.int8),    # 0=BASIC in v0.1; reserved for more types
-    ("level",         np.int8),    # 0 in v0.1; reserved for upgrades
-    ("garrison",      np.int16),   # fixed-point, scale=10 (so 35 = 3.5 real)
-    ("capacity",      np.int16),   # fixed-point, scale=10
-    ("prod_timer",    np.int16),   # ticks since last unit produced (unused in v0.1)
-    ("upgrade_timer", np.int16),   # ticks remaining on upgrade (0 in v0.1)
-    ("x",             np.int16),   # map units
-    ("y",             np.int16),   # map units
+    ("alive",    np.int8),    # 0 = empty slot, 1 = in-play
+    ("owner",    np.int8),    # 0=neutral, 1=P1, 2=P2
+    ("type_id",  np.int8),    # 0=BASIC in v0.1; extension point for more types
+    ("garrison", np.int16),   # fixed-point, scale=10 (so 35 = 3.5 real)
+    ("capacity", np.int16),   # fixed-point, scale=10
+    ("x",        np.int16),   # map units
+    ("y",        np.int16),   # map units
 ])
 
 UNIT_GROUP_DTYPE = np.dtype([
@@ -65,7 +62,6 @@ class State:
     # Scalars
     tick:          int = 0
     phase:         int = C.PHASE_PLAYING
-    seed:          int = 0
 
     # Lightweight per-subsystem profiling (nanoseconds accumulated this game).
     # Always on; cost ~200 ns per phase per tick. Zeroed at reset.
@@ -84,7 +80,7 @@ class State:
 # Factories
 # ---------------------------------------------------------------------------
 
-def empty_state(seed: int = 0) -> State:
+def empty_state() -> State:
     """Zero-initialized state. Use `levels.apply(state, level)` to populate."""
     buildings   = np.zeros(C.MAX_BUILDING_SLOTS,   dtype=BUILDING_DTYPE)
     unit_groups = np.zeros(C.MAX_UNIT_GROUP_SLOTS, dtype=UNIT_GROUP_DTYPE)
@@ -95,7 +91,6 @@ def empty_state(seed: int = 0) -> State:
         unit_groups=unit_groups,
         travel_matrix=travel,
         distance_matrix=distance,
-        seed=seed,
     )
 
 

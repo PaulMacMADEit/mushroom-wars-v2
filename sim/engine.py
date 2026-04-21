@@ -131,16 +131,14 @@ def _apply_send(state: State, player: int, action: Action) -> None:
 
 
 def _advance_production(state: State) -> None:
-    """Each owned + alive + non-upgrading building regenerates garrison, capped."""
+    """Each owned + alive building regenerates garrison, capped at capacity."""
     b = state.buildings
     alive = b["alive"] == 1
     owned = (b["owner"] == C.OWNER_P1) | (b["owner"] == C.OWNER_P2)
-    not_upgrading = b["upgrade_timer"] == 0
-    eligible = alive & owned & not_upgrading
+    eligible = alive & owned
 
-    # For v0.1 all eligible buildings are TYPE_BASIC level 0 with one rate.
-    # Future: look up stats by (type_id, level) per building.
-    # Vectorize: add PRODUCTION_PER_TICK then clamp to capacity.
+    # v0.1: all buildings are TYPE_BASIC with one rate. When more types land,
+    # this becomes a per-type rate lookup (cheap — 32-entry gather).
     garrison = b["garrison"].astype(np.int32)
     capacity = b["capacity"].astype(np.int32)
     new_garrison = np.minimum(garrison + C.PRODUCTION_PER_TICK, capacity)

@@ -93,8 +93,6 @@ def is_valid(state: State, player: int, action: Action) -> bool:
         return False
     if b["owner"][src] != player:
         return False
-    if b["upgrade_timer"][src] != 0:          # can't send from upgrading building (v0.2+)
-        return False
 
     pct = C.SEND_PERCENTAGES[action.type_idx]
     if send_amount(int(b["garrison"][src]), pct) < C.MIN_SEND_INTERNAL:
@@ -122,7 +120,7 @@ def compute_mask(state: State, player: int) -> np.ndarray:
         return mask
 
     alive = b["alive"].astype(bool)
-    owned = alive & (b["owner"] == player) & (b["upgrade_timer"] == 0)
+    owned = alive & (b["owner"] == player)
     valid_tgt = alive                          # any alive building; self-pairs removed below
 
     for type_idx, pct in enumerate(C.SEND_PERCENTAGES):

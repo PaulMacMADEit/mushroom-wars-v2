@@ -71,10 +71,10 @@ OWNER_P2              = 2
 TYPE_BASIC            = 0
 # Future: TYPE_CAPITAL=1, TYPE_MILITARY=2, TYPE_FORGE=3, TYPE_PRODUCTION=4
 
-# Per-(type, level) stats. v0.1 has one row — the shape is ready for more.
-# Fields must match what engine.py reads: (prod_per_tick, capacity, def_num, def_den)
+# Per-type stats. v0.1 has one row — adding a type later = append a row,
+# plus engine.py reads stats[type_id] instead of the module-level constant.
 BUILDING_STATS = {
-    (TYPE_BASIC, 0): {
+    TYPE_BASIC: {
         "prod_per_tick": PRODUCTION_PER_TICK,
         "capacity":      DEFAULT_CAPACITY,
         "def_num":       DEF_BONUS_NUM,

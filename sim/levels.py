@@ -19,17 +19,17 @@ from sim import config as C
 from sim.state import State, precompute_distances
 
 
-# Each building: (owner, x, y, garrison_real, type_id, level)
+# Each building: (owner, x, y, garrison_real, type_id)
 # garrison stored in real units here for readability; apply() scales to internal.
 _CROSSROADS_6 = [
     # P1 and P2 bases (opposite corners)
-    (C.OWNER_P1, 100, 100, 10, C.TYPE_BASIC, 0),
-    (C.OWNER_P2, 600, 600, 10, C.TYPE_BASIC, 0),
+    (C.OWNER_P1, 100, 100, 10, C.TYPE_BASIC),
+    (C.OWNER_P2, 600, 600, 10, C.TYPE_BASIC),
     # Neutrals — symmetric pairs, varied garrison
-    (C.OWNER_NEUTRAL, 350, 100, 1, C.TYPE_BASIC, 0),   # N1 top
-    (C.OWNER_NEUTRAL, 350, 600, 1, C.TYPE_BASIC, 0),   # N2 bottom (mirror of N1)
-    (C.OWNER_NEUTRAL, 100, 350, 5, C.TYPE_BASIC, 0),   # N3 left
-    (C.OWNER_NEUTRAL, 600, 350, 5, C.TYPE_BASIC, 0),   # N4 right (mirror of N3)
+    (C.OWNER_NEUTRAL, 350, 100, 1, C.TYPE_BASIC),   # N1 top
+    (C.OWNER_NEUTRAL, 350, 600, 1, C.TYPE_BASIC),   # N2 bottom (mirror of N1)
+    (C.OWNER_NEUTRAL, 100, 350, 5, C.TYPE_BASIC),   # N3 left
+    (C.OWNER_NEUTRAL, 600, 350, 5, C.TYPE_BASIC),   # N4 right (mirror of N3)
 ]
 
 
@@ -47,12 +47,11 @@ def apply(state: State, level_name: str = "crossroads_6") -> None:
     b = state.buildings
     b[:] = 0  # clear all slots
 
-    for slot, (owner, x, y, garrison_real, type_id, level_tier) in enumerate(level):
-        stats = C.BUILDING_STATS[(type_id, level_tier)]
+    for slot, (owner, x, y, garrison_real, type_id) in enumerate(level):
+        stats = C.BUILDING_STATS[type_id]
         b[slot]["alive"]    = 1
         b[slot]["owner"]    = owner
         b[slot]["type_id"]  = type_id
-        b[slot]["level"]    = level_tier
         b[slot]["garrison"] = garrison_real * C.SCALE
         b[slot]["capacity"] = stats["capacity"]
         b[slot]["x"]        = x
@@ -63,8 +62,9 @@ def apply(state: State, level_name: str = "crossroads_6") -> None:
 
 
 def reset(level_name: str = "crossroads_6", seed: int = 0) -> State:
-    """Fresh state ready to step. Convenience wrapper."""
+    """Fresh state ready to step. seed is currently only used by callers via
+    np.random; kept in the signature for callers that pass it through."""
     from sim.state import empty_state
-    state = empty_state(seed=seed)
+    state = empty_state()
     apply(state, level_name)
     return state
