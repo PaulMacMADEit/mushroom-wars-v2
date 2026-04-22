@@ -22,10 +22,14 @@ load_dotenv(_REPO_ROOT / ".env")
 
 
 def db_url() -> str:
-    url = os.environ.get("SUPABASE_DB_URL")
+    """Prefer the pooler URL when set — it's IPv4-available and the direct
+    connection is IPv6-only on current Supabase, which isn't routable from
+    every network.
+    """
+    url = os.environ.get("SUPABASE_POOL_URL") or os.environ.get("SUPABASE_DB_URL")
     if not url:
         raise RuntimeError(
-            "SUPABASE_DB_URL not set — fill it in .env (see .env.example)."
+            "Neither SUPABASE_POOL_URL nor SUPABASE_DB_URL is set — fill in .env."
         )
     return url
 
