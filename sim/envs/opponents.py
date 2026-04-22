@@ -96,7 +96,19 @@ def make_neural_opponent(
 
     Each vec-env subprocess constructs its own via make_env's factory; the
     `weights_path` is read once at construction (not on every step).
+
+    IMPORTANT: when the parent process has CUDA initialized and spawns
+    AsyncVectorEnv subprocs, each subproc re-imports torch and would also
+    try to init CUDA. With 64 subprocs doing that at once, torch's CUDA
+    init deadlocks (observed: main proc stuck on `unix_stream_read_generic`
+    waiting for subprocs stuck on `futex_do_wait`). We hide the GPU from
+    the subproc's torch *before* importing it so opponents stay CPU-only.
     """
+    import os
+
+    if device == "cpu":
+        # Unconditional override — setdefault leaves parent's value in place.
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
     # Lazy imports: we don't want random-legal / noop paths to pull torch or
     # training code into every subprocess that doesn't need it.
     import torch
