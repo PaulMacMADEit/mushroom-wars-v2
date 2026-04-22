@@ -184,6 +184,96 @@ def mark_done(
     conn.commit()
 
 
+# ---------------------------------------------------------------------------
+# Match claim + finalize (eval jobs)
+# ---------------------------------------------------------------------------
+
+def claim_one_match(conn):
+    """Atomically claim the oldest queued match row. Returns dict or None."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE matches SET status='running'
+             WHERE id IN (
+               SELECT id FROM matches
+                WHERE project=%s AND status='queued'
+                ORDER BY created_at
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+             )
+             RETURNING id, model_a_run_id, model_b_run_id, games_planned,
+                       simulator_id, description, summary::text
+        """, (PROJECT,))
+        row = cur.fetchone()
+    conn.commit()
+    if row is None:
+        return None
+    id_, a, b, games_planned, sim_id, description, summary_text = row
+    summary = json.loads(summary_text) if summary_text else {}
+    return {
+        "id":           id_,
+        "run_a":        a,
+        "run_b":        b,
+        "games_planned": games_planned,
+        "sim_id":       sim_id,
+        "description":  description,
+        "level_name":   summary.get("level_name", "crossroads_6"),
+    }
+
+
+def fetch_run_artifacts(conn, run_id):
+    """Grab weights_url + obs_norm_url for a completed training run."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT weights_url, obs_norm_url, status FROM runs WHERE id = %s",
+            (run_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise ValueError(f"run {run_id!r} not found")
+    w, n, status = row
+    if status != "done" or not w:
+        raise ValueError(f"run {run_id!r} status={status!r} weights_url={w!r} — can't eval")
+    return {"weights_url": w, "obs_norm_url": n}
+
+
+def mark_match_done(conn, match_id, summary: dict):
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE matches SET status='done', summary=%s::jsonb, finished_at=now()
+             WHERE id = %s
+        """, (json.dumps(summary), match_id))
+    conn.commit()
+
+
+def mark_match_failed(conn, match_id, error: str):
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE matches SET status='failed',
+                               summary=jsonb_set(COALESCE(summary,'{}'::jsonb), '{error}', to_jsonb(%s::text)),
+                               finished_at=now()
+             WHERE id = %s
+        """, (error[:4000], match_id))
+    conn.commit()
+
+
+def insert_games(conn, match_id, games: list[dict]):
+    with conn.cursor() as cur:
+        for g in games:
+            cur.execute("""
+                INSERT INTO games (
+                    match_id, game_index, seed, map_name,
+                    player_1_run_id, player_2_run_id, winner,
+                    duration_ms, stats
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            """, (
+                match_id, g["game_index"], g["seed"], g["map_name"],
+                g["player_1_run_id"], g["player_2_run_id"], g["winner"],
+                g["duration_ms"], json.dumps(g["stats"]),
+            ))
+    conn.commit()
+
+
 def mark_failed(conn, run_id, error: str, wall_ms: int):
     with conn.cursor() as cur:
         cur.execute("""
@@ -239,6 +329,51 @@ def _download_parent_state(parent: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 METRICS_UPLOAD_EVERY = 5  # updates; ~every 15-30s depending on rollout size
+
+
+def _handle_match(conn, match: dict, device: torch.device) -> None:
+    """Play a claimed head-to-head match. Writes to games + matches tables."""
+    from workers import match_runner
+
+    match_id = match["id"]
+    print(f"[worker] claimed match id={match_id} "
+          f"A={match['run_a']} B={match['run_b']} "
+          f"games={match['games_planned']} level={match['level_name']!r}")
+
+    try:
+        art_a = fetch_run_artifacts(conn, match["run_a"])
+        art_b = fetch_run_artifacts(conn, match["run_b"])
+        state_a = match_runner.download_run_state(art_a["weights_url"], art_a["obs_norm_url"])
+        state_b = match_runner.download_run_state(art_b["weights_url"], art_b["obs_norm_url"])
+
+        results = match_runner.run_match(
+            run_a_id=match["run_a"],
+            run_b_id=match["run_b"],
+            state_a=state_a,
+            state_b=state_b,
+            n_games=match["games_planned"],
+            level_name=match["level_name"],
+            # Seed the match-level rng from the match id so each match is
+            # reproducible given the same inputs. hash() isn't stable
+            # across runs, but sum of bytes works.
+            seed_base=int(sum(str(match_id).encode())) & 0x7FFFFFFF,
+            device=device,
+        )
+        summary = match_runner.summarize(results, match["run_a"], match["run_b"])
+        summary["level_name"] = match["level_name"]
+
+        with connect() as c2:
+            insert_games(c2, match_id, results)
+            mark_match_done(c2, match_id, summary)
+
+        print(f"[worker] match done id={match_id} "
+              f"A={summary['wins_a']} B={summary['wins_b']} draws={summary['draws']} "
+              f"rate_a={summary['rate_a']:.2f}")
+    except Exception as exc:
+        err = f"{exc.__class__.__name__}: {exc}"
+        print(f"[worker] match failed id={match_id}: {err}")
+        with connect() as c2:
+            mark_match_failed(c2, match_id, err)
 
 
 def _upload_live_metrics(run_id, metrics_history: list[dict], snapshot: dict) -> str:
@@ -459,8 +594,16 @@ def main():
         claimed = None
         try:
             with connect() as conn:
+                # 1) Try training runs first (longer, higher priority).
                 job = claim_one(conn, args.machine)
                 if job is None:
+                    # 2) Fall back to queued eval matches.
+                    match = claim_one_match(conn)
+                    if match is not None:
+                        idle_streak = 0
+                        _handle_match(conn, match, device)
+                        continue
+
                     idle_streak += 1
                     if args.one:
                         print("[worker] no queued run, exiting (--one).")
