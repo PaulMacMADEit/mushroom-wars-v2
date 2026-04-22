@@ -36,25 +36,38 @@
     const $recent = document.getElementById('recent-runs');
 
     async function loadStats() {
-      const [runs, models, sims] = await Promise.all([
+      const [runs, models, sims, doneRuns] = await Promise.all([
         sb.from('runs').select('status', { count: 'exact', head: false }),
         sb.from('models').select('id', { count: 'exact', head: true }),
         sb.from('simulators').select('id', { count: 'exact', head: true }),
+        sb.from('runs').select('games_played, wall_ms').eq('status', 'done'),
       ]);
-      if (runs.error || models.error || sims.error) {
-        $stats.innerHTML = `<div class="card error">error: ${esc(runs.error?.message ?? models.error?.message ?? sims.error?.message)}</div>`;
+      if (runs.error || models.error || sims.error || doneRuns.error) {
+        $stats.innerHTML = `<div class="card error">error: ${esc(runs.error?.message ?? models.error?.message ?? sims.error?.message ?? doneRuns.error?.message)}</div>`;
         return;
       }
       const byStatus = {};
       for (const r of runs.data) byStatus[r.status] = (byStatus[r.status] || 0) + 1;
+
+      // Aggregates over completed runs.
+      let totalGames = 0, totalWallMs = 0;
+      for (const r of doneRuns.data) {
+        totalGames   += (r.games_played ?? 0);
+        totalWallMs  += (r.wall_ms ?? 0);
+      }
+      const avgGpm = totalWallMs > 0 ? (totalGames / (totalWallMs / 60000)) : 0;
+
       const cells = [
-        ['models',        models.count],
-        ['simulators',    sims.count],
-        ['runs total',    runs.count],
-        ['queued',        byStatus.queued  || 0],
-        ['running',       byStatus.running || 0],
-        ['done',          byStatus.done    || 0],
-        ['failed',        byStatus.failed  || 0],
+        ['models',            models.count],
+        ['simulators',        sims.count],
+        ['runs total',        runs.count],
+        ['queued',            byStatus.queued  || 0],
+        ['running',           byStatus.running || 0],
+        ['done',              byStatus.done    || 0],
+        ['failed',            byStatus.failed  || 0],
+        ['games trained',     totalGames.toLocaleString()],
+        ['avg games/min',     avgGpm.toFixed(0)],
+        ['total train time',  fmtDuration(totalWallMs)],
       ];
       $stats.innerHTML = cells.map(([label, v]) =>
         `<div class="card"><div class="stat">${esc(String(v))}</div><div class="stat-label">${esc(label)}</div></div>`

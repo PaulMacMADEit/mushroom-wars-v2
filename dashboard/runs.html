@@ -47,7 +47,7 @@
 
   <script type="module">
     import { sb } from './lib/supabase.js';
-    import { fmtTime, fmtDuration, fmtPct, esc, statusPill, tr } from './lib/ui.js';
+    import { fmtTime, fmtDuration, fmtPct, esc, statusPill, tr, gamesPerMin } from './lib/ui.js';
 
     const $runs = document.getElementById('runs');
     const $status = document.getElementById('filter-status');
@@ -76,6 +76,7 @@
         `<span class="mono">${esc(r.machine)}</span>`,
         fmtDuration(r.wall_ms),
         esc(String(r.games_played ?? '—')),
+        `<span class="mono">${gamesPerMin(r.games_played, r.wall_ms)}</span>`,
         fmtPct(r.result?.rate),
         `<span class="muted">${fmtTime(r.queued_at)}</span>`,
       ]));
@@ -83,7 +84,7 @@
         <table>
           <thead><tr>
             <th>status</th><th>label</th><th>model</th><th>sim</th><th>seed</th>
-            <th>machine</th><th>wall</th><th>games</th><th>rate</th><th>queued</th>
+            <th>machine</th><th>wall</th><th>games</th><th>g/min</th><th>rate</th><th>queued</th>
           </tr></thead>
           <tbody>${rows.join('')}</tbody>
         </table>

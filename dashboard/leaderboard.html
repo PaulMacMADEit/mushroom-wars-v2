@@ -37,7 +37,7 @@
 
   <script type="module">
     import { sb } from './lib/supabase.js';
-    import { fmtTime, fmtDuration, fmtPct, esc, tr } from './lib/ui.js';
+    import { fmtTime, fmtDuration, fmtPct, esc, tr, gamesPerMin } from './lib/ui.js';
 
     const $root   = document.getElementById('leaders');
     const $sim    = document.getElementById('filter-sim');
@@ -76,13 +76,14 @@
         `<span class="mono">${esc(r.machine)}</span>`,
         fmtDuration(r.wall_ms),
         esc(String(r.games_played ?? '—')),
+        `<span class="mono">${gamesPerMin(r.games_played, r.wall_ms)}</span>`,
         `<span class="muted">${fmtTime(r.queued_at)}</span>`,
       ]));
       $root.innerHTML = `
         <table>
           <thead><tr>
             <th>rank</th><th>rate</th><th>label</th><th>model</th><th>sim</th>
-            <th>seed</th><th>machine</th><th>wall</th><th>games</th><th>queued</th>
+            <th>seed</th><th>machine</th><th>wall</th><th>games</th><th>g/min</th><th>queued</th>
           </tr></thead>
           <tbody>${rows.join('')}</tbody>
         </table>`;

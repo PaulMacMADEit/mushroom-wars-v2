@@ -50,3 +50,9 @@ export function statusPill(status) {
 export function tr(cells, { className } = {}) {
   return `<tr${className ? ` class="${className}"` : ''}>${cells.map(c => `<td>${c}</td>`).join('')}</tr>`;
 }
+
+/** games/min derived from games_played + wall_ms; '—' if either missing. */
+export function gamesPerMin(gamesPlayed, wallMs) {
+  if (!gamesPlayed || !wallMs) return '—';
+  return (gamesPlayed / (wallMs / 60000)).toFixed(0);
+}

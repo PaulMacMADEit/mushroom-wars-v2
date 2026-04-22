@@ -49,6 +49,15 @@
         run.log_url       ? signedUrl(run.log_url).catch(_ => null) : null,
       ]);
 
+      // Derived throughput: games/min + games/update.
+      const gamesPerMin = (run.games_played && run.wall_ms)
+        ? (run.games_played / (run.wall_ms / 60000))
+        : null;
+      const updates = run.result?.updates ?? 0;
+      const gamesPerUpd = (run.games_played && updates)
+        ? (run.games_played / updates)
+        : null;
+
       $root.innerHTML = `
         <h2>Run ${esc(run.label)}</h2>
         <div class="card">
@@ -59,9 +68,33 @@
             <div><span class="stat-label">sim</span><div class="mono">${esc(run.simulator_id)}</div></div>
             <div><span class="stat-label">seed</span><div class="mono">${esc(run.seed ?? '')}</div></div>
             <div><span class="stat-label">machine</span><div class="mono">${esc(run.machine)}</div></div>
-            <div><span class="stat-label">rate</span><div class="stat">${fmtPct(run.result?.rate)}</div></div>
-            <div><span class="stat-label">games</span><div class="stat">${esc(String(run.games_played ?? '—'))}</div></div>
-            <div><span class="stat-label">wall</span><div class="stat">${fmtDuration(run.wall_ms)}</div></div>
+          </div>
+        </div>
+
+        <div class="grid">
+          <div class="card">
+            <div class="stat">${fmtPct(run.result?.rate)}</div>
+            <div class="stat-label">rate</div>
+          </div>
+          <div class="card">
+            <div class="stat">${esc(String(run.games_played ?? '—'))}</div>
+            <div class="stat-label">games</div>
+          </div>
+          <div class="card">
+            <div class="stat">${gamesPerMin != null ? gamesPerMin.toFixed(0) : '—'}</div>
+            <div class="stat-label">games / min</div>
+          </div>
+          <div class="card">
+            <div class="stat">${gamesPerUpd != null ? gamesPerUpd.toFixed(1) : '—'}</div>
+            <div class="stat-label">games / update</div>
+          </div>
+          <div class="card">
+            <div class="stat">${esc(String(updates || '—'))}</div>
+            <div class="stat-label">updates</div>
+          </div>
+          <div class="card">
+            <div class="stat">${fmtDuration(run.wall_ms)}</div>
+            <div class="stat-label">wall</div>
           </div>
         </div>
 
@@ -74,7 +107,6 @@
           <div class="card">
             <div class="stat-label">budget</div><div>${fmtDuration(run.budget_ms)}</div>
             <div class="stat-label" style="margin-top:10px;">device</div><div class="mono">${esc(run.result?.device ?? '—')}</div>
-            <div class="stat-label" style="margin-top:10px;">updates</div><div>${esc(String(run.result?.updates ?? '—'))}</div>
           </div>
           <div class="card">
             <div class="stat-label">artifacts</div>
@@ -88,13 +120,23 @@
 
         <h2>Training curves</h2>
         <div class="card">
-          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
-            <div class="stat-label">losses</div>
-          </div>
-          <div style="position:relative; height:240px;"><canvas id="chart-loss"></canvas></div>
-          <div style="height:8px;"></div>
-          <div class="stat-label">policy signal</div>
-          <div style="position:relative; height:240px;"><canvas id="chart-signal"></canvas></div>
+          <div class="stat-label">win rate vs opponent</div>
+          <div style="position:relative; height:220px;"><canvas id="chart-win"></canvas></div>
+          <div style="height:12px;"></div>
+          <div class="stat-label">losses</div>
+          <div style="position:relative; height:220px;"><canvas id="chart-loss"></canvas></div>
+          <div style="height:12px;"></div>
+          <div class="stat-label">policy signal (KL + policy loss)</div>
+          <div style="position:relative; height:220px;"><canvas id="chart-signal"></canvas></div>
+        </div>
+
+        <h2>Throughput</h2>
+        <div class="card">
+          <div class="stat-label">episodes completed per update</div>
+          <div style="position:relative; height:220px;"><canvas id="chart-eps"></canvas></div>
+          <div style="height:12px;"></div>
+          <div class="stat-label" id="pool-label" style="display:none;">opponent pool size (self-play)</div>
+          <div style="position:relative; height:180px;"><canvas id="chart-pool"></canvas></div>
         </div>
 
         <h2>Hyperparams</h2>
@@ -106,20 +148,33 @@
         ${run.error ? `<h2>Error</h2><pre class="error">${esc(run.error)}</pre>` : ''}
       `;
 
-      // Fetch metrics.json + render the two charts. Gracefully degrade if the
-      // log artifact is missing (older runs, or failed runs).
+      // Fetch metrics.json + render charts. Degrade gracefully if the log
+      // artifact is missing (older runs, failed runs, not-yet-uploaded runs).
       if (logUrl) {
         try {
           const resp = await fetch(logUrl);
           if (!resp.ok) throw new Error(`http ${resp.status}`);
           const body = await resp.json();
           const points = Array.isArray(body) ? body : (body.metrics ?? []);
+
+          lineChart(document.getElementById('chart-win'), points, ['win_rate'],
+                    { yLabel: 'win rate', yMin: 0, yMax: 1 });
           lineChart(document.getElementById('chart-loss'), points,
-                    ['value_loss', 'entropy_loss'],
-                    { yLabel: 'loss' });
+                    ['value_loss', 'entropy_loss'], { yLabel: 'loss' });
           lineChart(document.getElementById('chart-signal'), points,
-                    ['policy_loss', 'approx_kl', 'win_rate'],
-                    { yLabel: 'signal' });
+                    ['policy_loss', 'approx_kl'], { yLabel: 'signal' });
+          lineChart(document.getElementById('chart-eps'), points,
+                    ['episodes_completed'], { yLabel: 'episodes' });
+
+          // Pool chart only if this run was self-play (any point has pool_size).
+          const hasPool = points.some(p => p.pool_size != null);
+          if (hasPool) {
+            document.getElementById('pool-label').style.display = '';
+            lineChart(document.getElementById('chart-pool'), points,
+                      ['pool_size'], { yLabel: 'snapshots' });
+          } else {
+            document.getElementById('chart-pool').parentElement.style.display = 'none';
+          }
         } catch (e) {
           document.getElementById('chart-loss').replaceWith(
             Object.assign(document.createElement('div'),
