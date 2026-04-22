@@ -238,6 +238,42 @@ def _download_parent_state(parent: dict) -> dict:
 # Train one run
 # ---------------------------------------------------------------------------
 
+METRICS_UPLOAD_EVERY = 5  # updates; ~every 15-30s depending on rollout size
+
+
+def _upload_live_metrics(run_id, metrics_history: list[dict], snapshot: dict) -> str:
+    """Upload current (partial) metrics.json so the dashboard can chart mid-run.
+
+    Returns the storage path it wrote (same as the final log_url — the final
+    upload overwrites this).
+    """
+    import tempfile
+
+    from workers import storage
+
+    run_id_str = str(run_id)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump({"metrics": metrics_history, "partial": snapshot}, f)
+        path = f.name
+    try:
+        return storage.upload("logs", f"{run_id_str}/metrics.json", path,
+                              content_type="application/json")
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+def _set_log_url(run_id, log_url: str) -> None:
+    """Point runs.log_url at the live metrics file so the dashboard picks it up
+    even before the run finishes."""
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE runs SET log_url = %s WHERE id = %s AND log_url IS NULL",
+                (log_url, run_id),
+            )
+        conn.commit()
+
+
 def run_training(
     job: dict,
     model_meta: dict,
@@ -287,6 +323,8 @@ def run_training(
     total_eps = 0
     total_wins = 0
 
+    live_log_url: str | None = None
+
     try:
         while time.time() < deadline:
             m = trainer.update()
@@ -295,6 +333,27 @@ def run_training(
                 eps_count = m["episodes_completed"]
                 total_eps += eps_count
                 total_wins += int(round(eps_count * m.get("win_rate", 0.0)))
+
+            # Periodic live upload so the dashboard can show a mid-run chart.
+            # First upload also sets runs.log_url so the dashboard knows where
+            # to look; subsequent uploads just overwrite the same path.
+            if len(metrics_history) % METRICS_UPLOAD_EVERY == 0:
+                snapshot = {
+                    "updates":             len(metrics_history),
+                    "training_episodes":   total_eps,
+                    "training_wins":       total_wins,
+                    "rate_so_far":         (total_wins / total_eps) if total_eps else 0.0,
+                    "device":              str(device),
+                    "wall_ms_so_far":      int((time.time() - (deadline - job["budget_ms"] / 1000.0)) * 1000),
+                }
+                try:
+                    url = _upload_live_metrics(job["id"], metrics_history, snapshot)
+                    if live_log_url is None:
+                        _set_log_url(job["id"], url)
+                        live_log_url = url
+                except Exception as upload_exc:
+                    # Don't crash training on transient upload failure.
+                    print(f"[worker] live-upload failed: {upload_exc}")
     finally:
         # AsyncVectorEnv subprocesses need explicit cleanup; don't leak them
         # across claimed runs in the polling worker.
