@@ -38,12 +38,14 @@
     }
 
     async function load() {
+      $root.innerHTML = '<div class="muted">Fetching run…</div>';
       const { data: run, error } = await sb
         .from('runs')
         .select('*')
         .eq('id', runId)
         .single();
-      if (error) throw error;
+      if (error) throw new Error(`Supabase: ${error.message}`);
+      if (!run) throw new Error(`run ${runId} not found`);
 
       // Artifacts: models/logs buckets are public; signedUrl now returns a
       // plain public URL synchronously.
