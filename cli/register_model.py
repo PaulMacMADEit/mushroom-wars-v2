@@ -43,12 +43,12 @@ def layers_blob(net: ActorCritic) -> dict:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--id", default="v9.0-smoke")
-    ap.add_argument("--name", default="v9.0 smoke: flat policy head")
+    ap.add_argument("--id", default="v9.0-enc-full")
+    ap.add_argument("--name", default="v9.0 full encoder, flat policy head")
     ap.add_argument("--what-changed",
-                    default="Phase-2 smoke net: 289→128×2 body + flat 4097-way head + value head.")
-    ap.add_argument("--parent-model", default=None)
-    ap.add_argument("--obs-encoder", default="training.encoder.encode_obs (minimal 289-dim)")
+                    default="Full v9.0 encoder (globals + per-building + per-group, ~1000 dims); flat 4097-way policy head retained from smoke scope.")
+    ap.add_argument("--parent-model", default="v9.0-smoke")
+    ap.add_argument("--obs-encoder", default="training.encoder.encode_obs (v9.0 full, 1002 dims)")
     ap.add_argument("--action-decoder", default="sim.actions.decode (flat 4097-way)")
     ap.add_argument("--keep-weights", action="store_true")
     ap.add_argument("--force", action="store_true")

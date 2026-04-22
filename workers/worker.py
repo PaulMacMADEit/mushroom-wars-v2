@@ -55,25 +55,35 @@ def pick_device() -> torch.device:
 
 
 def build_net_for_model(model_id: str, obs_size: int, num_actions: int) -> ActorCritic:
-    """Phase-3 minimum: only the v9.0-smoke net is supported.
+    """Dispatch model_id → nn.Module.
 
-    When more model variants exist, this dispatch grows — or better, moves to
-    a registry keyed on model_id. For now, fail loudly on unknown models
-    instead of silently falling through.
+    Keyed on the model_id string so we can swap architectures without touching
+    existing rows. The obs/action checks catch "model row vs code drift" —
+    i.e. someone changed encoder/action-space dims without bumping model_id.
     """
-    from training.net import ActorCritic as SmokeNet
-    from training.encoder import OBS_DIM
     from sim.actions import ACTION_SPACE_SIZE
+    from training.encoder import OBS_DIM
+    from training.net import ActorCritic
 
-    if model_id == "v9.0-smoke":
-        if obs_size != OBS_DIM or num_actions != ACTION_SPACE_SIZE:
-            raise ValueError(
-                f"model row {model_id!r} specifies obs={obs_size}, "
-                f"actions={num_actions}, but code has obs={OBS_DIM}, actions={ACTION_SPACE_SIZE}. "
-                "Did the encoder/action space change without a new model id?"
-            )
-        return SmokeNet()
-    raise ValueError(f"unknown model_id: {model_id!r} — add a case in build_net_for_model")
+    KNOWN = {
+        # Full v9.0 encoder + flat policy head. Chained heads land under a
+        # separate id in the next commit.
+        "v9.0-enc-full": (OBS_DIM, ACTION_SPACE_SIZE, ActorCritic),
+    }
+    entry = KNOWN.get(model_id)
+    if entry is None:
+        raise ValueError(
+            f"unknown model_id: {model_id!r} — add a case in build_net_for_model. "
+            f"Known: {sorted(KNOWN)}"
+        )
+    expected_obs, expected_actions, cls = entry
+    if obs_size != expected_obs or num_actions != expected_actions:
+        raise ValueError(
+            f"model row {model_id!r} specifies obs={obs_size}, actions={num_actions}; "
+            f"code expects obs={expected_obs}, actions={expected_actions}. "
+            "Did the encoder/action space change without a new model id?"
+        )
+    return cls()
 
 
 # ---------------------------------------------------------------------------
