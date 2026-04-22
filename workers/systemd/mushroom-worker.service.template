@@ -1,0 +1,20 @@
+[Unit]
+Description=Mushroom Wars v2 training worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={{REPO}}
+ExecStart={{VENV_PYTHON}} {{REPO}}/workers/worker.py
+Restart=always
+RestartSec=15
+StandardOutput=append:{{LOG_DIR}}/worker.out.log
+StandardError=append:{{LOG_DIR}}/worker.err.log
+
+# Limit restart thrash: if the unit restarts >5 times in 5 min, stop trying.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Install]
+WantedBy=default.target

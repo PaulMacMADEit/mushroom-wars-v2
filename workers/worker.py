@@ -117,17 +117,30 @@ def fetch_model_meta(conn, model_id: str):
     return {"obs_size": row[0], "num_actions": row[1]}
 
 
-def mark_done(conn, run_id, result: dict, games_played: int, wall_ms: int):
+def mark_done(
+    conn,
+    run_id,
+    result: dict,
+    games_played: int,
+    wall_ms: int,
+    weights_url: str | None = None,
+    optimizer_url: str | None = None,
+    log_url: str | None = None,
+):
     with conn.cursor() as cur:
         cur.execute("""
             UPDATE runs
-               SET status       = 'done',
-                   result       = %s::jsonb,
-                   games_played = %s,
-                   wall_ms      = %s,
-                   finished_at  = now()
+               SET status        = 'done',
+                   result        = %s::jsonb,
+                   games_played  = %s,
+                   wall_ms       = %s,
+                   weights_url   = %s,
+                   optimizer_url = %s,
+                   log_url       = %s,
+                   finished_at   = now()
              WHERE id = %s
-        """, (json.dumps(result), games_played, wall_ms, run_id))
+        """, (json.dumps(result), games_played, wall_ms,
+              weights_url, optimizer_url, log_url, run_id))
     conn.commit()
 
 
@@ -148,8 +161,16 @@ def mark_failed(conn, run_id, error: str, wall_ms: int):
 # Train one run
 # ---------------------------------------------------------------------------
 
-def run_training(job: dict, model_meta: dict, device: torch.device) -> tuple[dict, int]:
-    """Do the actual PPO training for the claimed job. Return (result, games_played)."""
+def run_training(
+    job: dict,
+    model_meta: dict,
+    device: torch.device,
+) -> tuple[dict, int, PPOTrainer, list[dict]]:
+    """Run PPO for the claimed job.
+
+    Returns (result dict, games_played, trainer instance so the caller can save
+    the trained state — weights/optimizer/metrics).
+    """
     hp = job["hyperparams"] or {}
     seed_int = _seed_to_int(job["seed"])
 
@@ -163,33 +184,32 @@ def run_training(job: dict, model_meta: dict, device: torch.device) -> tuple[dic
     agent = PPOAgent(net, device=device)
     trainer = PPOTrainer(env, agent, cfg)
 
-    # Budget loop: update until we hit budget_ms.
+    # Budget loop: update until we hit budget_ms. Keep full metrics history
+    # for the log artifact; keep overall win-rate stats for `result`.
     deadline = time.time() + job["budget_ms"] / 1000.0
-    last_metrics: dict = {}
+    metrics_history: list[dict] = []
     total_eps = 0
     total_wins = 0
-    updates = 0
 
     while time.time() < deadline:
-        metrics = trainer.update()
-        updates += 1
-        if "episodes_completed" in metrics:
-            eps_count = metrics["episodes_completed"]
+        m = trainer.update()
+        metrics_history.append(m)
+        if "episodes_completed" in m:
+            eps_count = m["episodes_completed"]
             total_eps += eps_count
-            total_wins += int(round(eps_count * metrics.get("win_rate", 0.0)))
-        last_metrics = metrics
+            total_wins += int(round(eps_count * m.get("win_rate", 0.0)))
 
     overall_win_rate = total_wins / total_eps if total_eps else 0.0
     result = {
         "rate":                 overall_win_rate,
-        "updates":              updates,
+        "updates":              len(metrics_history),
         "training_episodes":    total_eps,
         "training_wins":        total_wins,
-        "final_metrics":        last_metrics,
+        "final_metrics":        metrics_history[-1] if metrics_history else {},
         "config":               asdict(cfg),
         "device":               str(device),
     }
-    return result, total_eps
+    return result, total_eps, trainer, metrics_history
 
 
 def _seed_to_int(seed: str) -> int:
@@ -203,6 +223,48 @@ def _seed_to_int(seed: str) -> int:
     for ch in seed:
         h = (h * 131 + ord(ch)) & 0xFFFFFFFF
     return h
+
+
+# ---------------------------------------------------------------------------
+# Save + upload artifacts
+# ---------------------------------------------------------------------------
+
+def save_and_upload(
+    run_id,
+    trainer: PPOTrainer,
+    metrics_history: list[dict],
+    result: dict,
+) -> dict[str, str | None]:
+    """Write weights/optimizer/metrics locally, then upload to Storage.
+
+    Returns dict with bucket/key paths ready for the runs.*_url columns.
+    """
+    import tempfile
+
+    from workers import storage
+
+    run_id_str = str(run_id)
+    urls = {"weights_url": None, "optimizer_url": None, "log_url": None}
+
+    with tempfile.TemporaryDirectory(prefix=f"mw2-run-{run_id_str}-") as tmp:
+        tmp_path = Path(tmp)
+        weights_file   = tmp_path / "weights.pt"
+        optimizer_file = tmp_path / "optimizer.pt"
+        log_file       = tmp_path / "metrics.json"
+
+        torch.save(trainer.agent.net.state_dict(), weights_file)
+        torch.save(trainer.optimizer.state_dict(), optimizer_file)
+        log_file.write_text(json.dumps({
+            "metrics": metrics_history,
+            "result":  result,
+        }))
+
+        urls["weights_url"]   = storage.upload("models", f"{run_id_str}/weights.pt",   weights_file)
+        urls["optimizer_url"] = storage.upload("models", f"{run_id_str}/optimizer.pt", optimizer_file)
+        urls["log_url"]       = storage.upload("logs",   f"{run_id_str}/metrics.json", log_file,
+                                               content_type="application/json")
+
+    return urls
 
 
 # ---------------------------------------------------------------------------
@@ -251,13 +313,23 @@ def main():
             # Training happens outside the `with connect()` block so we don't
             # hold a DB connection for the whole training run.
             t0 = time.time()
-            result, games = run_training(claimed, model_meta, device)
+            result, games, trainer, metrics_history = run_training(
+                claimed, model_meta, device
+            )
             wall_ms = int((time.time() - t0) * 1000)
 
+            urls = save_and_upload(claimed["id"], trainer, metrics_history, result)
+
             with connect() as conn:
-                mark_done(conn, claimed["id"], result, games, wall_ms)
+                mark_done(
+                    conn, claimed["id"], result, games, wall_ms,
+                    weights_url=urls["weights_url"],
+                    optimizer_url=urls["optimizer_url"],
+                    log_url=urls["log_url"],
+                )
             print(f"[worker] done id={claimed['id']} games={games} "
-                  f"wall={wall_ms}ms rate={result['rate']:.3f}")
+                  f"wall={wall_ms}ms rate={result['rate']:.3f} "
+                  f"artifacts: {urls['weights_url']}, {urls['log_url']}")
 
         except KeyboardInterrupt:
             if claimed is not None:

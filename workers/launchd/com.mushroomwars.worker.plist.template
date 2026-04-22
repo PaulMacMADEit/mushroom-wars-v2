@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mushroomwars.worker</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{VENV_PYTHON}}</string>
+        <string>{{REPO}}/workers/worker.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{REPO}}</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Always relaunch. Throttle prevents a crashloop from burning CPU. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>15</integer>
+
+    <key>StandardOutPath</key>
+    <string>{{LOG_DIR}}/worker.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{LOG_DIR}}/worker.err.log</string>
+
+    <!-- Let the venv find its modules when launched by launchd (PATH gets
+         wiped otherwise; we explicitly prepend the venv bin dir). -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{{REPO}}/.venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
