@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socket
 import sys
 import time
@@ -96,10 +97,16 @@ def build_net_for_model(model_id: str, obs_size: int, num_actions: int) -> Actor
 # ---------------------------------------------------------------------------
 
 def claim_one(conn, machine: str):
-    """Call claim_next_run; return dict or None."""
+    """Call claim_next_run; return dict or None.
+
+    Also fetches parent artifact URLs when parent_run_id is set, so the
+    caller can init the trainer from the parent's weights + optimizer +
+    obs_norm.
+    """
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, model_id, simulator_id, label, budget_ms, seed, hyperparams::text "
+            "SELECT id, model_id, simulator_id, label, budget_ms, seed, "
+            "hyperparams::text, parent_run_id "
             "FROM claim_next_run(%s, %s)",
             (PROJECT, machine),
         )
@@ -107,16 +114,33 @@ def claim_one(conn, machine: str):
     conn.commit()
     if row is None:
         return None
-    id_, model_id, sim_id, label, budget_ms, seed, hp_text = row
-    return {
-        "id":         id_,
-        "model_id":   model_id,
-        "sim_id":     sim_id,
-        "label":      label,
-        "budget_ms":  budget_ms,
-        "seed":       seed,
-        "hyperparams": json.loads(hp_text) if hp_text else {},
+    id_, model_id, sim_id, label, budget_ms, seed, hp_text, parent_id = row
+    job = {
+        "id":           id_,
+        "model_id":     model_id,
+        "sim_id":       sim_id,
+        "label":        label,
+        "budget_ms":    budget_ms,
+        "seed":         seed,
+        "hyperparams":  json.loads(hp_text) if hp_text else {},
+        "parent_run_id": parent_id,
+        "parent":       None,
     }
+    if parent_id is not None:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT weights_url, optimizer_url, obs_norm_url "
+                "FROM runs WHERE id = %s",
+                (parent_id,),
+            )
+            prow = cur.fetchone()
+        if prow is not None:
+            job["parent"] = {
+                "weights_url":   prow[0],
+                "optimizer_url": prow[1],
+                "obs_norm_url":  prow[2],
+            }
+    return job
 
 
 def fetch_model_meta(conn, model_id: str):
@@ -174,6 +198,43 @@ def mark_failed(conn, run_id, error: str, wall_ms: int):
 
 
 # ---------------------------------------------------------------------------
+# Parent-run artifact download (continuation training)
+# ---------------------------------------------------------------------------
+
+def _public_url(path: str | None) -> str | None:
+    if not path:
+        return None
+    base = os.environ.get("SUPABASE_URL")
+    if not base:
+        raise RuntimeError("SUPABASE_URL not set")
+    return f"{base}/storage/v1/object/public/{path}"
+
+
+def _download_parent_state(parent: dict) -> dict:
+    """Download parent's weights.pt / optimizer.pt / obs_norm.pt from Storage.
+
+    Returns a dict with three torch-state values (any may be None if the parent
+    didn't upload that artifact).
+    """
+    import io
+    import urllib.request
+
+    def fetch_load(path: str | None):
+        url = _public_url(path)
+        if url is None:
+            return None
+        with urllib.request.urlopen(url, timeout=60) as r:
+            data = r.read()
+        return torch.load(io.BytesIO(data), map_location="cpu", weights_only=False)
+
+    return {
+        "weights":   fetch_load(parent.get("weights_url")),
+        "optimizer": fetch_load(parent.get("optimizer_url")),
+        "obs_norm":  fetch_load(parent.get("obs_norm_url")),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Train one run
 # ---------------------------------------------------------------------------
 
@@ -196,8 +257,28 @@ def run_training(
 
     # Build agent + trainer. Trainer owns its own vec env.
     net = build_net_for_model(job["model_id"], model_meta["obs_size"], model_meta["num_actions"])
+
+    # Continuation: download the parent's weights/optimizer/obs_norm and
+    # load them into the freshly-built net before training. Artifacts live
+    # in public Storage buckets, so we just HTTP-GET them.
+    parent_state = None
+    if job.get("parent") is not None:
+        parent_state = _download_parent_state(job["parent"])
+        if parent_state["weights"] is not None:
+            net.load_state_dict(parent_state["weights"])
+            print(f"[worker] loaded parent weights "
+                  f"(params={sum(p.numel() for p in net.parameters()):,})")
+
     agent = PPOAgent(net, device=device)
     trainer = PPOTrainer(agent, cfg, seed=seed_int)
+
+    if parent_state is not None:
+        if parent_state["optimizer"] is not None:
+            trainer.optimizer.load_state_dict(parent_state["optimizer"])
+            print("[worker] loaded parent optimizer state")
+        if parent_state["obs_norm"] is not None and trainer.obs_norm is not None:
+            trainer.obs_norm.load_state_dict(parent_state["obs_norm"])
+            print("[worker] loaded parent obs_norm state")
 
     # Budget loop: update until we hit budget_ms. Keep full metrics history
     # for the log artifact; keep overall win-rate stats for `result`.
