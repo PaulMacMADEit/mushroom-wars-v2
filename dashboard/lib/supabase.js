@@ -11,16 +11,18 @@ const SUPABASE_ANON = 'sb_publishable_S7q8SQrOn6W4OJ7tSFqJWQ_HFrf63KU';
 
 export const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
 
-/** Fetch a short-lived signed URL for an artifact path like "models/abc/weights.pt". */
-export async function signedUrl(path, expiresIn = 3600) {
+/** Public URL for an artifact path like "models/abc/weights.pt".
+ * `models` and `logs` buckets are public — dashboard reads don't need
+ * signing. `replays` is still private and would need a different path. */
+export function publicUrl(path) {
   if (!path) return null;
-  const slash = path.indexOf('/');
-  if (slash < 0) throw new Error(`bad storage path: ${path}`);
-  const bucket = path.slice(0, slash);
-  const key    = path.slice(slash + 1);
-  const { data, error } = await sb.storage.from(bucket).createSignedUrl(key, expiresIn);
-  if (error) throw error;
-  return data.signedUrl;
+  return `${SUPABASE_URL}/storage/v1/object/public/${path}`;
+}
+
+// Back-compat export: old callers import `signedUrl`. Public URL works the
+// same for the dashboard's purposes; kept sync to simplify call sites.
+export function signedUrl(path) {
+  return publicUrl(path);
 }
 
 /** Read the current URL's ?id=... (for per-entity detail pages). */

@@ -42,12 +42,11 @@
         .single();
       if (error) throw error;
 
-      // Artifacts: resolve each path to a fresh signed URL.
-      const [weightsUrl, optimizerUrl, logUrl] = await Promise.all([
-        run.weights_url   ? signedUrl(run.weights_url).catch(_ => null) : null,
-        run.optimizer_url ? signedUrl(run.optimizer_url).catch(_ => null) : null,
-        run.log_url       ? signedUrl(run.log_url).catch(_ => null) : null,
-      ]);
+      // Artifacts: models/logs buckets are public; signedUrl now returns a
+      // plain public URL synchronously.
+      const weightsUrl   = signedUrl(run.weights_url);
+      const optimizerUrl = signedUrl(run.optimizer_url);
+      const logUrl       = signedUrl(run.log_url);
 
       // Derived throughput: games/min + games/update.
       const gamesPerMin = (run.games_played && run.wall_ms)
