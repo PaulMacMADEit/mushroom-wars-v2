@@ -36,6 +36,15 @@ def db_url() -> str:
 
 @contextmanager
 def connect():
-    """Short-lived connection. Autocommit off; caller commits explicitly."""
+    """Short-lived connection. Autocommit off; caller commits explicitly.
+
+    Disables client-side prepared statements because Supabase's transaction
+    pooler (PgBouncer) multiplexes client connections over a smaller pool of
+    backends — a prepared statement named by one client collides when the
+    same backend later serves another. Symptom without this: the second
+    connection to reuse a backend errors with
+    `DuplicatePreparedStatement: prepared statement "_pg3_0" already exists`.
+    """
     with psycopg.connect(db_url()) as conn:
+        conn.prepare_threshold = None
         yield conn
