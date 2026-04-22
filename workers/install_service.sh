@@ -87,7 +87,10 @@ elif [[ "$os" == "Linux" ]]; then
           -e "s|{{LOG_DIR}}|$LOG_DIR|g" \
           "$UNIT_SRC" > "$UNIT_DST"
       systemctl --user daemon-reload
-      systemctl --user enable --now "$UNIT"
+      systemctl --user enable "$UNIT"
+      # restart (not --now) so a re-install picks up template changes on a
+      # service that was already running.
+      systemctl --user restart "$UNIT"
       # Keep service running after logout. Ignore if already enabled.
       loginctl enable-linger "$(whoami)" 2>/dev/null || true
       echo "installed $UNIT (systemd --user), logs in $LOG_DIR"
