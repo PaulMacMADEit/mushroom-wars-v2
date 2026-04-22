@@ -29,27 +29,31 @@ def layers_blob(net: ActorCritic) -> dict:
     layers = []
     for name, module in net.named_modules():
         cls = type(module).__name__
-        if cls in ("Linear",):
+        if cls == "Linear":
             layers.append({"name": name, "type": cls,
                            "in_features": module.in_features,
                            "out_features": module.out_features})
-        elif cls in ("ReLU",):
+        elif cls == "ReLU":
             layers.append({"name": name, "type": cls})
+        elif cls == "Embedding":
+            layers.append({"name": name, "type": cls,
+                           "num_embeddings": module.num_embeddings,
+                           "embedding_dim":  module.embedding_dim})
     return {
-        "kind": "actor-critic-flat-head",
+        "kind": "actor-critic-chained-heads",
         "layers": layers,
     }
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--id", default="v9.0-enc-full")
-    ap.add_argument("--name", default="v9.0 full encoder, flat policy head")
+    ap.add_argument("--id", default="v9.0-full")
+    ap.add_argument("--name", default="v9.0 full encoder, chained src/type/tgt heads")
     ap.add_argument("--what-changed",
-                    default="Full v9.0 encoder (globals + per-building + per-group, ~1000 dims); flat 4097-way policy head retained from smoke scope.")
-    ap.add_argument("--parent-model", default="v9.0-smoke")
+                    default="Full v9.0 encoder (1002 dims) + chained heads (ARCHITECTURE §9.4): source (32) → type (5, incl. noop) | src → target (32) | src. ~17x smaller policy-head param count than flat 4097.")
+    ap.add_argument("--parent-model", default="v9.0-enc-full")
     ap.add_argument("--obs-encoder", default="training.encoder.encode_obs (v9.0 full, 1002 dims)")
-    ap.add_argument("--action-decoder", default="sim.actions.decode (flat 4097-way)")
+    ap.add_argument("--action-decoder", default="sim.actions.decode (flat 4097 env-side; factored src/type/tgt on the net side)")
     ap.add_argument("--keep-weights", action="store_true")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()

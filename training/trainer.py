@@ -126,19 +126,27 @@ class PPOTrainer:
         T, N = self.cfg.rollout_steps, self.cfg.n_envs
         A = ACTION_SPACE_SIZE
 
-        obs_buf  = np.zeros((T, N, OBS_DIM), dtype=np.float32)
-        mask_buf = np.zeros((T, N, A),       dtype=bool)
-        act_buf  = np.zeros((T, N),          dtype=np.int64)
-        logp_buf = np.zeros((T, N),          dtype=np.float32)
-        val_buf  = np.zeros((T, N),          dtype=np.float32)
-        rew_buf  = np.zeros((T, N),          dtype=np.float32)
-        done_buf = np.zeros((T, N),          dtype=np.float32)
+        obs_buf   = np.zeros((T, N, OBS_DIM), dtype=np.float32)
+        mask_buf  = np.zeros((T, N, A),       dtype=bool)
+        # Chained heads store three sub-action indices; the flat `action` is
+        # only used for env.step() and isn't needed in the PPO update.
+        src_buf   = np.zeros((T, N),          dtype=np.int64)
+        type_buf  = np.zeros((T, N),          dtype=np.int64)
+        tgt_buf   = np.zeros((T, N),          dtype=np.int64)
+        logp_buf  = np.zeros((T, N),          dtype=np.float32)
+        val_buf   = np.zeros((T, N),          dtype=np.float32)
+        rew_buf   = np.zeros((T, N),          dtype=np.float32)
+        done_buf  = np.zeros((T, N),          dtype=np.float32)
 
         for t in range(T):
-            actions, logps, values = self.agent.act_batch(self._obs, self._masks)
-            obs_buf[t]  = self._obs             # stored obs is normalized
+            actions, srcs, types, tgts, logps, values = self.agent.act_batch(
+                self._obs, self._masks,
+            )
+            obs_buf[t]  = self._obs
             mask_buf[t] = self._masks
-            act_buf[t]  = actions
+            src_buf[t]  = srcs
+            type_buf[t] = types
+            tgt_buf[t]  = tgts
             logp_buf[t] = logps
             val_buf[t]  = values
 
@@ -173,21 +181,20 @@ class PPOTrainer:
             self._obs = self._apply_norm(self._obs_raw)
 
         # Bootstrap value for each env (for GAE on truncated rollout).
-        # Use normalized obs — that's what the net was trained on.
         with torch.no_grad():
             obs_t = torch.as_tensor(self._obs, dtype=torch.float32, device=self.device)
-            _, val_t = self.agent.net(obs_t)
-            bootstrap = val_t.cpu().numpy()
+            body_t = self.agent.net.forward_body(obs_t)
+            bootstrap = self.agent.net.value(body_t).cpu().numpy()
 
         adv, ret = self._compute_gae(rew_buf, val_buf, done_buf, bootstrap)
 
-        # Flatten (T, N, …) → (T*N, …). PPO doesn't care about per-env
-        # ordering once advantages are computed.
         flat = T * N
         return {
             "obs":       obs_buf.reshape(flat, OBS_DIM),
             "mask":      mask_buf.reshape(flat, A),
-            "action":    act_buf.reshape(flat),
+            "src":       src_buf.reshape(flat),
+            "type":      type_buf.reshape(flat),
+            "tgt":       tgt_buf.reshape(flat),
             "logprob":   logp_buf.reshape(flat),
             "value":     val_buf.reshape(flat),
             "reward":    rew_buf.reshape(flat),
@@ -225,7 +232,9 @@ class PPOTrainer:
 
         obs_t     = torch.as_tensor(batch["obs"],       device=self.device)
         mask_t    = torch.as_tensor(batch["mask"],      device=self.device)
-        action_t  = torch.as_tensor(batch["action"],    device=self.device)
+        src_t     = torch.as_tensor(batch["src"],       device=self.device)
+        type_t    = torch.as_tensor(batch["type"],      device=self.device)
+        tgt_t     = torch.as_tensor(batch["tgt"],       device=self.device)
         oldlogp_t = torch.as_tensor(batch["logprob"],   device=self.device)
         adv_t     = torch.as_tensor(batch["advantage"], device=self.device)
         ret_t     = torch.as_tensor(batch["return"],    device=self.device)
@@ -241,7 +250,7 @@ class PPOTrainer:
                 mb = idx[start : start + mb_size]
                 mb_t = torch.as_tensor(mb, device=self.device)
                 new_logp, entropy, new_value = self.agent.evaluate(
-                    obs_t[mb_t], action_t[mb_t], mask_t[mb_t]
+                    obs_t[mb_t], src_t[mb_t], type_t[mb_t], tgt_t[mb_t], mask_t[mb_t]
                 )
 
                 ratio = torch.exp(new_logp - oldlogp_t[mb_t])

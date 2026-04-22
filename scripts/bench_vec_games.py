@@ -77,7 +77,8 @@ def bench(seconds: float, n_envs: int, mode: str, device: torch.device, seed: in
     deadline = t0 + seconds
 
     while time.perf_counter() < deadline:
-        actions, _logprobs, _values = agent.act_batch(obs, masks)
+        # act_batch now returns 6 values (chained heads); we only need actions for stepping.
+        actions = agent.act_batch(obs, masks)[0]
         obs_batch, _rewards, terminated, truncated, _info = vec.step(actions)
         done_mask = terminated | truncated
         games += int(done_mask.sum())

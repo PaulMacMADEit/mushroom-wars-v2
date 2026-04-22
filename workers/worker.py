@@ -66,9 +66,14 @@ def build_net_for_model(model_id: str, obs_size: int, num_actions: int) -> Actor
     from training.net import ActorCritic
 
     KNOWN = {
-        # Full v9.0 encoder + flat policy head. Chained heads land under a
-        # separate id in the next commit.
+        # v9.0-enc-full was the interim commit-1 model (full encoder + old
+        # flat 4097 head). Code has since moved to chained heads — running
+        # that model against this code will fail at inference, which is
+        # correct: the net topology doesn't match.
         "v9.0-enc-full": (OBS_DIM, ACTION_SPACE_SIZE, ActorCritic),
+        # v9.0-full: full encoder + chained source/type/target heads
+        # (ARCHITECTURE §9.4). This is the current production model.
+        "v9.0-full":     (OBS_DIM, ACTION_SPACE_SIZE, ActorCritic),
     }
     entry = KNOWN.get(model_id)
     if entry is None:
