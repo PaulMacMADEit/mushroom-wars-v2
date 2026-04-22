@@ -124,6 +124,7 @@ def mark_done(
     wall_ms: int,
     weights_url: str | None = None,
     optimizer_url: str | None = None,
+    obs_norm_url: str | None = None,
     log_url: str | None = None,
 ):
     with conn.cursor() as cur:
@@ -135,11 +136,12 @@ def mark_done(
                    wall_ms       = %s,
                    weights_url   = %s,
                    optimizer_url = %s,
+                   obs_norm_url  = %s,
                    log_url       = %s,
                    finished_at   = now()
              WHERE id = %s
         """, (json.dumps(result), games_played, wall_ms,
-              weights_url, optimizer_url, log_url, run_id))
+              weights_url, optimizer_url, obs_norm_url, log_url, run_id))
     conn.commit()
 
 
@@ -247,16 +249,24 @@ def save_and_upload(
     from workers import storage
 
     run_id_str = str(run_id)
-    urls = {"weights_url": None, "optimizer_url": None, "log_url": None}
+    urls = {
+        "weights_url":   None,
+        "optimizer_url": None,
+        "obs_norm_url":  None,
+        "log_url":       None,
+    }
 
     with tempfile.TemporaryDirectory(prefix=f"mw2-run-{run_id_str}-") as tmp:
         tmp_path = Path(tmp)
         weights_file   = tmp_path / "weights.pt"
         optimizer_file = tmp_path / "optimizer.pt"
+        obs_norm_file  = tmp_path / "obs_norm.pt"
         log_file       = tmp_path / "metrics.json"
 
         torch.save(trainer.agent.net.state_dict(), weights_file)
         torch.save(trainer.optimizer.state_dict(), optimizer_file)
+        if trainer.obs_norm is not None:
+            trainer.obs_norm.save(obs_norm_file)
         log_file.write_text(json.dumps({
             "metrics": metrics_history,
             "result":  result,
@@ -264,6 +274,8 @@ def save_and_upload(
 
         urls["weights_url"]   = storage.upload("models", f"{run_id_str}/weights.pt",   weights_file)
         urls["optimizer_url"] = storage.upload("models", f"{run_id_str}/optimizer.pt", optimizer_file)
+        if obs_norm_file.exists():
+            urls["obs_norm_url"] = storage.upload("models", f"{run_id_str}/obs_norm.pt", obs_norm_file)
         urls["log_url"]       = storage.upload("logs",   f"{run_id_str}/metrics.json", log_file,
                                                content_type="application/json")
 
@@ -331,6 +343,7 @@ def main():
                     conn, claimed["id"], result, games, wall_ms,
                     weights_url=urls["weights_url"],
                     optimizer_url=urls["optimizer_url"],
+                    obs_norm_url=urls["obs_norm_url"],
                     log_url=urls["log_url"],
                 )
             print(f"[worker] done id={claimed['id']} games={games} "

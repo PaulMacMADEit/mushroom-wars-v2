@@ -31,6 +31,7 @@ from sim.actions import ACTION_SPACE_SIZE
 from sim.envs import make_env
 from training.agent import PPOAgent
 from training.encoder import OBS_DIM, encode_obs
+from training.obs_norm import RunningNorm
 
 
 @dataclass
@@ -49,6 +50,9 @@ class PPOConfig:
     value_coef:     float = 0.5
     entropy_coef:   float = 0.01
     max_grad_norm:  float = 0.5
+    # Obs normalization
+    normalize_obs:  bool = True         # Welford running mean/std; see training/obs_norm.py
+    obs_clip:       float = 10.0        # clip normalized obs; None to disable
 
 
 class PPOTrainer:
@@ -79,7 +83,11 @@ class PPOTrainer:
 
         N = self.cfg.n_envs
         obs_batch, _ = self.vec.reset(seed=seed)
-        self._obs, self._masks = self._encode_batch(obs_batch)
+        self.obs_norm = RunningNorm(OBS_DIM) if self.cfg.normalize_obs else None
+        self._obs_raw, self._masks = self._encode_batch(obs_batch)
+        if self.obs_norm is not None:
+            self.obs_norm.update(self._obs_raw)
+        self._obs = self._apply_norm(self._obs_raw)
 
         # Per-env running counters. Running returns/lengths persist across
         # rollouts — an episode that doesn't finish in this rollout finishes
@@ -105,6 +113,11 @@ class PPOTrainer:
             masks_out[i] = single["action_mask"]
         return obs_out, masks_out
 
+    def _apply_norm(self, obs_raw: np.ndarray) -> np.ndarray:
+        if self.obs_norm is None:
+            return obs_raw
+        return self.obs_norm.normalize(obs_raw, clip=self.cfg.obs_clip)
+
     # ------------------------------------------------------------------
     # Rollout
     # ------------------------------------------------------------------
@@ -123,7 +136,7 @@ class PPOTrainer:
 
         for t in range(T):
             actions, logps, values = self.agent.act_batch(self._obs, self._masks)
-            obs_buf[t]  = self._obs
+            obs_buf[t]  = self._obs             # stored obs is normalized
             mask_buf[t] = self._masks
             act_buf[t]  = actions
             logp_buf[t] = logps
@@ -152,9 +165,15 @@ class PPOTrainer:
                     self._ep_return[i] = 0.0
                     self._ep_length[i] = 0
 
-            self._obs, self._masks = self._encode_batch(next_obs_batch)
+            self._obs_raw, self._masks = self._encode_batch(next_obs_batch)
+            if self.obs_norm is not None:
+                # Update running stats with raw obs, then normalize for the
+                # next forward pass + the rollout buffer.
+                self.obs_norm.update(self._obs_raw)
+            self._obs = self._apply_norm(self._obs_raw)
 
         # Bootstrap value for each env (for GAE on truncated rollout).
+        # Use normalized obs — that's what the net was trained on.
         with torch.no_grad():
             obs_t = torch.as_tensor(self._obs, dtype=torch.float32, device=self.device)
             _, val_t = self.agent.net(obs_t)
