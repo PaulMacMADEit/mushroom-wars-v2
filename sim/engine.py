@@ -33,12 +33,16 @@ def step_tick(
     state: State,
     action_p1: Optional[Action] = None,
     action_p2: Optional[Action] = None,
+    events: Optional[list] = None,
 ) -> tuple[float, float, bool]:
     """Advance the sim by exactly one tick.
 
     Actions (if provided) are applied BEFORE production/movement this tick.
     Pass None for a player if they have no action this tick (e.g. between
     decision intervals, or they chose noop).
+
+    If `events` is a list, low-level engine events (spawn/arrive/end) are
+    appended to it for the replay recorder to consume. No-op when None.
 
     Returns (reward_p1, reward_p2, done).
     """
@@ -53,9 +57,9 @@ def step_tick(
     # 1. Actions
     ta = time.perf_counter_ns()
     if action_p1 is not None and action_p1.kind == "send":
-        _apply_send(state, C.OWNER_P1, action_p1)
+        _apply_send(state, C.OWNER_P1, action_p1, events)
     if action_p2 is not None and action_p2.kind == "send":
-        _apply_send(state, C.OWNER_P2, action_p2)
+        _apply_send(state, C.OWNER_P2, action_p2, events)
     tb = time.perf_counter_ns()
     state.perf["actions_ns"] += tb - ta
 
@@ -67,7 +71,7 @@ def step_tick(
 
     # 3. Movement → collect arrivals
     ta = time.perf_counter_ns()
-    arrivals = _advance_movement(state)
+    arrivals = _advance_movement(state, events)
     tb = time.perf_counter_ns()
     state.perf["movement_ns"] += tb - ta
 
@@ -89,6 +93,9 @@ def step_tick(
     tb = time.perf_counter_ns()
     state.perf["victory_ns"] += tb - ta
 
+    if done and events is not None:
+        events.append({"kind": "end", "phase": int(state.phase)})
+
     state.perf["n_ticks"] += 1
     state.perf["total_ns"] += time.perf_counter_ns() - t0
 
@@ -99,7 +106,7 @@ def step_tick(
 # Phase implementations
 # ---------------------------------------------------------------------------
 
-def _apply_send(state: State, player: int, action: Action) -> None:
+def _apply_send(state: State, player: int, action: Action, events: Optional[list] = None) -> None:
     """Validate + spawn a unit group for a send action. Silently drops invalid."""
     if not is_valid(state, player, action):
         return
@@ -119,6 +126,8 @@ def _apply_send(state: State, player: int, action: Action) -> None:
         return
     slot = int(free_idx[0])
 
+    travel_ticks = int(state.travel_matrix[src, tgt])
+
     # Deduct from source garrison; spawn the group.
     b["garrison"][src] -= amount
     g[slot]["alive"]        = 1
@@ -127,7 +136,18 @@ def _apply_send(state: State, player: int, action: Action) -> None:
     g[slot]["tgt_slot"]     = tgt
     g[slot]["count"]        = amount
     g[slot]["progress"]     = 0
-    g[slot]["travel_ticks"] = int(state.travel_matrix[src, tgt])
+    g[slot]["travel_ticks"] = travel_ticks
+
+    if events is not None:
+        events.append({
+            "kind": "spawn",
+            "slot": slot,
+            "owner": int(player),
+            "src": int(src),
+            "tgt": int(tgt),
+            "count": int(amount),
+            "travel_ticks": travel_ticks,
+        })
 
 
 def _advance_production(state: State) -> None:
@@ -151,7 +171,7 @@ def _advance_production(state: State) -> None:
     b["garrison"] = np.where(eligible, new_garrison, garrison).astype(np.int16)
 
 
-def _advance_movement(state: State) -> list:
+def _advance_movement(state: State, events: Optional[list] = None) -> list:
     """Advance progress on every alive unit group. Returns list of arrivals.
 
     An arrival is (tgt_slot, owner, count). Freed slots are cleared.
@@ -163,11 +183,18 @@ def _advance_movement(state: State) -> list:
     for idx in alive_idx:
         g[idx]["progress"] += 1
         if g[idx]["progress"] >= g[idx]["travel_ticks"]:
-            arrivals.append((
-                int(g[idx]["tgt_slot"]),
-                int(g[idx]["owner"]),
-                int(g[idx]["count"]),
-            ))
+            tgt = int(g[idx]["tgt_slot"])
+            owner = int(g[idx]["owner"])
+            count = int(g[idx]["count"])
+            arrivals.append((tgt, owner, count))
+            if events is not None:
+                events.append({
+                    "kind": "arrive",
+                    "slot": int(idx),
+                    "owner": owner,
+                    "tgt": tgt,
+                    "count": count,
+                })
             # Clear the slot.
             g[idx]["alive"] = 0
             g[idx]["owner"] = 0

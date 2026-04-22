@@ -41,6 +41,7 @@ class MushroomEnv(gym.Env):
         opponent: Optional[Opponent] = None,
         decision_interval: Optional[int] = None,
         seed: Optional[int] = None,
+        recorder: Optional[Any] = None,
     ):
         super().__init__()
         self._level_name = level_name
@@ -49,6 +50,10 @@ class MushroomEnv(gym.Env):
             decision_interval if decision_interval is not None else C.DECISION_INTERVAL_TICKS
         )
         self._rng = np.random.default_rng(seed)
+        # Optional replay recorder. When set, the env feeds engine events into
+        # its buffer per step_tick and calls absorb_tick so post-tick state
+        # reads are correct. See sim/envs/replay.py.
+        self._recorder = recorder
 
         # State is created on first reset(); declared for type-checkers.
         self.state: State = level_reset(self._level_name)
@@ -98,6 +103,8 @@ class MushroomEnv(gym.Env):
         # rng so determinism-under-seed is preserved.
         level_seed = int(self._rng.integers(0, 2**31))
         self.state = level_reset(level, seed=level_seed)
+        if self._recorder is not None:
+            self._recorder.capture_map(self.state)
         return self._make_obs(C.OWNER_P1), self._make_info()
 
     def step(self, action: int) -> tuple[dict, float, bool, bool, dict]:
@@ -116,7 +123,10 @@ class MushroomEnv(gym.Env):
         for i in range(self._decision_interval):
             a1 = action_p1 if i == 0 else None
             a2 = action_p2 if i == 0 else None
-            r1, _r2, done = step_tick(self.state, a1, a2)
+            buf = self._recorder.get_tick_events_buffer() if self._recorder is not None else None
+            r1, _r2, done = step_tick(self.state, a1, a2, events=buf)
+            if self._recorder is not None:
+                self._recorder.absorb_tick(self.state)
             r1_total += r1
             if done:
                 break

@@ -47,6 +47,7 @@ LEVELS: dict[str, list] = {
 # ---------------------------------------------------------------------------
 
 _RANDOM_RE = re.compile(r"^random_(\d+)_(\d+)$")
+_ASYM_RE   = re.compile(r"^asym_(\d+)_(\d+)$")
 
 # Placement constraints.
 _MAP_SIZE       = 700
@@ -114,6 +115,49 @@ def generate_random_level(n_buildings: int, rng: np.random.Generator) -> list:
     return level
 
 
+def generate_asymmetric_level(n_buildings: int, rng: np.random.Generator) -> list:
+    """Build an asymmetric random level — no mirroring.
+
+    Bases are placed in opposite halves of the map (left/right) so both
+    players have *some* starting region, but distances, counts of nearby
+    neutrals, and geometry are independent. May produce unfair starts —
+    that's the point (use for variety / stress-testing, not fair eval).
+    """
+    if n_buildings < 2:
+        raise ValueError("need at least 2 buildings (one base per player)")
+    if n_buildings > C.MAX_BUILDING_SLOTS:
+        raise ValueError(f"n_buildings={n_buildings} > MAX_BUILDING_SLOTS={C.MAX_BUILDING_SLOTS}")
+
+    level: list = []
+    placed: list[tuple[int, int]] = []
+
+    # Bases in opposite halves. P1 gets the left half, P2 the right.
+    mid = _MAP_SIZE // 2
+    p1x = int(rng.integers(_BORDER, mid - 40))
+    p1y = int(rng.integers(_BORDER, _MAP_SIZE - _BORDER))
+    p2x = int(rng.integers(mid + 40, _MAP_SIZE - _BORDER))
+    p2y = int(rng.integers(_BORDER, _MAP_SIZE - _BORDER))
+    level.append((C.OWNER_P1, p1x, p1y, 10, C.TYPE_BASIC))
+    level.append((C.OWNER_P2, p2x, p2y, 10, C.TYPE_BASIC))
+    placed.extend([(p1x, p1y), (p2x, p2y)])
+
+    # Neutrals scattered anywhere. No mirror pairs, no center exclusion.
+    n_neutrals = n_buildings - 2
+    for _ in range(n_neutrals):
+        for _attempt in range(80):
+            cx = int(rng.integers(_BORDER, _MAP_SIZE - _BORDER))
+            cy = int(rng.integers(_BORDER, _MAP_SIZE - _BORDER))
+            if all((cx - px) ** 2 + (cy - py) ** 2 >= _MIN_SEP ** 2 for px, py in placed):
+                garrison = int(rng.integers(1, 6))
+                level.append((C.OWNER_NEUTRAL, cx, cy, garrison, C.TYPE_BASIC))
+                placed.append((cx, cy))
+                break
+        # If we fail to place this neutral, skip it — caller gets a level
+        # with fewer buildings than requested, which is still valid.
+
+    return level
+
+
 def _resolve_level(level_name: str, seed: int | None) -> list:
     """Look up a static name or generate a random level. Returns the level list."""
     if level_name in LEVELS:
@@ -126,6 +170,14 @@ def _resolve_level(level_name: str, seed: int | None) -> list:
         rng = np.random.default_rng(seed)
         n = int(rng.integers(n_min, n_max + 1))
         return generate_random_level(n, rng)
+    m = _ASYM_RE.match(level_name)
+    if m:
+        n_min, n_max = int(m.group(1)), int(m.group(2))
+        if not (2 <= n_min <= n_max <= C.MAX_BUILDING_SLOTS):
+            raise ValueError(f"asym level bounds out of range: {level_name!r}")
+        rng = np.random.default_rng(seed)
+        n = int(rng.integers(n_min, n_max + 1))
+        return generate_asymmetric_level(n, rng)
     raise ValueError(f"Unknown level: {level_name}")
 
 

@@ -144,6 +144,65 @@ class PPOAgent:
         )
 
     # ------------------------------------------------------------------
+    # Single-decision diagnostics — for replay/introspection.
+    # ------------------------------------------------------------------
+
+    @torch.no_grad()
+    def act_one_with_diag(
+        self,
+        obs: np.ndarray,
+        mask: np.ndarray,
+    ) -> tuple[int, dict]:
+        """Batch-of-1 decision with the full policy breakdown exposed.
+
+        Mirrors `act_batch`'s sampling chain exactly, but returns the picked
+        action plus a diagnostic dict with per-head softmax, masks, picks,
+        value estimate and entropy. Used by the replay recorder — training
+        uses `act_batch` so the hot path stays untouched.
+        """
+        obs_t  = torch.as_tensor(obs[None, :],  dtype=torch.float32, device=self.device)
+        mask_t = torch.as_tensor(mask[None, :], dtype=torch.bool,    device=self.device)
+
+        body = self.net.forward_body(obs_t)
+        value = self.net.value(body).squeeze().item()
+
+        (src_mask,) = _decompose_masks(mask_t)
+        src_logits = self.net.source_logits(body).masked_fill(~src_mask, MASK_FILL)
+        src_dist = Categorical(logits=src_logits)
+        src = src_dist.sample()
+        src_entropy = src_dist.entropy().item()
+
+        type_logits_raw, tgt_logits_raw = self.net.cond_logits(body, src)
+        _, type_mask = _decompose_masks(mask_t, src=src)
+        type_logits = type_logits_raw.masked_fill(~type_mask, MASK_FILL)
+        type_dist = Categorical(logits=type_logits)
+        type_ = type_dist.sample()
+        type_entropy = type_dist.entropy().item()
+
+        _, _, tgt_mask = _decompose_masks(mask_t, src=src, type_=type_)
+        tgt_logits = tgt_logits_raw.masked_fill(~tgt_mask, MASK_FILL)
+        tgt_dist = Categorical(logits=tgt_logits)
+        tgt = tgt_dist.sample()
+        tgt_entropy = tgt_dist.entropy().item()
+
+        action = _compose_action(src, type_, tgt).item()
+
+        diag = {
+            "value":        float(value),
+            "entropy":      float(src_entropy + type_entropy + tgt_entropy),
+            "src_picked":   int(src.item()),
+            "type_picked":  int(type_.item()),
+            "tgt_picked":   int(tgt.item()),
+            "src_probs":    src_dist.probs.squeeze(0).cpu().numpy(),
+            "type_probs":   type_dist.probs.squeeze(0).cpu().numpy(),
+            "tgt_probs":    tgt_dist.probs.squeeze(0).cpu().numpy(),
+            "src_mask":     src_mask.squeeze(0).cpu().numpy(),
+            "type_mask":    type_mask.squeeze(0).cpu().numpy(),
+            "tgt_mask":     tgt_mask.squeeze(0).cpu().numpy(),
+        }
+        return int(action), diag
+
+    # ------------------------------------------------------------------
     # PPO update
     # ------------------------------------------------------------------
 

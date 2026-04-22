@@ -91,11 +91,15 @@ def make_neural_opponent(
     weights_path: str,
     obs_norm_path: Optional[str] = None,
     device: str = "cpu",
+    recorder=None,
 ) -> Opponent:
     """Load a frozen ActorCritic snapshot and return an Opponent callable.
 
     Each vec-env subprocess constructs its own via make_env's factory; the
     `weights_path` is read once at construction (not on every step).
+
+    When `recorder` is passed (replay capture path), the opponent uses
+    `act_one_with_diag` and records P2's decision with the same schema as P1.
 
     IMPORTANT: when the parent process has CUDA initialized and spawns
     AsyncVectorEnv subprocs, each subproc re-imports torch and would also
@@ -138,8 +142,18 @@ def make_neural_opponent(
         if obs_norm is not None:
             x = obs_norm.normalize(x)
 
-        # Batch-of-1 through the agent — returns the same flat action idx
-        # the env expects for the P2 side.
+        # Recording path: capture diag alongside the action.
+        if recorder is not None:
+            action, diag = agent.act_one_with_diag(x, mirrored["action_mask"])
+            # Post-tick time, matching engine.py's event stamps.
+            recorder.record_decision(
+                tick=int(state.tick + 1),
+                player=C.OWNER_P2,
+                diag=diag,
+            )
+            return int(action)
+
+        # Hot-path (training / eval without recording): stay on act_batch.
         action, *_ = agent.act_batch(x[None, :], mirrored["action_mask"][None, :])
         return int(action[0])
 
