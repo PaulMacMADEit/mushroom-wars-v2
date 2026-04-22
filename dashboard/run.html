@@ -148,38 +148,67 @@
         ${run.error ? `<h2>Error</h2><pre class="error">${esc(run.error)}</pre>` : ''}
       `;
 
-      // Fetch metrics.json + render charts. Degrade gracefully if the log
-      // artifact is missing (older runs, failed runs, not-yet-uploaded runs).
-      if (logUrl) {
+      // Fetch metrics.json + render charts. Any failure is surfaced
+      // visibly — a silently-blank canvas is the worst UX.
+      const chartIds = ['chart-win', 'chart-loss', 'chart-signal', 'chart-eps', 'chart-pool'];
+
+      function replaceCanvasWith(id, text, isError = false) {
+        const c = document.getElementById(id);
+        if (!c) return;
+        const msg = document.createElement('div');
+        msg.className = isError ? 'error' : 'muted';
+        msg.style.padding = '20px';
+        msg.textContent = text;
+        c.replaceWith(msg);
+      }
+
+      function failAllCharts(text) {
+        for (const id of chartIds) replaceCanvasWith(id, text, true);
+      }
+
+      if (!logUrl) {
+        failAllCharts('no metrics log for this run (artifact not uploaded)');
+      } else {
+        let points = null;
         try {
           const resp = await fetch(logUrl);
           if (!resp.ok) throw new Error(`http ${resp.status}`);
           const body = await resp.json();
-          const points = Array.isArray(body) ? body : (body.metrics ?? []);
+          points = Array.isArray(body) ? body : (body.metrics ?? []);
+          if (!points.length) throw new Error('metrics array is empty');
+        } catch (e) {
+          failAllCharts(`fetch metrics failed: ${e.message}`);
+        }
 
-          lineChart(document.getElementById('chart-win'), points, ['win_rate'],
+        if (points && points.length) {
+          const renderOne = (id, keys, opts) => {
+            try {
+              const canvas = document.getElementById(id);
+              if (!canvas) { console.warn('missing canvas', id); return; }
+              lineChart(canvas, points, keys, opts);
+            } catch (e) {
+              console.error(`[${id}] chart render failed:`, e);
+              replaceCanvasWith(id, `${id}: ${e.message}`, true);
+            }
+          };
+
+          renderOne('chart-win',    ['win_rate'],
                     { yLabel: 'win rate', yMin: 0, yMax: 1 });
-          lineChart(document.getElementById('chart-loss'), points,
-                    ['value_loss', 'entropy_loss'], { yLabel: 'loss' });
-          lineChart(document.getElementById('chart-signal'), points,
-                    ['policy_loss', 'approx_kl'], { yLabel: 'signal' });
-          lineChart(document.getElementById('chart-eps'), points,
-                    ['episodes_completed'], { yLabel: 'episodes' });
+          renderOne('chart-loss',   ['value_loss', 'entropy_loss'],
+                    { yLabel: 'loss' });
+          renderOne('chart-signal', ['policy_loss', 'approx_kl'],
+                    { yLabel: 'signal' });
+          renderOne('chart-eps',    ['episodes_completed'],
+                    { yLabel: 'episodes' });
 
-          // Pool chart only if this run was self-play (any point has pool_size).
           const hasPool = points.some(p => p.pool_size != null);
           if (hasPool) {
             document.getElementById('pool-label').style.display = '';
-            lineChart(document.getElementById('chart-pool'), points,
-                      ['pool_size'], { yLabel: 'snapshots' });
+            renderOne('chart-pool', ['pool_size'], { yLabel: 'snapshots' });
           } else {
-            document.getElementById('chart-pool').parentElement.style.display = 'none';
+            const c = document.getElementById('chart-pool');
+            if (c) c.parentElement.style.display = 'none';
           }
-        } catch (e) {
-          document.getElementById('chart-loss').replaceWith(
-            Object.assign(document.createElement('div'),
-              { className: 'muted', textContent: `metrics unavailable: ${e.message}` })
-          );
         }
       }
     }
