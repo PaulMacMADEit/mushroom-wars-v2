@@ -60,6 +60,10 @@ class PPOConfig:
     pool_max_size:        int   = 20     # evict oldest beyond this
     latest_bias:          float = 0.8    # P(sample latest snapshot) per env
     initial_opponent:     str   = "random_legal"  # before first snapshot registers
+    # Level
+    # Static name (e.g. "crossroads_6") or dynamic "random_<min>_<max>".
+    # Dynamic levels regenerate per reset so training sees varied geometry.
+    level_name:           str   = "crossroads_6"
 
 
 class PPOTrainer:
@@ -124,11 +128,13 @@ class PPOTrainer:
             if opponent_specs is None:
                 factories.append(make_env(
                     seed=self.seed + i,
+                    level_name=self.cfg.level_name,
                     opponent_name=self._initial_opponent_name,
                 ))
             else:
                 factories.append(make_env(
                     seed=self.seed + i,
+                    level_name=self.cfg.level_name,
                     opponent_name="neural",
                     opponent_kwargs=opponent_specs[i],
                 ))

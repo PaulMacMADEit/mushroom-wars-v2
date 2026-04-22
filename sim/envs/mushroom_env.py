@@ -93,7 +93,11 @@ class MushroomEnv(gym.Env):
         if seed is not None:
             self._rng = np.random.default_rng(seed)
         level = (options or {}).get("level_name", self._level_name)
-        self.state = level_reset(level)
+        # Per-reset level seed — matters only for dynamic level names like
+        # `random_8_32`. Static names ignore it. Pulled from the env's own
+        # rng so determinism-under-seed is preserved.
+        level_seed = int(self._rng.integers(0, 2**31))
+        self.state = level_reset(level, seed=level_seed)
         return self._make_obs(C.OWNER_P1), self._make_info()
 
     def step(self, action: int) -> tuple[dict, float, bool, bool, dict]:
