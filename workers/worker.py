@@ -300,7 +300,13 @@ def claim_one_match(conn):
 
 
 def fetch_run_artifacts(conn, run_id):
-    """Grab weights_url + obs_norm_url for a completed training run."""
+    """Grab weights_url + obs_norm_url for a completed training run.
+
+    The baseline pseudo-run (BASELINE_RUN_ID) has no weights — returning
+    (None, None) is the signal match_runner uses to substitute random_legal.
+    """
+    if str(run_id) == BASELINE_RUN_ID:
+        return {"weights_url": None, "obs_norm_url": None}
     with conn.cursor() as cur:
         cur.execute(
             "SELECT weights_url, obs_norm_url, status FROM runs WHERE id = %s",
