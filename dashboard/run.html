@@ -150,6 +150,9 @@
           <div style="position:relative; height:180px;"><canvas id="chart-pool"></canvas></div>
         </div>
 
+        <h2>Matchups (evaluation games)</h2>
+        <div class="card" id="matchups"><div class="muted">Loading matchups…</div></div>
+
         <h2>Hyperparams</h2>
         <pre>${esc(JSON.stringify(run.hyperparams ?? {}, null, 2))}</pre>
 
@@ -158,6 +161,13 @@
 
         ${run.error ? `<h2>Error</h2><pre class="error">${esc(run.error)}</pre>` : ''}
       `;
+
+      // Fill in the matchups panel in parallel with the charts — uses the
+      // same `games` table the Elo page does, but filtered to this run.
+      loadMatchups(run.id).catch(e => {
+        const el = document.getElementById('matchups');
+        if (el) el.innerHTML = `<div class="error">${esc(e.message)}</div>`;
+      });
 
       // Fetch metrics.json + render charts. Any failure is surfaced
       // visibly — a silently-blank canvas is the worst UX.
@@ -234,6 +244,82 @@
         if (label) label.style.display = '';
         renderOne('chart-pool', ['pool_size'], { yLabel: 'snapshots' });
       }
+    }
+
+    async function loadMatchups(runId) {
+      const $panel = document.getElementById('matchups');
+      if (!$panel) return;
+
+      // All games where this run was one of the players.
+      const { data: games, error } = await sb
+        .from('games')
+        .select('player_1_run_id, player_2_run_id, winner, map_name')
+        .or(`player_1_run_id.eq.${runId},player_2_run_id.eq.${runId}`);
+      if (error) { $panel.innerHTML = `<div class="error">${esc(error.message)}</div>`; return; }
+      if (!games || games.length === 0) {
+        $panel.innerHTML = '<div class="muted">no evaluation games yet — auto-admission queues them when training finishes, or queue manually via <span class="inline-code">cli/queue_eval.py</span></div>';
+        return;
+      }
+
+      // Fetch labels for every distinct opponent id encountered.
+      const oppIds = Array.from(new Set(games.flatMap(g =>
+        [g.player_1_run_id, g.player_2_run_id].filter(id => id !== runId))));
+      const { data: oppRows } = await sb
+        .from('runs')
+        .select('id, label, model_id')
+        .in('id', oppIds);
+      const labelOf = Object.fromEntries((oppRows || []).map(r => [r.id, r]));
+
+      // Aggregate per-opponent.
+      const byOpp = {};  // opp_id → { wins, losses, draws }
+      let tot_w = 0, tot_l = 0, tot_d = 0;
+      for (const g of games) {
+        const oppId = g.player_1_run_id === runId ? g.player_2_run_id : g.player_1_run_id;
+        const bucket = byOpp[oppId] = byOpp[oppId] || { w: 0, l: 0, d: 0 };
+        if (g.winner === runId)            { bucket.w++; tot_w++; }
+        else if (g.winner === null)        { bucket.d++; tot_d++; }
+        else                               { bucket.l++; tot_l++; }
+      }
+      const rows = Object.entries(byOpp).map(([oppId, s]) => {
+        const n = s.w + s.l + s.d;
+        const oppLabel = labelOf[oppId]?.label ?? `(${oppId.slice(0, 8)}…)`;
+        const oppLink = oppId === '00000000-0000-0000-0000-000000000001'
+          ? `<span class="mono">${esc(oppLabel)}</span>`
+          : `<a href="./run.html?id=${esc(oppId)}">${esc(oppLabel)}</a>`;
+        return { oppId, oppLink, n, w: s.w, l: s.l, d: s.d,
+                 rate: (s.w + 0.5 * s.d) / n };
+      }).sort((a, b) => b.rate - a.rate);
+
+      const totalN = tot_w + tot_l + tot_d;
+      const overallRate = totalN > 0 ? (tot_w + 0.5 * tot_d) / totalN : 0;
+      $panel.innerHTML = `
+        <div style="display:flex; gap:24px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
+          <div><span class="stat-label">eval games</span><div class="stat">${totalN}</div></div>
+          <div><span class="stat-label">opponents</span><div class="stat">${rows.length}</div></div>
+          <div><span class="stat-label">overall win rate</span><div class="stat">${(overallRate * 100).toFixed(1)}%</div></div>
+          <div><span class="stat-label">W / D / L</span><div class="mono">${tot_w} / ${tot_d} / ${tot_l}</div></div>
+        </div>
+        <table>
+          <thead><tr>
+            <th>opponent</th><th>games</th><th>W</th><th>D</th><th>L</th>
+            <th>win rate</th><th>share</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => tr([
+              r.oppLink,
+              `<span class="mono">${r.n}</span>`,
+              `<span class="win mono">${r.w}</span>`,
+              `<span class="draw mono">${r.d}</span>`,
+              `<span class="lose mono">${r.l}</span>`,
+              `<span class="mono">${(r.rate * 100).toFixed(0)}%</span>`,
+              `<span class="muted mono">${((r.n / totalN) * 100).toFixed(0)}%</span>`,
+            ])).join('')}
+          </tbody>
+        </table>
+        <div class="muted small" style="margin-top:8px;">
+          Sorted by win rate. "Share" = % of this run's eval games against that opponent.
+        </div>
+      `;
     }
 
     async function pollForUpdates(runId) {
