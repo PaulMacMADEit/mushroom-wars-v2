@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Models — Mushroom Wars v2</title>
+  <link rel="stylesheet" href="lib/style.css">
+</head>
+<body>
+  <header>
+    <h1>Mushroom Wars v2</h1>
+    <nav>
+      <a href="./index.html">Overview</a>
+      <a href="./runs.html">Runs</a>
+      <a href="./models.html">Models</a>
+      <a href="./leaderboard.html">Leaderboard</a>
+    </nav>
+  </header>
+
+  <main>
+    <h2>All models</h2>
+    <div class="card" id="models"><div class="muted">Loading…</div></div>
+  </main>
+
+  <script type="module">
+    import { sb } from './lib/supabase.js';
+    import { fmtTime, fmtPct, esc, tr } from './lib/ui.js';
+
+    const $root = document.getElementById('models');
+
+    async function load() {
+      const { data, error } = await sb
+        .from('models')
+        .select('id, name, obs_size, num_actions, total_params, run_count, best_rate, created_at, parent_model')
+        .order('created_at', { ascending: false });
+      if (error) { $root.innerHTML = `<div class="error">${esc(error.message)}</div>`; return; }
+      if (data.length === 0) {
+        $root.innerHTML = `<div class="muted">no models registered — try <span class="inline-code">python cli/register_model.py</span></div>`;
+        return;
+      }
+      const rows = data.map(m => tr([
+        `<a href="./model.html?id=${esc(m.id)}"><span class="mono">${esc(m.id)}</span></a>`,
+        esc(m.name ?? ''),
+        `<span class="mono">${esc(String(m.obs_size))}→${esc(String(m.num_actions))}</span>`,
+        `<span class="mono">${esc((m.total_params ?? 0).toLocaleString())}</span>`,
+        esc(String(m.run_count)),
+        fmtPct(m.best_rate),
+        m.parent_model ? `<a href="./model.html?id=${esc(m.parent_model)}" class="mono">${esc(m.parent_model)}</a>` : '<span class="muted">—</span>',
+        `<span class="muted">${fmtTime(m.created_at)}</span>`,
+      ]));
+      $root.innerHTML = `
+        <table>
+          <thead><tr>
+            <th>id</th><th>name</th><th>obs → actions</th><th>params</th>
+            <th>runs</th><th>best rate</th><th>parent</th><th>created</th>
+          </tr></thead>
+          <tbody>${rows.join('')}</tbody>
+        </table>`;
+    }
+
+    load().catch(e => $root.innerHTML = `<div class="error">${esc(e.message)}</div>`);
+  </script>
+</body>
+</html>

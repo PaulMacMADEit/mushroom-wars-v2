@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Model — Mushroom Wars v2</title>
+  <link rel="stylesheet" href="lib/style.css">
+</head>
+<body>
+  <header>
+    <h1>Mushroom Wars v2</h1>
+    <nav>
+      <a href="./index.html">Overview</a>
+      <a href="./runs.html">Runs</a>
+      <a href="./models.html">Models</a>
+      <a href="./leaderboard.html">Leaderboard</a>
+    </nav>
+  </header>
+
+  <main>
+    <div id="root"><div class="muted">Loading…</div></div>
+  </main>
+
+  <script type="module">
+    import { sb, queryParam } from './lib/supabase.js';
+    import { fmtTime, fmtDuration, fmtPct, esc, statusPill, tr } from './lib/ui.js';
+
+    const $root = document.getElementById('root');
+    const id = queryParam('id');
+
+    if (!id) {
+      $root.innerHTML = `<div class="error">no <span class="inline-code">?id=…</span> in URL</div>`;
+    } else {
+      load().catch(e => $root.innerHTML = `<div class="card error">${esc(e.message)}</div>`);
+    }
+
+    async function load() {
+      const [modelRes, runsRes] = await Promise.all([
+        sb.from('models').select('*').eq('id', id).single(),
+        sb.from('runs')
+          .select('id, label, status, machine, seed, wall_ms, games_played, queued_at, result, simulator_id')
+          .eq('model_id', id)
+          .order('queued_at', { ascending: false })
+          .limit(100),
+      ]);
+      if (modelRes.error) throw modelRes.error;
+      if (runsRes.error) throw runsRes.error;
+
+      const m = modelRes.data;
+      const runs = runsRes.data;
+
+      const bestLink = m.best_run_id
+        ? `<a href="./run.html?id=${esc(m.best_run_id)}">${fmtPct(m.best_rate)}</a>`
+        : '<span class="muted">—</span>';
+
+      $root.innerHTML = `
+        <h2>Model <span class="mono">${esc(m.id)}</span></h2>
+        <div class="card">
+          <div style="display:flex; gap:24px; flex-wrap:wrap;">
+            <div><span class="stat-label">name</span><div>${esc(m.name ?? '')}</div></div>
+            <div><span class="stat-label">obs → actions</span><div class="mono">${m.obs_size} → ${m.num_actions}</div></div>
+            <div><span class="stat-label">params</span><div class="stat">${(m.total_params ?? 0).toLocaleString()}</div></div>
+            <div><span class="stat-label">runs</span><div class="stat">${esc(String(m.run_count))}</div></div>
+            <div><span class="stat-label">best rate</span><div class="stat">${bestLink}</div></div>
+            <div><span class="stat-label">parent</span><div>${m.parent_model ? `<a href="./model.html?id=${esc(m.parent_model)}" class="mono">${esc(m.parent_model)}</a>` : '<span class="muted">—</span>'}</div></div>
+            <div><span class="stat-label">created</span><div>${fmtTime(m.created_at)}</div></div>
+          </div>
+        </div>
+
+        <h2>What changed</h2>
+        <div class="card">${m.what_changed ? esc(m.what_changed) : '<span class="muted">no notes</span>'}</div>
+
+        <h2>Encoder / decoder</h2>
+        <div class="card">
+          <div><span class="stat-label">encoder</span><div class="mono small">${esc(m.obs_encoder ?? '—')}</div></div>
+          <div style="margin-top:10px;"><span class="stat-label">decoder</span><div class="mono small">${esc(m.action_decoder ?? '—')}</div></div>
+        </div>
+
+        <h2>Layer spec</h2>
+        <pre>${esc(JSON.stringify(m.layers, null, 2))}</pre>
+
+        <h2>Runs (${runs.length})</h2>
+        <div class="card">${runs.length === 0 ? '<div class="muted">no runs yet</div>' : `
+          <table>
+            <thead><tr>
+              <th>status</th><th>label</th><th>sim</th><th>seed</th><th>machine</th>
+              <th>wall</th><th>games</th><th>rate</th><th>queued</th>
+            </tr></thead>
+            <tbody>${runs.map(r => tr([
+              statusPill(r.status),
+              `<a href="./run.html?id=${esc(r.id)}">${esc(r.label)}</a>`,
+              `<span class="mono">${esc(r.simulator_id)}</span>`,
+              `<span class="mono">${esc(r.seed || '')}</span>`,
+              `<span class="mono">${esc(r.machine)}</span>`,
+              fmtDuration(r.wall_ms),
+              esc(String(r.games_played ?? '—')),
+              fmtPct(r.result?.rate),
+              `<span class="muted">${fmtTime(r.queued_at)}</span>`,
+            ])).join('')}</tbody>
+          </table>`}
+        </div>
+      `;
+    }
+  </script>
+</body>
+</html>

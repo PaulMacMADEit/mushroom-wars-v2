@@ -11,6 +11,8 @@
     <nav>
       <a href="./index.html">Overview</a>
       <a href="./runs.html">Runs</a>
+      <a href="./models.html">Models</a>
+      <a href="./leaderboard.html">Leaderboard</a>
     </nav>
   </header>
 
@@ -21,6 +23,7 @@
   <script type="module">
     import { sb, signedUrl, queryParam } from './lib/supabase.js';
     import { fmtTime, fmtDuration, fmtPct, esc, statusPill } from './lib/ui.js';
+    import { lineChart } from './lib/chart.js';
 
     const $root = document.getElementById('root');
     const runId = queryParam('id');
@@ -83,6 +86,17 @@
           </div>
         </div>
 
+        <h2>Training curves</h2>
+        <div class="card">
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+            <div class="stat-label">losses</div>
+          </div>
+          <div style="position:relative; height:240px;"><canvas id="chart-loss"></canvas></div>
+          <div style="height:8px;"></div>
+          <div class="stat-label">policy signal</div>
+          <div style="position:relative; height:240px;"><canvas id="chart-signal"></canvas></div>
+        </div>
+
         <h2>Hyperparams</h2>
         <pre>${esc(JSON.stringify(run.hyperparams ?? {}, null, 2))}</pre>
 
@@ -91,6 +105,28 @@
 
         ${run.error ? `<h2>Error</h2><pre class="error">${esc(run.error)}</pre>` : ''}
       `;
+
+      // Fetch metrics.json + render the two charts. Gracefully degrade if the
+      // log artifact is missing (older runs, or failed runs).
+      if (logUrl) {
+        try {
+          const resp = await fetch(logUrl);
+          if (!resp.ok) throw new Error(`http ${resp.status}`);
+          const body = await resp.json();
+          const points = Array.isArray(body) ? body : (body.metrics ?? []);
+          lineChart(document.getElementById('chart-loss'), points,
+                    ['value_loss', 'entropy_loss'],
+                    { yLabel: 'loss' });
+          lineChart(document.getElementById('chart-signal'), points,
+                    ['policy_loss', 'approx_kl', 'win_rate'],
+                    { yLabel: 'signal' });
+        } catch (e) {
+          document.getElementById('chart-loss').replaceWith(
+            Object.assign(document.createElement('div'),
+              { className: 'muted', textContent: `metrics unavailable: ${e.message}` })
+          );
+        }
+      }
     }
   </script>
 </body>

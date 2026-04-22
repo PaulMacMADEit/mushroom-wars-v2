@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Leaderboard — Mushroom Wars v2</title>
+  <link rel="stylesheet" href="lib/style.css">
+</head>
+<body>
+  <header>
+    <h1>Mushroom Wars v2</h1>
+    <nav>
+      <a href="./index.html">Overview</a>
+      <a href="./runs.html">Runs</a>
+      <a href="./models.html">Models</a>
+      <a href="./leaderboard.html">Leaderboard</a>
+    </nav>
+  </header>
+
+  <main>
+    <h2>Top runs by win rate</h2>
+    <div class="card" style="display:flex; gap:12px; align-items:flex-end; margin-bottom:8px;">
+      <label class="small muted">sim
+        <br><select id="filter-sim" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+          <option value="">all</option>
+        </select>
+      </label>
+      <label class="small muted">limit
+        <br><select id="filter-limit" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+          <option>10</option>
+          <option selected>20</option>
+          <option>50</option>
+        </select>
+      </label>
+    </div>
+    <div class="card" id="leaders"><div class="muted">Loading…</div></div>
+  </main>
+
+  <script type="module">
+    import { sb } from './lib/supabase.js';
+    import { fmtTime, fmtDuration, fmtPct, esc, tr } from './lib/ui.js';
+
+    const $root   = document.getElementById('leaders');
+    const $sim    = document.getElementById('filter-sim');
+    const $limit  = document.getElementById('filter-limit');
+
+    async function populateSimFilter() {
+      const { data } = await sb.from('simulators').select('id').order('created_at', { ascending: false });
+      for (const s of data ?? []) {
+        const opt = document.createElement('option');
+        opt.value = s.id; opt.textContent = s.id;
+        $sim.appendChild(opt);
+      }
+    }
+
+    async function load() {
+      $root.innerHTML = `<div class="muted">loading…</div>`;
+      let q = sb.from('runs')
+        .select('id, label, model_id, simulator_id, seed, machine, wall_ms, games_played, result, queued_at')
+        .eq('status', 'done')
+        .not('result->>rate', 'is', null)
+        // PostgREST JSON ordering: use the scalar form.
+        .order('result->rate', { ascending: false })
+        .limit(parseInt($limit.value, 10));
+      if ($sim.value) q = q.eq('simulator_id', $sim.value);
+      const { data, error } = await q;
+      if (error) { $root.innerHTML = `<div class="error">${esc(error.message)}</div>`; return; }
+      if (data.length === 0) { $root.innerHTML = `<div class="muted">no completed runs yet</div>`; return; }
+
+      const rows = data.map((r, i) => tr([
+        `<span class="mono">#${i + 1}</span>`,
+        fmtPct(r.result?.rate),
+        `<a href="./run.html?id=${esc(r.id)}">${esc(r.label)}</a>`,
+        `<a href="./model.html?id=${esc(r.model_id)}" class="mono">${esc(r.model_id)}</a>`,
+        `<span class="mono">${esc(r.simulator_id)}</span>`,
+        `<span class="mono">${esc(r.seed || '')}</span>`,
+        `<span class="mono">${esc(r.machine)}</span>`,
+        fmtDuration(r.wall_ms),
+        esc(String(r.games_played ?? '—')),
+        `<span class="muted">${fmtTime(r.queued_at)}</span>`,
+      ]));
+      $root.innerHTML = `
+        <table>
+          <thead><tr>
+            <th>rank</th><th>rate</th><th>label</th><th>model</th><th>sim</th>
+            <th>seed</th><th>machine</th><th>wall</th><th>games</th><th>queued</th>
+          </tr></thead>
+          <tbody>${rows.join('')}</tbody>
+        </table>`;
+    }
+
+    [$sim, $limit].forEach(el => el.addEventListener('change', load));
+    populateSimFilter().then(load).catch(e => $root.innerHTML = `<div class="error">${esc(e.message)}</div>`);
+  </script>
+</body>
+</html>
