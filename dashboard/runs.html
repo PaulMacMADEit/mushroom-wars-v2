@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Runs — Mushroom Wars v2</title>
+  <link rel="stylesheet" href="lib/style.css">
+</head>
+<body>
+  <header>
+    <h1>Mushroom Wars v2</h1>
+    <nav>
+      <a href="./index.html">Overview</a>
+      <a href="./runs.html">Runs</a>
+    </nav>
+  </header>
+
+  <main>
+    <h2>All runs</h2>
+
+    <div class="card" style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+      <label class="small muted">status
+        <br><select id="filter-status" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+          <option value="">any</option>
+          <option>queued</option>
+          <option>running</option>
+          <option>done</option>
+          <option>failed</option>
+        </select>
+      </label>
+      <label class="small muted">machine
+        <br><input id="filter-machine" placeholder="hostname…"
+                   style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+      </label>
+      <label class="small muted">label contains
+        <br><input id="filter-label" placeholder="smoke…"
+                   style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+      </label>
+      <button id="refresh" style="background:var(--accent);color:#000;border:0;padding:6px 14px;border-radius:6px;cursor:pointer;">refresh</button>
+    </div>
+
+    <div class="card" id="runs">
+      <div class="muted">Loading…</div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { sb } from './lib/supabase.js';
+    import { fmtTime, fmtDuration, fmtPct, esc, statusPill, tr } from './lib/ui.js';
+
+    const $runs = document.getElementById('runs');
+    const $status = document.getElementById('filter-status');
+    const $machine = document.getElementById('filter-machine');
+    const $label = document.getElementById('filter-label');
+    const $refresh = document.getElementById('refresh');
+
+    async function load() {
+      $runs.innerHTML = `<div class="muted">loading…</div>`;
+      let q = sb.from('runs')
+        .select('id, label, status, machine, model_id, simulator_id, seed, wall_ms, games_played, queued_at, result')
+        .order('queued_at', { ascending: false })
+        .limit(100);
+      if ($status.value) q = q.eq('status', $status.value);
+      if ($machine.value.trim()) q = q.eq('machine', $machine.value.trim());
+      if ($label.value.trim()) q = q.ilike('label', `%${$label.value.trim()}%`);
+      const { data, error } = await q;
+      if (error) { $runs.innerHTML = `<div class="error">error: ${esc(error.message)}</div>`; return; }
+      if (data.length === 0) { $runs.innerHTML = `<div class="muted">no matching runs</div>`; return; }
+      const rows = data.map(r => tr([
+        statusPill(r.status),
+        `<a href="./run.html?id=${esc(r.id)}">${esc(r.label)}</a>`,
+        `<span class="mono">${esc(r.model_id)}</span>`,
+        `<span class="mono">${esc(r.simulator_id)}</span>`,
+        `<span class="mono">${esc(r.seed || '')}</span>`,
+        `<span class="mono">${esc(r.machine)}</span>`,
+        fmtDuration(r.wall_ms),
+        esc(String(r.games_played ?? '—')),
+        fmtPct(r.result?.rate),
+        `<span class="muted">${fmtTime(r.queued_at)}</span>`,
+      ]));
+      $runs.innerHTML = `
+        <table>
+          <thead><tr>
+            <th>status</th><th>label</th><th>model</th><th>sim</th><th>seed</th>
+            <th>machine</th><th>wall</th><th>games</th><th>rate</th><th>queued</th>
+          </tr></thead>
+          <tbody>${rows.join('')}</tbody>
+        </table>
+        <div class="muted small" style="margin-top:10px;">${data.length} row${data.length === 1 ? '' : 's'}</div>`;
+    }
+
+    $refresh.addEventListener('click', load);
+    $status.addEventListener('change', load);
+    [$machine, $label].forEach(el => el.addEventListener('keydown', e => { if (e.key === 'Enter') load(); }));
+
+    load().catch(e => $runs.innerHTML = `<div class="error">${esc(e.message)}</div>`);
+  </script>
+</body>
+</html>

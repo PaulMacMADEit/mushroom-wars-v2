@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Run — Mushroom Wars v2</title>
+  <link rel="stylesheet" href="lib/style.css">
+</head>
+<body>
+  <header>
+    <h1>Mushroom Wars v2</h1>
+    <nav>
+      <a href="./index.html">Overview</a>
+      <a href="./runs.html">Runs</a>
+    </nav>
+  </header>
+
+  <main>
+    <div id="root"><div class="muted">Loading…</div></div>
+  </main>
+
+  <script type="module">
+    import { sb, signedUrl, queryParam } from './lib/supabase.js';
+    import { fmtTime, fmtDuration, fmtPct, esc, statusPill } from './lib/ui.js';
+
+    const $root = document.getElementById('root');
+    const runId = queryParam('id');
+
+    if (!runId) {
+      $root.innerHTML = `<div class="error">no <span class="inline-code">?id=…</span> in URL</div>`;
+    } else {
+      load().catch(e => $root.innerHTML = `<div class="card error">${esc(e.message)}</div>`);
+    }
+
+    async function load() {
+      const { data: run, error } = await sb
+        .from('runs')
+        .select('*')
+        .eq('id', runId)
+        .single();
+      if (error) throw error;
+
+      // Artifacts: resolve each path to a fresh signed URL.
+      const [weightsUrl, optimizerUrl, logUrl] = await Promise.all([
+        run.weights_url   ? signedUrl(run.weights_url).catch(_ => null) : null,
+        run.optimizer_url ? signedUrl(run.optimizer_url).catch(_ => null) : null,
+        run.log_url       ? signedUrl(run.log_url).catch(_ => null) : null,
+      ]);
+
+      $root.innerHTML = `
+        <h2>Run ${esc(run.label)}</h2>
+        <div class="card">
+          <div style="display:flex; gap:24px; flex-wrap:wrap; align-items:center;">
+            <div>${statusPill(run.status)}</div>
+            <div><span class="stat-label">id</span><div class="mono small">${esc(run.id)}</div></div>
+            <div><span class="stat-label">model</span><div class="mono">${esc(run.model_id)}</div></div>
+            <div><span class="stat-label">sim</span><div class="mono">${esc(run.simulator_id)}</div></div>
+            <div><span class="stat-label">seed</span><div class="mono">${esc(run.seed ?? '')}</div></div>
+            <div><span class="stat-label">machine</span><div class="mono">${esc(run.machine)}</div></div>
+            <div><span class="stat-label">rate</span><div class="stat">${fmtPct(run.result?.rate)}</div></div>
+            <div><span class="stat-label">games</span><div class="stat">${esc(String(run.games_played ?? '—'))}</div></div>
+            <div><span class="stat-label">wall</span><div class="stat">${fmtDuration(run.wall_ms)}</div></div>
+          </div>
+        </div>
+
+        <div class="grid">
+          <div class="card">
+            <div class="stat-label">queued</div><div>${fmtTime(run.queued_at)}</div>
+            <div class="stat-label" style="margin-top:10px;">started</div><div>${fmtTime(run.started_at)}</div>
+            <div class="stat-label" style="margin-top:10px;">finished</div><div>${fmtTime(run.finished_at)}</div>
+          </div>
+          <div class="card">
+            <div class="stat-label">budget</div><div>${fmtDuration(run.budget_ms)}</div>
+            <div class="stat-label" style="margin-top:10px;">device</div><div class="mono">${esc(run.result?.device ?? '—')}</div>
+            <div class="stat-label" style="margin-top:10px;">updates</div><div>${esc(String(run.result?.updates ?? '—'))}</div>
+          </div>
+          <div class="card">
+            <div class="stat-label">artifacts</div>
+            <ul style="margin:8px 0 0; padding-left:18px;">
+              <li>${weightsUrl   ? `<a href="${esc(weightsUrl)}">weights.pt</a>`   : '<span class="muted">no weights</span>'}</li>
+              <li>${optimizerUrl ? `<a href="${esc(optimizerUrl)}">optimizer.pt</a>` : '<span class="muted">no optimizer</span>'}</li>
+              <li>${logUrl       ? `<a href="${esc(logUrl)}">metrics.json</a>` : '<span class="muted">no log</span>'}</li>
+            </ul>
+          </div>
+        </div>
+
+        <h2>Hyperparams</h2>
+        <pre>${esc(JSON.stringify(run.hyperparams ?? {}, null, 2))}</pre>
+
+        <h2>Result summary</h2>
+        <pre>${esc(JSON.stringify(run.result ?? {}, null, 2))}</pre>
+
+        ${run.error ? `<h2>Error</h2><pre class="error">${esc(run.error)}</pre>` : ''}
+      `;
+    }
+  </script>
+</body>
+</html>
