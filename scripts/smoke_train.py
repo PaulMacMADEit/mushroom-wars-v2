@@ -20,7 +20,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import torch
 
-from sim.envs import MushroomEnv, random_legal_opponent
 from training.agent import PPOAgent
 from training.net import ActorCritic
 from training.trainer import PPOConfig, PPOTrainer
@@ -38,22 +37,30 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seconds", type=int, default=60, help="wall-clock budget")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--rollout", type=int, default=512, help="steps per rollout")
+    ap.add_argument("--rollout", type=int, default=128,
+                    help="per-env steps per rollout (total samples = n_envs × rollout)")
+    ap.add_argument("--envs", type=int, default=32,
+                    help="parallel envs (1 = single-env path; GPU wins at ≥32)")
+    ap.add_argument("--vec-mode", default="async", choices=["async", "sync"])
     args = ap.parse_args()
 
     device = _device()
     print(f"[smoke] device={device}")
 
-    env = MushroomEnv(seed=args.seed, opponent=random_legal_opponent)
     net = ActorCritic()
     agent = PPOAgent(net, device=device)
-    cfg = PPOConfig(rollout_steps=args.rollout)
-    trainer = PPOTrainer(env, agent, cfg)
+    cfg = PPOConfig(
+        n_envs=args.envs,
+        vec_mode=args.vec_mode,
+        rollout_steps=args.rollout,
+    )
+    trainer = PPOTrainer(agent, cfg, seed=args.seed)
 
     start = time.time()
     updates = 0
     print(
-        f"[smoke] budget={args.seconds}s rollout_steps={cfg.rollout_steps} "
+        f"[smoke] budget={args.seconds}s  envs={cfg.n_envs} ({cfg.vec_mode})  "
+        f"rollout_steps={cfg.rollout_steps}  "
         f"lr={cfg.lr} gamma={cfg.gamma} lam={cfg.gae_lambda}"
     )
 
@@ -77,6 +84,7 @@ def main():
             f"win={win_str}"
         )
 
+    trainer.close()
     total = time.time() - start
     print(f"[smoke] done in {total:.1f}s, {updates} updates.")
 

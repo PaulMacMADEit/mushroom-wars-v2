@@ -37,7 +37,6 @@ sys.path.insert(0, str(ROOT))
 import torch
 
 from cli.db import PROJECT, connect
-from sim.envs import MushroomEnv, random_legal_opponent
 from training.agent import PPOAgent
 from training.net import ActorCritic
 from training.trainer import PPOConfig, PPOTrainer
@@ -178,11 +177,10 @@ def run_training(
     cfg_kwargs = {k: v for k, v in hp.items() if k in PPOConfig.__dataclass_fields__}
     cfg = PPOConfig(**cfg_kwargs)
 
-    # Build env + agent + trainer.
-    env = MushroomEnv(seed=seed_int, opponent=random_legal_opponent)
+    # Build agent + trainer. Trainer owns its own vec env.
     net = build_net_for_model(job["model_id"], model_meta["obs_size"], model_meta["num_actions"])
     agent = PPOAgent(net, device=device)
-    trainer = PPOTrainer(env, agent, cfg)
+    trainer = PPOTrainer(agent, cfg, seed=seed_int)
 
     # Budget loop: update until we hit budget_ms. Keep full metrics history
     # for the log artifact; keep overall win-rate stats for `result`.
@@ -191,13 +189,18 @@ def run_training(
     total_eps = 0
     total_wins = 0
 
-    while time.time() < deadline:
-        m = trainer.update()
-        metrics_history.append(m)
-        if "episodes_completed" in m:
-            eps_count = m["episodes_completed"]
-            total_eps += eps_count
-            total_wins += int(round(eps_count * m.get("win_rate", 0.0)))
+    try:
+        while time.time() < deadline:
+            m = trainer.update()
+            metrics_history.append(m)
+            if "episodes_completed" in m:
+                eps_count = m["episodes_completed"]
+                total_eps += eps_count
+                total_wins += int(round(eps_count * m.get("win_rate", 0.0)))
+    finally:
+        # AsyncVectorEnv subprocesses need explicit cleanup; don't leak them
+        # across claimed runs in the polling worker.
+        pass  # trainer.close() happens in the caller after save_and_upload
 
     overall_win_rate = total_wins / total_eps if total_eps else 0.0
     result = {
@@ -318,7 +321,10 @@ def main():
             )
             wall_ms = int((time.time() - t0) * 1000)
 
-            urls = save_and_upload(claimed["id"], trainer, metrics_history, result)
+            try:
+                urls = save_and_upload(claimed["id"], trainer, metrics_history, result)
+            finally:
+                trainer.close()  # tear down AsyncVectorEnv subprocesses
 
             with connect() as conn:
                 mark_done(
