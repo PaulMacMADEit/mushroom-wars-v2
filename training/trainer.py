@@ -134,14 +134,16 @@ class PPOTrainer:
                 ))
 
         if self.cfg.vec_mode == "async":
-            # Force `spawn` context — Linux's default is `fork`, which breaks
-            # after CUDA init in the parent: forked children inherit broken
-            # CUDA state and deadlock the moment they touch torch (observed
-            # on PC for the self-play path, where opponent factories do
-            # `torch.load`). Mac defaults to `spawn` already, so this just
-            # unifies behaviour across platforms.
+            # Context choice: Linux's default is `fork`. Fork is fast (~0.5s
+            # to spawn 16 workers) but breaks after CUDA init in the parent —
+            # forked children inherit broken CUDA state and deadlock when
+            # they import torch. That only matters if subprocs touch torch,
+            # which they do exactly when self-play's neural opponent is loaded.
+            # So: use `spawn` for self-play (safe, +15s startup), fork
+            # elsewhere (fast).
+            ctx = "spawn" if self.cfg.self_play else None
             self.vec = gym.vector.AsyncVectorEnv(
-                factories, shared_memory=False, context="spawn",
+                factories, shared_memory=False, context=ctx,
             )
         elif self.cfg.vec_mode == "sync":
             self.vec = gym.vector.SyncVectorEnv(factories)
