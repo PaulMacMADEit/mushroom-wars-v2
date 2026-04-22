@@ -32,6 +32,7 @@ from sim.envs import make_env
 from training.agent import PPOAgent
 from training.encoder import OBS_DIM, encode_obs
 from training.obs_norm import RunningNorm
+from training.pool import OpponentPool
 
 
 @dataclass
@@ -53,6 +54,12 @@ class PPOConfig:
     # Obs normalization
     normalize_obs:  bool = True         # Welford running mean/std; see training/obs_norm.py
     obs_clip:       float = 10.0        # clip normalized obs; None to disable
+    # Self-play
+    self_play:            bool  = False  # if False, opponent is random_legal forever
+    snapshot_every:       int   = 10     # register a new pool entry every N updates
+    pool_max_size:        int   = 20     # evict oldest beyond this
+    latest_bias:          float = 0.8    # P(sample latest snapshot) per env
+    initial_opponent:     str   = "random_legal"  # before first snapshot registers
 
 
 class PPOTrainer:
@@ -62,18 +69,70 @@ class PPOTrainer:
         config: PPOConfig | None = None,
         seed: int = 0,
         opponent_name: str = "random_legal",
+        pool_root: str | None = None,
     ):
         self.agent = agent
         self.cfg = config or PPOConfig()
         self.optimizer = optim.Adam(self.agent.net.parameters(), lr=self.cfg.lr)
         self.device = self.agent.device
+        self.seed = seed
+        self._update_count = 0
+        self._rng = np.random.default_rng(seed)
 
-        # Build the vec env. Each sub-env gets its own seed so opponents
-        # don't move in lockstep.
-        factories = [
-            make_env(seed=seed + i, opponent_name=opponent_name)
-            for i in range(self.cfg.n_envs)
-        ]
+        # Self-play pool. Only populated when cfg.self_play is True.
+        self.pool: OpponentPool | None = None
+        if self.cfg.self_play:
+            self.pool = OpponentPool(root=pool_root, max_size=self.cfg.pool_max_size)
+
+        # Initial opponent: simple name for the very first rollout. After
+        # the first snapshot registers (every cfg.snapshot_every updates),
+        # the vec env gets rebuilt with neural opponents drawn from the pool.
+        self._initial_opponent_name = (
+            opponent_name if not self.cfg.self_play else self.cfg.initial_opponent
+        )
+
+        self.obs_norm = RunningNorm(OBS_DIM) if self.cfg.normalize_obs else None
+        self._build_vec(opponent_specs=None)
+
+        # Per-env running counters. Persist across rollouts.
+        self._ep_return = np.zeros(self.cfg.n_envs, dtype=np.float32)
+        self._ep_length = np.zeros(self.cfg.n_envs, dtype=np.int64)
+        # (return, length, won_proxy)
+        self._completed_episodes: list[tuple[float, int, bool]] = []
+
+    # ------------------------------------------------------------------
+    # Vec-env (re)build
+    # ------------------------------------------------------------------
+
+    def _build_vec(self, opponent_specs: list[dict] | None) -> None:
+        """Create (or re-create) the vec env. Each sub-env gets its own seed.
+
+        If `opponent_specs` is None, every env uses `self._initial_opponent_name`
+        (stateless). Otherwise, each entry is a dict passed to `make_env` as
+        `opponent_kwargs` with `opponent_name="neural"`.
+        """
+        # Tear down any previous vec env — AsyncVectorEnv leaks subprocs.
+        if hasattr(self, "vec"):
+            try:
+                self.vec.close()
+            except Exception:
+                pass
+
+        N = self.cfg.n_envs
+        factories = []
+        for i in range(N):
+            if opponent_specs is None:
+                factories.append(make_env(
+                    seed=self.seed + i,
+                    opponent_name=self._initial_opponent_name,
+                ))
+            else:
+                factories.append(make_env(
+                    seed=self.seed + i,
+                    opponent_name="neural",
+                    opponent_kwargs=opponent_specs[i],
+                ))
+
         if self.cfg.vec_mode == "async":
             self.vec = gym.vector.AsyncVectorEnv(factories, shared_memory=False)
         elif self.cfg.vec_mode == "sync":
@@ -81,21 +140,11 @@ class PPOTrainer:
         else:
             raise ValueError(f"unknown vec_mode: {self.cfg.vec_mode!r}")
 
-        N = self.cfg.n_envs
-        obs_batch, _ = self.vec.reset(seed=seed)
-        self.obs_norm = RunningNorm(OBS_DIM) if self.cfg.normalize_obs else None
+        obs_batch, _ = self.vec.reset(seed=self.seed)
         self._obs_raw, self._masks = self._encode_batch(obs_batch)
         if self.obs_norm is not None:
             self.obs_norm.update(self._obs_raw)
         self._obs = self._apply_norm(self._obs_raw)
-
-        # Per-env running counters. Running returns/lengths persist across
-        # rollouts — an episode that doesn't finish in this rollout finishes
-        # in the next.
-        self._ep_return = np.zeros(N, dtype=np.float32)
-        self._ep_length = np.zeros(N, dtype=np.int64)
-        # (return, length, won_proxy)
-        self._completed_episodes: list[tuple[float, int, bool]] = []
 
     # ------------------------------------------------------------------
     # Obs encoding — vec env returns a dict of stacked arrays; turn it into
@@ -294,7 +343,40 @@ class PPOTrainer:
             metrics["mean_episode_length"] = float(np.mean([e[1] for e in ep]))
             metrics["win_rate"]            = float(np.mean([e[2] for e in ep]))
             self._completed_episodes = []
+
+        self._update_count += 1
+
+        # Self-play refresh: register a snapshot at the cadence and rebuild
+        # the vec env so sub-envs load the fresh opponents from disk.
+        if self.cfg.self_play and self.pool is not None:
+            if self._update_count % self.cfg.snapshot_every == 0:
+                self._refresh_opponents()
+                metrics["pool_size"] = len(self.pool)
+
         return metrics
+
+    def _refresh_opponents(self) -> None:
+        """Snapshot learner + rebuild vec env with fresh per-env opponents."""
+        assert self.pool is not None
+        w, n = self.pool.register(
+            self.agent.net, self.obs_norm, tag=f"u{self._update_count:05d}"
+        )
+        # Sample one opponent per env (weighted toward latest).
+        specs: list[dict] = []
+        for _ in range(self.cfg.n_envs):
+            entry = self.pool.sample(self._rng, latest_bias=self.cfg.latest_bias)
+            if entry is None:
+                entry = (w, n)
+            w_path, n_path = entry
+            specs.append({
+                "weights_path":  str(w_path),
+                "obs_norm_path": str(n_path) if n_path else None,
+                # Opponents run on CPU inside sub-processes — MPS/CUDA across
+                # 32-128 processes is more trouble than it's worth for
+                # single-step forwards.
+                "device":        "cpu",
+            })
+        self._build_vec(opponent_specs=specs)
 
     def close(self):
         """Explicit teardown. AsyncVectorEnv leaks subprocesses if not closed."""
