@@ -39,11 +39,17 @@
 
     async function load() {
       $root.innerHTML = '<div class="muted">Fetching run…</div>';
-      const { data: run, error } = await sb
-        .from('runs')
-        .select('*')
-        .eq('id', runId)
-        .single();
+      let run, error;
+      try {
+        const res = await Promise.race([
+          sb.from('runs').select('*').eq('id', runId).single(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('Supabase timeout 8s')), 8000)),
+        ]);
+        run = res.data;
+        error = res.error;
+      } catch (e) {
+        throw new Error(`fetch run failed: ${e.message}`);
+      }
       if (error) throw new Error(`Supabase: ${error.message}`);
       if (!run) throw new Error(`run ${runId} not found`);
 
