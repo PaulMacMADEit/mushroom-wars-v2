@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Replays — Mushroom Wars v2</title>
+  <link rel="stylesheet" href="lib/style.css">
+</head>
+<body>
+  <header>
+    <h1>Mushroom Wars v2</h1>
+    <nav>
+      <a href="./index.html">Overview</a>
+      <a href="./runs.html">Runs</a>
+      <a href="./models.html">Models</a>
+      <a href="./elo.html">Leaderboard</a>
+      <a href="./replays.html">Replays</a>
+    </nav>
+  </header>
+
+  <main>
+    <h2>Recorded games</h2>
+
+    <div class="card" style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+      <label class="small muted">level
+        <br><input id="filter-level" placeholder="crossroads_6…"
+                   style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+      </label>
+      <label class="small muted">limit
+        <br><select id="filter-limit" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+          <option>25</option>
+          <option selected>50</option>
+          <option>100</option>
+          <option>250</option>
+        </select>
+      </label>
+      <button id="refresh" style="background:var(--accent);color:#000;border:0;padding:6px 14px;border-radius:6px;cursor:pointer;">refresh</button>
+    </div>
+
+    <div class="card" id="games">
+      <div class="muted">Loading…</div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { sb, publicUrl } from './lib/supabase.js';
+    import { fmtTime, fmtDuration, esc, tr } from './lib/ui.js';
+
+    const $games  = document.getElementById('games');
+    const $level  = document.getElementById('filter-level');
+    const $limit  = document.getElementById('filter-limit');
+    const $refresh = document.getElementById('refresh');
+
+    // Cache of run_id → label so we can show human names instead of UUIDs.
+    const runLabelCache = new Map();
+    async function fetchRunLabels(ids) {
+      const missing = [...new Set(ids)].filter(id => id && !runLabelCache.has(id));
+      if (missing.length === 0) return;
+      const { data, error } = await sb.from('runs').select('id,label').in('id', missing);
+      if (error) return;
+      for (const r of data) runLabelCache.set(r.id, r.label);
+    }
+    function labelFor(id) {
+      if (!id) return '—';
+      return runLabelCache.get(id) ?? id.slice(0, 8) + '…';
+    }
+
+    function winnerChip(game) {
+      if (!game.winner) return `<span class="muted">draw</span>`;
+      if (game.winner === game.player_1_run_id) {
+        return `<span style="color:#fca5a5">${esc(labelFor(game.player_1_run_id))}</span>`;
+      }
+      return `<span style="color:#93c5fd">${esc(labelFor(game.player_2_run_id))}</span>`;
+    }
+
+    async function load() {
+      $games.innerHTML = `<div class="muted">loading…</div>`;
+      let q = sb.from('games')
+        .select('id, match_id, game_index, seed, map_name, player_1_run_id, player_2_run_id, winner, duration_ms, stats, actions_url, matches(created_at, description)')
+        .not('actions_url', 'is', null)
+        .order('game_index', { ascending: true })
+        .limit(parseInt($limit.value, 10));
+      if ($level.value.trim()) q = q.eq('map_name', $level.value.trim());
+      const { data, error } = await q;
+      if (error) { $games.innerHTML = `<div class="error">error: ${esc(error.message)}</div>`; return; }
+      if (!data.length) { $games.innerHTML = `<div class="muted">no games with replays yet</div>`; return; }
+
+      // Sort by match created_at desc, then game_index.
+      data.sort((a, b) => {
+        const ta = a.matches?.created_at ?? '';
+        const tb = b.matches?.created_at ?? '';
+        if (ta !== tb) return tb.localeCompare(ta);
+        return (a.game_index ?? 0) - (b.game_index ?? 0);
+      });
+
+      await fetchRunLabels(data.flatMap(g => [g.player_1_run_id, g.player_2_run_id]));
+
+      const rows = data.map(g => {
+        const url = publicUrl(g.actions_url);
+        const view = url ? `<a href="./game.html?url=${encodeURIComponent(url)}">View ▶</a>` : '—';
+        const ticks = g.stats?.ticks ?? '—';
+        return tr([
+          view,
+          `<span class="mono">${esc(g.map_name ?? '')}</span>`,
+          esc(labelFor(g.player_1_run_id)),
+          esc(labelFor(g.player_2_run_id)),
+          winnerChip(g),
+          `<span class="mono">${esc(String(ticks))}</span>`,
+          fmtDuration(g.duration_ms),
+          `<span class="mono">${esc(String(g.seed))}</span>`,
+          `<span class="muted">${fmtTime(g.matches?.created_at)}</span>`,
+          g.matches?.description ? `<span class="muted small">${esc(g.matches.description)}</span>` : '',
+        ]);
+      });
+
+      $games.innerHTML = `
+        <table>
+          <thead><tr>
+            <th></th><th>level</th><th>P1</th><th>P2</th><th>winner</th>
+            <th>ticks</th><th>wall</th><th>seed</th><th>match</th><th>note</th>
+          </tr></thead>
+          <tbody>${rows.join('')}</tbody>
+        </table>
+        <div class="muted small" style="margin-top:10px;">${data.length} game${data.length === 1 ? '' : 's'}</div>
+      `;
+    }
+
+    $refresh.addEventListener('click', load);
+    $limit.addEventListener('change', load);
+    $level.addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
+
+    load().catch(e => $games.innerHTML = `<div class="error">${esc(e.message)}</div>`);
+  </script>
+</body>
+</html>

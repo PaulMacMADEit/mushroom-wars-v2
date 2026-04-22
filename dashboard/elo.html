@@ -22,8 +22,8 @@
       <a href="./index.html">Overview</a>
       <a href="./runs.html">Runs</a>
       <a href="./models.html">Models</a>
-      <a href="./leaderboard.html">Leaderboard</a>
-      <a href="./elo.html">Elo</a>
+      <a href="./elo.html">Leaderboard</a>
+      <a href="./replays.html">Replays</a>
     </nav>
   </header>
 
@@ -155,7 +155,28 @@
         }
       }
 
+      // ---- Vs-baseline (random_legal) tally ----
+      // The absolute skill metric — doesn't inflate as the meta shifts.
+      const BASELINE_ID = '00000000-0000-0000-0000-000000000001';
+      const vsBaseline = {};  // run_id → { wins, games }
+      for (const g of gamesRes.data) {
+        let runId = null, sa = null;
+        if (g.player_1_run_id === BASELINE_ID && g.player_2_run_id !== BASELINE_ID) {
+          runId = g.player_2_run_id;
+          sa = g.winner === g.player_2_run_id ? 1 : (g.winner === null ? 0.5 : 0);
+        } else if (g.player_2_run_id === BASELINE_ID && g.player_1_run_id !== BASELINE_ID) {
+          runId = g.player_1_run_id;
+          sa = g.winner === g.player_1_run_id ? 1 : (g.winner === null ? 0.5 : 0);
+        }
+        if (runId != null) {
+          const v = vsBaseline[runId] = vsBaseline[runId] || { score: 0, games: 0 };
+          v.score += sa;
+          v.games += 1;
+        }
+      }
+
       const ranked = Object.keys(elo)
+        .filter(id => id !== BASELINE_ID)
         .map(id => ({
           id,
           label: runsById[id]?.label ?? `(${id.slice(0, 8)}…)`,
@@ -164,6 +185,10 @@
           games: played[id] ?? 0,
           wins: wins[id] ?? 0,
           draws: draws[id] ?? 0,
+          vs_baseline_rate: vsBaseline[id]
+            ? vsBaseline[id].score / vsBaseline[id].games
+            : null,
+          vs_baseline_games: vsBaseline[id]?.games ?? 0,
         }))
         .sort((x, y) => y.elo - x.elo);
 
@@ -200,11 +225,15 @@
           <thead><tr>
             <th>rank</th><th>Elo</th><th>run</th><th>model</th>
             <th>games</th><th>W</th><th>D</th><th>L</th><th>win%</th>
+            <th title="absolute skill vs the random_legal baseline; stable across time">vs random</th>
           </tr></thead>
           <tbody>
             ${ranked.map((r, i) => {
               const losses = r.games - r.wins - r.draws;
               const wr = r.games > 0 ? (r.wins + 0.5 * r.draws) / r.games : null;
+              const vbr = r.vs_baseline_rate != null
+                ? `${(r.vs_baseline_rate * 100).toFixed(0)}% <span class="muted small">(${r.vs_baseline_games})</span>`
+                : '<span class="muted">—</span>';
               return tr([
                 `<span class="mono">#${i + 1}</span>`,
                 `<span class="mono"><b>${r.elo.toFixed(0)}</b></span>`,
@@ -215,6 +244,7 @@
                 `<span class="draw mono">${r.draws}</span>`,
                 `<span class="lose mono">${losses}</span>`,
                 fmtPct(wr),
+                vbr,
               ]);
             }).join('')}
           </tbody>

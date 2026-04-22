@@ -12,8 +12,8 @@ const SUPABASE_ANON = 'sb_publishable_S7q8SQrOn6W4OJ7tSFqJWQ_HFrf63KU';
 export const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
 
 /** Public URL for an artifact path like "models/abc/weights.pt".
- * `models` and `logs` buckets are public — dashboard reads don't need
- * signing. `replays` is still private and would need a different path. */
+ * `models`, `logs`, and `replays` are public — dashboard reads don't need
+ * signing. */
 export function publicUrl(path) {
   if (!path) return null;
   return `${SUPABASE_URL}/storage/v1/object/public/${path}`;

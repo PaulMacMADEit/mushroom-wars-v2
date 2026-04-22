@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mushroom Wars v2 — Replay</title>
+  <link rel="stylesheet" href="lib/style.css">
+  <style>
+    .viewer {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 12px;
+      height: calc(100vh - 160px);
+    }
+    .meta-row {
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+      align-items: baseline;
+    }
+    .meta-row .pair { display: flex; gap: 6px; align-items: baseline; }
+    .meta-row .pair .label { color: var(--fg-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+    .meta-row .pair .value { font-family: var(--mono); font-size: 13px; }
+    .winner-chip {
+      padding: 2px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .winner-chip.p1 { background: rgba(248,113,113,0.18); color: #fca5a5; }
+    .winner-chip.p2 { background: rgba(96,165,250,0.18); color: #93c5fd; }
+    .winner-chip.draw { background: rgba(107,114,128,0.25); color: var(--fg-muted); }
+
+    .canvas-wrap {
+      position: relative;
+      background: #0b0d12;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    canvas { display: block; width: 100%; height: 100%; }
+
+    .dropzone {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      flex-direction: column;
+      gap: 8px;
+      color: var(--fg-muted);
+      pointer-events: none;
+    }
+    .dropzone.active { background: rgba(96,165,250,0.06); color: var(--fg); }
+    .dropzone code { font-size: 11px; color: var(--fg-muted); }
+
+    .controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .controls button {
+      background: #1f2433;
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .controls button:hover { background: #262c3f; }
+    .controls button.primary { background: var(--accent); color: #0b0d12; border-color: var(--accent); font-weight: 600; }
+    .controls button.primary:hover { background: #82b8fc; }
+    .controls input[type=range] { flex: 1; accent-color: var(--accent); }
+    .controls .time {
+      font-family: var(--mono);
+      color: var(--fg-muted);
+      font-size: 12px;
+      min-width: 90px;
+      text-align: right;
+    }
+    .controls select {
+      background: #1f2433;
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-family: inherit;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Mushroom Wars v2</h1>
+    <nav>
+      <a href="./index.html">Overview</a>
+      <a href="./runs.html">Runs</a>
+      <a href="./models.html">Models</a>
+      <a href="./elo.html">Leaderboard</a>
+      <a href="./replays.html">Replays</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="meta-row" id="meta">
+      <div class="pair"><span class="label">Status</span><span class="value muted" id="status">Drop an events.json onto the canvas to load</span></div>
+    </div>
+
+    <div class="viewer">
+      <div></div>
+      <div class="canvas-wrap" id="canvas-wrap">
+        <canvas id="canvas"></canvas>
+        <div class="dropzone" id="dropzone">
+          <div>Drop an <span class="inline-code">events.json</span> file here</div>
+          <code>or append ?url=&lt;path-to-events.json&gt; to this URL</code>
+        </div>
+      </div>
+      <div class="controls">
+        <button id="play" class="primary">Play</button>
+        <button id="restart">Restart</button>
+        <input type="range" id="scrub" min="0" max="100" step="0.01" value="0">
+        <span class="time" id="time">t = 0 / 0</span>
+        <select id="speed">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+          <option value="8">8×</option>
+        </select>
+      </div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { ReplayPlayer, OWNER_NAME } from "./lib/game_renderer.js";
+
+    const $canvas   = document.getElementById("canvas");
+    const $wrap     = document.getElementById("canvas-wrap");
+    const $dropzone = document.getElementById("dropzone");
+    const $status   = document.getElementById("status");
+    const $meta     = document.getElementById("meta");
+    const $play     = document.getElementById("play");
+    const $restart  = document.getElementById("restart");
+    const $scrub    = document.getElementById("scrub");
+    const $time     = document.getElementById("time");
+    const $speed    = document.getElementById("speed");
+
+    let player = null;
+
+    function loadReplay(data) {
+      if (player) player.destroy();
+      player = new ReplayPlayer(data, $canvas);
+      $scrub.max = player.duration;
+
+      player.onTick(() => {
+        $scrub.value = player.t;
+        $time.textContent = `t = ${player.t.toFixed(1)} / ${player.duration}`;
+      });
+      player.onStateChange(() => {
+        $play.textContent = player.playing ? "Pause" : "Play";
+      });
+
+      renderMeta(data);
+      $dropzone.style.display = "none";
+      $play.textContent = "Play";
+      $time.textContent = `t = 0 / ${player.duration}`;
+    }
+
+    function renderMeta(d) {
+      const w = d.winner;
+      const winnerChip = w === 1 ? `<span class="winner-chip p1">P1 wins</span>`
+                       : w === 2 ? `<span class="winner-chip p2">P2 wins</span>`
+                       : w === 0 ? `<span class="winner-chip draw">Draw</span>`
+                       : `<span class="muted">—</span>`;
+      $meta.innerHTML = `
+        <div class="pair"><span class="label">Level</span><span class="value">${d.level_name || "—"}</span></div>
+        <div class="pair"><span class="label">Seed</span><span class="value">${d.seed ?? "—"}</span></div>
+        <div class="pair"><span class="label">Sim</span><span class="value">${d.sim_version}</span></div>
+        <div class="pair"><span class="label">Ticks</span><span class="value">${d.duration_ticks}</span></div>
+        <div class="pair"><span class="label">Events</span><span class="value">${d.events.length}</span></div>
+        <div class="pair"><span class="label">Outcome</span>${winnerChip}</div>
+        <div class="pair"><span class="label">Game</span><span class="value mono">${(d.game_id || "").slice(0, 8)}</span></div>
+      `;
+    }
+
+    // --- Controls ---------------------------------------------------------
+    $play.addEventListener("click", () => {
+      if (!player) return;
+      player.toggle();
+    });
+    $restart.addEventListener("click", () => {
+      if (!player) return;
+      player.pause();
+      player.seek(0);
+      player.play();
+    });
+    $scrub.addEventListener("input", () => {
+      if (!player) return;
+      player.pause();
+      player.seek(parseFloat($scrub.value));
+    });
+    $speed.addEventListener("change", () => {
+      if (!player) return;
+      player.setSpeed(parseFloat($speed.value));
+    });
+
+    // --- Drag + drop ------------------------------------------------------
+    function onFile(file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = JSON.parse(e.target.result);
+          loadReplay(data);
+        } catch (err) {
+          $status.textContent = `error: ${err.message}`;
+        }
+      };
+      reader.readAsText(file);
+    }
+    $wrap.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      $dropzone.classList.add("active");
+    });
+    $wrap.addEventListener("dragleave", () => {
+      $dropzone.classList.remove("active");
+    });
+    $wrap.addEventListener("drop", (e) => {
+      e.preventDefault();
+      $dropzone.classList.remove("active");
+      const f = e.dataTransfer?.files?.[0];
+      if (f) onFile(f);
+    });
+
+    // --- ?url= param ------------------------------------------------------
+    const url = new URLSearchParams(location.search).get("url");
+    if (url) {
+      fetch(url)
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then(loadReplay)
+        .catch(err => { $status.textContent = `fetch error: ${err.message}`; });
+    }
+  </script>
+</body>
+</html>

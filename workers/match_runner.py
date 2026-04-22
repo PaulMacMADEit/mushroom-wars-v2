@@ -15,8 +15,11 @@ The worker imports + calls these; they don't touch the DB directly.
 from __future__ import annotations
 
 import io
+import json
 import os
+import tempfile
 import urllib.request
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +27,7 @@ import torch
 
 from sim import config as C
 from sim.envs import MushroomEnv, make_neural_opponent
+from sim.envs.replay import Recorder
 from training.agent import PPOAgent
 from training.encoder import OBS_DIM, encode_obs
 from training.net import ActorCritic
@@ -48,15 +52,29 @@ def _fetch_load(url_path: str | None):
     return torch.load(io.BytesIO(data), map_location="cpu", weights_only=False)
 
 
-def download_run_state(weights_url: str, obs_norm_url: str | None) -> dict:
-    """Fetch a run's trained state from Storage. Missing obs_norm is tolerated."""
+def download_run_state(weights_url: str | None, obs_norm_url: str | None) -> dict:
+    """Fetch a run's trained state from Storage.
+
+    A None weights_url marks the run as a baseline/scripted opponent
+    (random_legal). The returned dict has `weights=None`; downstream code
+    treats that as "use random_legal_opponent for this side".
+    """
+    if not weights_url:
+        return {"weights": None, "obs_norm": None}
     return {
         "weights":  _fetch_load(weights_url),
         "obs_norm": _fetch_load(obs_norm_url),
     }
 
 
-def _load_agent(state: dict, device: torch.device) -> tuple[PPOAgent, RunningNorm | None]:
+def _load_agent(state: dict, device: torch.device) -> tuple[PPOAgent | None, RunningNorm | None]:
+    """Load an ActorCritic + obs_norm from state dicts.
+
+    Returns (None, None) for a baseline state (weights is None) — the caller
+    must substitute `random_legal_opponent` when playing that side.
+    """
+    if state.get("weights") is None:
+        return None, None
     net = ActorCritic()
     net.load_state_dict(state["weights"])
     agent = PPOAgent(net, device=device)
@@ -68,44 +86,66 @@ def _load_agent(state: dict, device: torch.device) -> tuple[PPOAgent, RunningNor
 
 
 def _play_one_game(
-    p1_agent: PPOAgent,
+    p1_agent: PPOAgent | None,
     p1_norm: RunningNorm | None,
-    p2_weights_path: str,
+    p2_weights_path: str | None,
     p2_obs_norm_path: str | None,
     level_name: str,
     seed: int,
+    game_id: str | None = None,
+    record: bool = True,
 ) -> dict:
     """Run one game. Returns {winner, ticks, wall_ms, phase} plus diagnostics.
 
-    P1 is driven in-process by `p1_agent`. P2 runs as MushroomEnv's opponent
-    — the same neural-opponent factory vec-env self-play already uses, just
-    invoked synchronously in this process instead of a subproc.
+    - If `p1_agent` is None, P1 plays as `random_legal_opponent` (baseline).
+    - If `p2_weights_path` is None, P2 plays as `random_legal_opponent`.
+    - Otherwise both sides are neural, with P1 driven in-process and P2 via
+      the existing `make_neural_opponent` factory.
+
+    When `record=True` and `game_id` is set, the env's replay recorder is
+    attached; the returned dict includes `replay_data` (dict) ready to
+    upload to the replays bucket.
     """
     import time
 
-    opponent = make_neural_opponent(
-        weights_path=p2_weights_path,
-        obs_norm_path=p2_obs_norm_path,
-        device="cpu",
-    )
-    env = MushroomEnv(level_name=level_name, opponent=opponent, seed=seed)
+    from sim.envs.opponents import random_legal_opponent
+
+    # Choose P2: neural net (default) or random_legal baseline.
+    if p2_weights_path is None:
+        opponent = random_legal_opponent
+    else:
+        opponent = make_neural_opponent(
+            weights_path=p2_weights_path,
+            obs_norm_path=p2_obs_norm_path,
+            device="cpu",
+        )
+    recorder: Recorder | None = None
+    if record and game_id is not None:
+        recorder = Recorder(game_id=str(game_id), level_name=level_name, seed=int(seed))
+
+    env = MushroomEnv(level_name=level_name, opponent=opponent, seed=seed, recorder=recorder)
     obs, info = env.reset(seed=seed)
 
     def _encode(o):
         x = encode_obs(o)
         return x if p1_norm is None else p1_norm.normalize(x)
 
-    x = _encode(obs)
-    mask = obs["action_mask"]
+    # P1 action chooser: neural agent if we have one, else random-legal over
+    # the P1 mask (which is what the env embeds in obs).
+    def _pick_p1_action(o, m):
+        if p1_agent is not None:
+            x = _encode(o)
+            return int(p1_agent.act_batch(x[None, :], m[None, :])[0][0])
+        # Baseline: sample from valid actions for P1.
+        legal_idx = np.where(m)[0]
+        return int(env._rng.choice(legal_idx)) if legal_idx.size else 0
 
     t0 = time.time()
     while True:
-        action, *_ = p1_agent.act_batch(x[None, :], mask[None, :])
-        obs, _r, terminated, truncated, info = env.step(int(action[0]))
+        action = _pick_p1_action(obs, obs["action_mask"])
+        obs, _r, terminated, truncated, info = env.step(action)
         if terminated or truncated:
             break
-        x = _encode(obs)
-        mask = obs["action_mask"]
     wall_ms = int((time.time() - t0) * 1000)
 
     phase = info["phase"]
@@ -115,16 +155,50 @@ def _play_one_game(
         winner = "p2"
     else:
         winner = "draw"
-    return {
+    out: dict = {
         "winner":  winner,
         "phase":   int(phase),
         "ticks":   int(info["tick"]),
         "wall_ms": wall_ms,
     }
+    if recorder is not None:
+        out["replay_data"] = recorder.to_dict()
+    return out
 
 
-def _materialize(state: dict, dir_path: Path, stem: str) -> tuple[str, str | None]:
-    """Write (weights, obs_norm) to local files and return their paths."""
+def _upload_replay(game_id: str, data: dict) -> str | None:
+    """Write replay JSON to a temp file and upload to the `replays` bucket.
+
+    Returns the storage path (like `replays/<id>/events.json`) on success,
+    None on failure (we don't want a flaky upload to fail the whole match).
+    """
+    from workers import storage
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(data, f, separators=(",", ":"))
+            path = f.name
+        try:
+            return storage.upload(
+                "replays",
+                f"{game_id}/events.json",
+                path,
+                content_type="application/json",
+            )
+        finally:
+            Path(path).unlink(missing_ok=True)
+    except Exception as exc:
+        print(f"[match_runner] replay upload failed game={game_id}: {exc}")
+        return None
+
+
+def _materialize(state: dict, dir_path: Path, stem: str) -> tuple[str | None, str | None]:
+    """Write (weights, obs_norm) to local files and return their paths.
+
+    Returns (None, None) for a baseline state (weights is None) — the caller
+    passes None through to `_play_one_game` to trigger random_legal_opponent.
+    """
+    if state.get("weights") is None:
+        return None, None
     w_path = dir_path / f"{stem}-weights.pt"
     torch.save(state["weights"], w_path)
     n_path: str | None = None
@@ -144,15 +218,18 @@ def run_match(
     level_name: str,
     seed_base: int,
     device: torch.device,
+    record: bool = True,
 ) -> list[dict]:
     """Play `n_games` games between A and B on `level_name`, alternating sides.
 
     Returns a list of per-game dicts ready to insert into `games`. Each dict:
-        {game_index, seed, map_name, player_1_run_id, player_2_run_id,
-         winner (UUID str or None for draw), duration_ms, stats}
-    """
-    import tempfile
+        {id, game_index, seed, map_name, player_1_run_id, player_2_run_id,
+         winner (UUID str or None for draw), duration_ms, stats, actions_url}
 
+    When `record=True`, each game is replayed-captured and the resulting
+    event log is uploaded to the `replays` bucket; the storage path lands
+    in `actions_url`. An upload failure degrades gracefully (actions_url=None).
+    """
     results: list[dict] = []
     with tempfile.TemporaryDirectory(prefix="mw2-match-state-") as tmp:
         tmp_path = Path(tmp)
@@ -165,6 +242,7 @@ def run_match(
         for i in range(n_games):
             swap = (i % 2 == 1)  # odd games: B is P1, A is P2
             seed = seed_base + i
+            game_id = str(uuid.uuid4())
 
             if swap:
                 # B plays as P1 in-process, A plays as P2 (opponent).
@@ -176,7 +254,10 @@ def run_match(
                 p2_w, p2_n = b_w, b_n
                 p1_run, p2_run = str(run_a_id), str(run_b_id)
 
-            g = _play_one_game(p1_agent, p1_norm, p2_w, p2_n, level_name, seed)
+            g = _play_one_game(
+                p1_agent, p1_norm, p2_w, p2_n, level_name, seed,
+                game_id=game_id, record=record,
+            )
 
             # Resolve winner from side → run id
             winner_run: str | None = None
@@ -186,19 +267,25 @@ def run_match(
                 winner_run = p2_run
             # draws: winner_run stays None
 
+            actions_url: str | None = None
+            if record and "replay_data" in g:
+                actions_url = _upload_replay(game_id, g["replay_data"])
+
             results.append({
+                "id":              game_id,
                 "game_index":      i,
-                "seed":             int(seed),
-                "map_name":         level_name,
-                "player_1_run_id":  p1_run,
-                "player_2_run_id":  p2_run,
-                "winner":           winner_run,
-                "duration_ms":      g["wall_ms"],
+                "seed":            int(seed),
+                "map_name":        level_name,
+                "player_1_run_id": p1_run,
+                "player_2_run_id": p2_run,
+                "winner":          winner_run,
+                "duration_ms":     g["wall_ms"],
                 "stats": {
-                    "phase":  g["phase"],
-                    "ticks":  g["ticks"],
+                    "phase":   g["phase"],
+                    "ticks":   g["ticks"],
                     "swapped": swap,
                 },
+                "actions_url":     actions_url,
             })
     return results
 

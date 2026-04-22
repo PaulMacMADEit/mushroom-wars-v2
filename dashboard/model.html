@@ -4,6 +4,113 @@
   <meta charset="utf-8">
   <title>Model — Mushroom Wars v2</title>
   <link rel="stylesheet" href="lib/style.css">
+  <style>
+    /* Page-scoped styles for the model view. */
+    .hero-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+    }
+    .hero-grid .stat-block {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+    }
+    .hero-grid .stat-block .stat { font-size: 20px; line-height: 1.25; }
+
+    .prose { max-width: 820px; }
+    .prose p { margin: 0 0 12px; line-height: 1.55; }
+    .prose p:last-child { margin-bottom: 0; }
+
+    .feature-block + .feature-block { margin-top: 14px; }
+    .feature-block header {
+      display: flex; align-items: baseline; gap: 10px;
+      border: none; padding: 0; margin-bottom: 6px;
+    }
+    .feature-block header .tag { margin-right: 4px; }
+    .feature-block .desc { color: var(--fg-muted); font-size: 12px; margin-bottom: 8px; }
+    .feature-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 4px 18px;
+      font-size: 12px;
+    }
+    .feature-list .row { display: grid; grid-template-columns: 170px 1fr; gap: 10px; padding: 2px 0; }
+    .feature-list .k { font-family: var(--mono); color: var(--accent); }
+    .feature-list .v { color: var(--fg-muted); }
+
+    .tag {
+      display: inline-block; font-size: 10px; padding: 2px 7px;
+      border-radius: 4px; letter-spacing: .4px; text-transform: uppercase; font-weight: 600;
+    }
+    .tag-input  { background: rgba(96,165,250,.15);  color: var(--accent); }
+    .tag-body   { background: rgba(52,211,153,.15);  color: var(--accent-2); }
+    .tag-head   { background: rgba(248,113,113,.18); color: var(--danger); }
+    .tag-value  { background: rgba(251,191,36,.18);  color: #fbbf24; }
+    .tag-embed  { background: rgba(167,139,250,.18); color: #a78bfa; }
+
+    .net {
+      display: flex; flex-direction: column; align-items: stretch; gap: 10px;
+    }
+    .net-row { display: flex; justify-content: center; align-items: stretch; gap: 12px; flex-wrap: wrap; }
+    .net-arrow {
+      color: var(--fg-muted); font-size: 18px; text-align: center;
+      line-height: 1; padding: 2px 0;
+    }
+    .net-box {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      min-width: 170px;
+      flex: 1 1 0;
+      max-width: 260px;
+    }
+    .net-box.wide { max-width: 100%; flex: 1 1 100%; }
+    .net-box header {
+      display: flex; justify-content: space-between; align-items: center;
+      border: none; padding: 0; margin: 0 0 6px;
+    }
+    .net-box header strong { font-size: 13px; }
+    .layer-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      align-items: baseline;
+      padding: 3px 0;
+      border-bottom: 1px dashed var(--border);
+      font-size: 12px;
+    }
+    .layer-row:last-of-type { border-bottom: none; }
+    .layer-row .lname { color: var(--fg); }
+    .layer-row .lname .tname { color: var(--fg-muted); font-family: var(--mono); font-size: 11px; margin-left: 4px; }
+    .layer-row .shape { font-family: var(--mono); color: var(--accent); font-size: 11px; }
+    .layer-row .pcount { font-family: var(--mono); color: var(--fg-muted); font-size: 11px; }
+    .net-box .foot {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--fg-muted);
+      display: flex; justify-content: space-between; gap: 8px;
+    }
+
+    .output-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }
+    .output-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+    }
+    .output-card .shape { font-family: var(--mono); color: var(--accent); font-size: 13px; margin: 4px 0; }
+    .output-card .desc { color: var(--fg-muted); font-size: 12px; line-height: 1.4; }
+
+    details.raw-spec summary { cursor: pointer; color: var(--fg-muted); font-size: 12px; }
+    details.raw-spec[open] summary { margin-bottom: 8px; }
+  </style>
 </head>
 <body>
   <header>
@@ -12,8 +119,8 @@
       <a href="./index.html">Overview</a>
       <a href="./runs.html">Runs</a>
       <a href="./models.html">Models</a>
-      <a href="./leaderboard.html">Leaderboard</a>
-      <a href="./elo.html">Elo</a>
+      <a href="./elo.html">Leaderboard</a>
+      <a href="./replays.html">Replays</a>
     </nav>
   </header>
 
@@ -34,6 +141,146 @@
       load().catch(e => $root.innerHTML = `<div class="card error">${esc(e.message)}</div>`);
     }
 
+    // -----------------------------------------------------------------
+    // Hard-coded breakdown of the v9.x 1002-dim observation. Kept here
+    // (not in the DB) because the encoder code is the source of truth —
+    // see training/encoder.py. If a different obs_size shows up we fall
+    // back to just the encoder description string.
+    // -----------------------------------------------------------------
+    const OBS_BREAKDOWN_V9 = [
+      {
+        tag: 'globals',
+        name: 'Globals',
+        shape: '10',
+        desc: 'Game-wide signals, one per tick.',
+        feats: [
+          ['tick', 'fraction of game clock elapsed'],
+          ['time remaining', '1 − tick / timeout'],
+          ['p1 buildings', 'share of 32 slots owned by P1'],
+          ['p2 buildings', 'share of 32 slots owned by P2'],
+          ['neutral buildings', 'share of slots still neutral'],
+          ['p1 total force', 'garrison + in-flight units'],
+          ['p2 total force', 'garrison + in-flight units'],
+          ['p1 share', 'p1 / (p1 + p2)'],
+          ['building margin', '(p1 − p2) buildings'],
+          ['unit margin', '(p1 − p2) total units'],
+        ],
+      },
+      {
+        tag: 'per-building',
+        name: 'Per-building block',
+        shape: '32 × 22 = 704',
+        desc: 'One 22-feature row per building slot; dead slots masked to zero.',
+        feats: [
+          ['alive', '1 if slot holds a live building'],
+          ['is_p1 / is_p2 / is_neutral', 'ownership one-hot'],
+          ['garrison (raw)', 'units inside / capacity norm'],
+          ['garrison ratio', 'garrison / own capacity'],
+          ['capacity', 'upgrade-level proxy'],
+          ['over_cap', '1 if reinforced above capacity'],
+          ['x, y', 'map position (normalized)'],
+          ['type one-hot (×5)', 'building class'],
+          ['incoming P1 / P2', 'alive groups heading here, by side'],
+          ['incoming friendly / hostile', 'relative to this slot\'s owner'],
+          ['threat-capped hostile', 'min(hostile, garrison) — immediate loss'],
+          ['will fall', '1 if hostile > garrison'],
+          ['near-cap', '1 if garrison / capacity > 0.95'],
+        ],
+      },
+      {
+        tag: 'per-group',
+        name: 'Per-group block',
+        shape: '32 × 9 = 288',
+        desc: 'One 9-feature row per in-flight unit group.',
+        feats: [
+          ['alive', '1 if this group is currently flying'],
+          ['is_p1 / is_p2', 'ownership'],
+          ['progress fraction', 'progress / travel — how close to arrival'],
+          ['count', 'units in the group, normalized'],
+          ['src x, src y', 'source building position'],
+          ['tgt x, tgt y', 'target building position'],
+        ],
+      },
+    ];
+
+    // Head descriptions for the output panel. Matches training/net.py.
+    const OUTPUT_HEADS = [
+      { tag:'head',  label:'Source head',  shape:'32',
+        desc:'Logits over the 32 building slots — "which of my slots sends?"' },
+      { tag:'head',  label:'Type head',    shape:'5',
+        desc:'Send percentage: 25% / 50% / 75% / 100% / noop. Conditional on source.' },
+      { tag:'head',  label:'Target head',  shape:'32',
+        desc:'Logits over the 32 slots — "where to send?" Conditional on source.' },
+      { tag:'value', label:'Value head',   shape:'1',
+        desc:'Scalar — expected return under the current policy.' },
+    ];
+
+    // -----------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------
+    const fmt = n => (n == null ? '—' : n.toLocaleString());
+
+    function paramsOf(l) {
+      if (l.type === 'Linear')    return l.in_features * l.out_features + l.out_features;
+      if (l.type === 'Embedding') return l.num_embeddings * l.embedding_dim;
+      return 0;
+    }
+
+    function shapeOf(l) {
+      if (l.type === 'Linear')    return `${l.in_features} → ${l.out_features}`;
+      if (l.type === 'Embedding') return `${l.num_embeddings} × ${l.embedding_dim}`;
+      return '';
+    }
+
+    // Group layers by the first segment of `name` (trunk, source_head, …).
+    function groupLayers(layers) {
+      const groups = new Map();
+      for (const l of layers) {
+        const prefix = (l.name || 'root').split('.')[0] || 'root';
+        if (!groups.has(prefix)) groups.set(prefix, []);
+        groups.get(prefix).push(l);
+      }
+      return groups;
+    }
+
+    // Split what_changed into paragraphs — on blank lines, else on a single
+    // " Why:" / " Motivation:" marker, else a lone paragraph.
+    function paragraphs(text) {
+      if (!text) return [];
+      const byBlank = text.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
+      if (byBlank.length > 1) return byBlank;
+      const m = text.match(/^(.*?)(?:\s+)(Why:|Motivation:|Rationale:)(.*)$/is);
+      if (m) return [m[1].trim(), `${m[2]} ${m[3]}`.trim()];
+      return [text.trim()];
+    }
+
+    function renderNetBox(prefix, layers, badge) {
+      const total = layers.reduce((s, l) => s + paramsOf(l), 0);
+      const rows = layers.map(l => `
+        <div class="layer-row">
+          <span class="lname">${esc(l.type)}<span class="tname">${esc(l.name || '')}</span></span>
+          <span class="shape">${esc(shapeOf(l))}</span>
+          <span class="pcount">${paramsOf(l) ? fmt(paramsOf(l)) : '—'}</span>
+        </div>
+      `).join('');
+      return `
+        <div class="net-box ${badge?.wide ? 'wide' : ''}">
+          <header>
+            <strong>${esc(prefix)}</strong>
+            ${badge ? `<span class="tag ${badge.cls}">${esc(badge.label)}</span>` : ''}
+          </header>
+          ${rows}
+          <div class="foot">
+            <span>${layers.length} layer${layers.length === 1 ? '' : 's'}</span>
+            <span>${fmt(total)} params</span>
+          </div>
+        </div>
+      `;
+    }
+
+    // -----------------------------------------------------------------
+    // Main
+    // -----------------------------------------------------------------
     async function load() {
       const [modelRes, runsRes] = await Promise.all([
         sb.from('models').select('*').eq('id', id).single(),
@@ -44,40 +291,193 @@
           .limit(100),
       ]);
       if (modelRes.error) throw modelRes.error;
-      if (runsRes.error) throw runsRes.error;
+      if (runsRes.error)  throw runsRes.error;
 
       const m = modelRes.data;
       const runs = runsRes.data;
 
+      const totalGames = runs.reduce((s, r) => s + (r.games_played || 0), 0);
       const bestLink = m.best_run_id
         ? `<a href="./run.html?id=${esc(m.best_run_id)}">${fmtPct(m.best_rate)}</a>`
         : '<span class="muted">—</span>';
+      const parentLink = m.parent_model
+        ? `<a href="./model.html?id=${esc(m.parent_model)}" class="mono">${esc(m.parent_model)}</a>`
+        : '<span class="muted">—</span>';
 
+      // Paragraphs for the what-changed prose block.
+      const paras = paragraphs(m.what_changed);
+      const proseHtml = paras.length
+        ? paras.map(p => `<p>${esc(p)}</p>`).join('')
+        : `<p class="muted">No notes recorded for this model.</p>`;
+
+      // Input breakdown — v9.x has obs_size = 1002.
+      let inputsHtml;
+      if (m.obs_size === 1002) {
+        inputsHtml = OBS_BREAKDOWN_V9.map(g => `
+          <div class="feature-block">
+            <header>
+              <span class="tag tag-input">${esc(g.tag)}</span>
+              <strong>${esc(g.name)}</strong>
+              <span class="mono muted">${esc(g.shape)}</span>
+            </header>
+            <div class="desc">${esc(g.desc)}</div>
+            <div class="feature-list">
+              ${g.feats.map(([k, v]) => `
+                <div class="row"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>
+              `).join('')}
+            </div>
+          </div>
+        `).join('');
+      } else {
+        inputsHtml = `
+          <div class="muted small">
+            Breakdown is only hard-coded for the v9.x 1002-dim encoder.
+            This model reports <span class="mono">${esc(String(m.obs_size))}</span> observation dims.
+          </div>
+          <div style="margin-top:8px;" class="mono small">${esc(m.obs_encoder ?? '—')}</div>
+        `;
+      }
+
+      // Build the network diagram from the layers JSON.
+      const layerList = (m.layers && Array.isArray(m.layers.layers)) ? m.layers.layers : [];
+      const groups = groupLayers(layerList);
+
+      // Partition: trunk first, then heads, then src_embed.
+      const TRUNK_KEYS  = ['trunk', 'body'];
+      const VALUE_KEYS  = ['value_head'];
+      const EMBED_KEYS  = ['src_embed'];
+      const trunkEntries = [];
+      const headEntries  = [];
+      const valueEntries = [];
+      const embedEntries = [];
+      for (const [prefix, layers] of groups.entries()) {
+        if (TRUNK_KEYS.includes(prefix))      trunkEntries.push([prefix, layers]);
+        else if (EMBED_KEYS.includes(prefix)) embedEntries.push([prefix, layers]);
+        else if (VALUE_KEYS.includes(prefix)) valueEntries.push([prefix, layers]);
+        else                                  headEntries.push([prefix, layers]);
+      }
+
+      const trunkHtml = trunkEntries.length
+        ? trunkEntries.map(([p, ls]) => renderNetBox(p, ls, { cls:'tag-body', label:'body', wide:true })).join('')
+        : `<div class="muted small">(no trunk block found in layer spec)</div>`;
+
+      const headsHtml = headEntries.map(([p, ls]) =>
+        renderNetBox(p, ls, { cls:'tag-head', label:'policy head' })
+      ).join('');
+
+      const valueHtml = valueEntries.map(([p, ls]) =>
+        renderNetBox(p, ls, { cls:'tag-value', label:'value head' })
+      ).join('');
+
+      const embedHtml = embedEntries.map(([p, ls]) =>
+        renderNetBox(p, ls, { cls:'tag-embed', label:'embedding' })
+      ).join('');
+
+      const outputsHtml = OUTPUT_HEADS.map(h => `
+        <div class="output-card">
+          <div><span class="tag tag-${h.tag}">${esc(h.label)}</span></div>
+          <div class="shape">${esc(h.shape)} logits</div>
+          <div class="desc">${esc(h.desc)}</div>
+        </div>
+      `).join('');
+
+      // -----------------------------------------------------------------
+      // Render
+      // -----------------------------------------------------------------
       $root.innerHTML = `
         <h2>Model <span class="mono">${esc(m.id)}</span></h2>
-        <div class="card">
-          <div style="display:flex; gap:24px; flex-wrap:wrap;">
-            <div><span class="stat-label">name</span><div>${esc(m.name ?? '')}</div></div>
-            <div><span class="stat-label">obs → actions</span><div class="mono">${m.obs_size} → ${m.num_actions}</div></div>
-            <div><span class="stat-label">params</span><div class="stat">${(m.total_params ?? 0).toLocaleString()}</div></div>
-            <div><span class="stat-label">runs</span><div class="stat">${esc(String(m.run_count))}</div></div>
-            <div><span class="stat-label">best rate</span><div class="stat">${bestLink}</div></div>
-            <div><span class="stat-label">parent</span><div>${m.parent_model ? `<a href="./model.html?id=${esc(m.parent_model)}" class="mono">${esc(m.parent_model)}</a>` : '<span class="muted">—</span>'}</div></div>
-            <div><span class="stat-label">created</span><div>${fmtTime(m.created_at)}</div></div>
+
+        <div class="hero-grid">
+          <div class="stat-block">
+            <span class="stat-label">name</span>
+            <div>${esc(m.name ?? '')}</div>
+          </div>
+          <div class="stat-block">
+            <span class="stat-label">obs → actions</span>
+            <div class="stat mono">${m.obs_size} → ${m.num_actions}</div>
+          </div>
+          <div class="stat-block">
+            <span class="stat-label">total params</span>
+            <div class="stat">${fmt(m.total_params ?? 0)}</div>
+          </div>
+          <div class="stat-block">
+            <span class="stat-label">runs</span>
+            <div class="stat">${esc(String(m.run_count))}</div>
+          </div>
+          <div class="stat-block">
+            <span class="stat-label">games played</span>
+            <div class="stat">${fmt(totalGames)}</div>
+          </div>
+          <div class="stat-block">
+            <span class="stat-label">best rate</span>
+            <div class="stat">${bestLink}</div>
+          </div>
+          <div class="stat-block">
+            <span class="stat-label">parent</span>
+            <div>${parentLink}</div>
+          </div>
+          <div class="stat-block">
+            <span class="stat-label">created</span>
+            <div>${fmtTime(m.created_at)}</div>
           </div>
         </div>
 
-        <h2>What changed</h2>
-        <div class="card">${m.what_changed ? esc(m.what_changed) : '<span class="muted">no notes</span>'}</div>
+        <h2>What changed &amp; why</h2>
+        <div class="card prose">${proseHtml}</div>
 
-        <h2>Encoder / decoder</h2>
+        <h2>Inputs — what the model sees</h2>
         <div class="card">
-          <div><span class="stat-label">encoder</span><div class="mono small">${esc(m.obs_encoder ?? '—')}</div></div>
-          <div style="margin-top:10px;"><span class="stat-label">decoder</span><div class="mono small">${esc(m.action_decoder ?? '—')}</div></div>
+          <div style="margin-bottom: 10px; font-size: 12px; color: var(--fg-muted);">
+            Every decision tick, the encoder packs game state into a
+            <span class="mono">${esc(String(m.obs_size))}</span>-dim float32 vector:
+          </div>
+          ${inputsHtml}
         </div>
 
-        <h2>Layer spec</h2>
-        <pre>${esc(JSON.stringify(m.layers, null, 2))}</pre>
+        <h2>Architecture</h2>
+        <div class="card">
+          <div class="net">
+            <div class="net-row">
+              <div class="net-box wide">
+                <header>
+                  <strong>Input</strong>
+                  <span class="tag tag-input">observation</span>
+                </header>
+                <div class="layer-row">
+                  <span class="lname">float32 vector</span>
+                  <span class="shape">(${esc(String(m.obs_size))},)</span>
+                  <span class="pcount">—</span>
+                </div>
+                <div class="foot">
+                  <span>encoder</span>
+                  <span class="mono">${esc(m.obs_encoder ?? '')}</span>
+                </div>
+              </div>
+            </div>
+            <div class="net-arrow">↓</div>
+            <div class="net-row">${trunkHtml}</div>
+            <div class="net-arrow">↓ shared body features</div>
+            <div class="net-row">
+              ${headsHtml}
+              ${valueHtml}
+            </div>
+            ${embedHtml ? `
+              <div class="net-arrow" style="margin-top:6px;">src slot index → embedding → concatenated into type &amp; target heads</div>
+              <div class="net-row">${embedHtml}</div>
+            ` : ''}
+          </div>
+        </div>
+
+        <h2>Outputs — what the model decides</h2>
+        <div class="card">
+          <div style="margin-bottom: 10px; font-size: 12px; color: var(--fg-muted);">
+            The agent samples chained:
+            <span class="mono">source → (type | source) → (target | source)</span>.
+            If the sampled type is <span class="mono">noop</span>, the flat env action is
+            <span class="mono">NOOP</span> regardless of source/target.
+          </div>
+          <div class="output-grid">${outputsHtml}</div>
+        </div>
 
         <h2>Runs (${runs.length})</h2>
         <div class="card">${runs.length === 0 ? '<div class="muted">no runs yet</div>' : `
@@ -99,6 +499,11 @@
             ])).join('')}</tbody>
           </table>`}
         </div>
+
+        <details class="raw-spec card">
+          <summary>Raw layer spec (JSON)</summary>
+          <pre>${esc(JSON.stringify(m.layers, null, 2))}</pre>
+        </details>
       `;
     }
   </script>

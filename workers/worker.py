@@ -185,6 +185,85 @@ def mark_done(
 
 
 # ---------------------------------------------------------------------------
+# Auto-admission: on new run completion, queue a small set of ranking
+# matches so its Elo emerges without manual intervention.
+# ---------------------------------------------------------------------------
+
+ADMISSION_TOP_K           = 5   # play vs current top-K Elo runs
+ADMISSION_GAMES_PER_MATCH = 10
+ADMISSION_BASELINE_GAMES  = 20  # more games vs random for a tighter absolute rate
+BASELINE_RUN_ID = "00000000-0000-0000-0000-000000000001"
+ADMISSION_LEVEL = "random_8_12"
+
+
+def _current_top_elo_runs(conn, k: int) -> list[str]:
+    """Compute current Elo client-side from `games` and return top-k run IDs.
+
+    Skips the baseline pseudo-run — we always play it separately so it
+    doesn't count as a "top-K" opponent.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT g.player_1_run_id, g.player_2_run_id, g.winner
+              FROM games g
+              JOIN matches m ON g.match_id = m.id
+             WHERE m.project = %s AND m.status = 'done'
+             ORDER BY m.created_at, g.game_index
+        """, (PROJECT,))
+        games = cur.fetchall()
+
+    K, INIT = 32, 1200
+    elo: dict[str, float] = {}
+    for p1, p2, winner in games:
+        p1s, p2s = str(p1), str(p2)
+        winner_s = str(winner) if winner else None
+        ra = elo.get(p1s, INIT); rb = elo.get(p2s, INIT)
+        ea = 1 / (1 + 10 ** ((rb - ra) / 400))
+        sa = 1.0 if winner_s == p1s else (0.0 if winner_s == p2s else 0.5)
+        elo[p1s] = ra + K * (sa - ea)
+        elo[p2s] = rb + K * ((1 - sa) - (1 - ea))
+
+    ranked = [rid for rid, _ in sorted(elo.items(), key=lambda x: -x[1])
+              if rid != BASELINE_RUN_ID]
+    return ranked[:k]
+
+
+def _queue_admission_matches(conn, new_run_id, level_name: str = ADMISSION_LEVEL):
+    """Insert matches: new_run vs {top-K Elo} + new_run vs baseline."""
+    top = _current_top_elo_runs(conn, ADMISSION_TOP_K)
+    # Don't self-match; if the new run is already in top-K (possible after
+    # chain continuation), skip itself.
+    top = [rid for rid in top if rid != str(new_run_id)]
+
+    with conn.cursor() as cur:
+        for opp_id in top:
+            cur.execute("""
+                INSERT INTO matches (project, description, model_a_run_id, model_b_run_id,
+                                     simulator_id, games_planned, status, summary)
+                VALUES (%s, 'auto-admission', %s, %s,
+                        (SELECT simulator_id FROM runs WHERE id = %s),
+                        %s, 'queued', %s::jsonb)
+            """, (PROJECT, new_run_id, opp_id, new_run_id,
+                  ADMISSION_GAMES_PER_MATCH,
+                  json.dumps({"level_name": level_name})))
+        # Baseline: vs random_legal. Only queue if the baseline row exists.
+        cur.execute("SELECT 1 FROM runs WHERE id = %s", (BASELINE_RUN_ID,))
+        if cur.fetchone() is not None:
+            cur.execute("""
+                INSERT INTO matches (project, description, model_a_run_id, model_b_run_id,
+                                     simulator_id, games_planned, status, summary)
+                VALUES (%s, 'auto-admission-baseline', %s, %s,
+                        (SELECT simulator_id FROM runs WHERE id = %s),
+                        %s, 'queued', %s::jsonb)
+            """, (PROJECT, new_run_id, BASELINE_RUN_ID, new_run_id,
+                  ADMISSION_BASELINE_GAMES,
+                  json.dumps({"level_name": level_name})))
+    conn.commit()
+    print(f"[worker] auto-admission: queued {len(top)} top-K matches "
+          f"+ 1 baseline match for run {new_run_id}")
+
+
+# ---------------------------------------------------------------------------
 # Match claim + finalize (eval jobs)
 # ---------------------------------------------------------------------------
 
@@ -261,15 +340,18 @@ def insert_games(conn, match_id, games: list[dict]):
         for g in games:
             cur.execute("""
                 INSERT INTO games (
-                    match_id, game_index, seed, map_name,
+                    id, match_id, game_index, seed, map_name,
                     player_1_run_id, player_2_run_id, winner,
-                    duration_ms, stats
+                    duration_ms, stats, actions_url
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                VALUES (
+                    COALESCE(%s::uuid, gen_random_uuid()),
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s
+                )
             """, (
-                match_id, g["game_index"], g["seed"], g["map_name"],
+                g.get("id"), match_id, g["game_index"], g["seed"], g["map_name"],
                 g["player_1_run_id"], g["player_2_run_id"], g["winner"],
-                g["duration_ms"], json.dumps(g["stats"]),
+                g["duration_ms"], json.dumps(g["stats"]), g.get("actions_url"),
             ))
     conn.commit()
 
@@ -644,6 +726,14 @@ def main():
                     obs_norm_url=urls["obs_norm_url"],
                     log_url=urls["log_url"],
                 )
+                # Auto-admission: queue matches so the new run's Elo emerges
+                # automatically. Failure is non-fatal (admission is a nicety,
+                # not part of the training contract).
+                try:
+                    _queue_admission_matches(conn, claimed["id"])
+                except Exception as admit_exc:
+                    print(f"[worker] auto-admission failed for {claimed['id']}: {admit_exc}")
+
             print(f"[worker] done id={claimed['id']} games={games} "
                   f"wall={wall_ms}ms rate={result['rate']:.3f} "
                   f"artifacts: {urls['weights_url']}, {urls['log_url']}")
