@@ -8,6 +8,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>{{VENV_PYTHON}}</string>
+        <string>-u</string>
         <string>{{REPO}}/workers/worker.py</string>
     </array>
 
