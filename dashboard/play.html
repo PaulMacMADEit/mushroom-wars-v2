@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Play - Mushroom Wars v2</title>
+  <link rel="stylesheet" href="lib/style.css">
+  <style>
+    .play-form {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 14px 18px;
+      align-items: center;
+      max-width: 640px;
+    }
+    .play-form label { color: var(--fg-muted); font-size: 13px; }
+    .play-form select,
+    .play-form input {
+      background: #1f2433;
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: inherit;
+      font-size: 13px;
+      width: 100%;
+    }
+    .play-button {
+      background: var(--accent);
+      color: #0b0d12;
+      border: 0;
+      padding: 10px 18px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+      font-family: inherit;
+    }
+    .play-button:hover { background: #82b8fc; }
+    .play-button:disabled { background: #2a2f3d; color: var(--fg-muted); cursor: not-allowed; }
+    .link-btn {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--border);
+      padding: 4px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: inherit;
+    }
+    .link-btn:hover { background: rgba(96,165,250,0.08); }
+    .status-line {
+      margin-top: 20px;
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-card);
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+    .spinner {
+      display: inline-block;
+      width: 10px; height: 10px;
+      border: 2px solid var(--fg-muted);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Mushroom Wars v2</h1>
+    <nav>
+      <a href="./index.html">Overview</a>
+      <a href="./runs.html">Runs</a>
+      <a href="./models.html">Models</a>
+      <a href="./leaderboard.html">Leaderboard</a>
+      <a href="./elo.html">Elo</a>
+      <a href="./replays.html">Replays</a>
+      <a href="./play.html">Play</a>
+    </nav>
+  </header>
+
+  <main>
+    <h2>Play a game</h2>
+    <div class="card">
+      <div class="muted small" style="margin-bottom:16px;">
+        Queues a 1-game match, waits for a worker to pick it up, then opens the replay.
+        Default is self-play. Assumes a worker is polling.
+      </div>
+
+      <div class="play-form">
+        <label>Player 1</label>
+        <select id="p1"><option value="">loading...</option></select>
+
+        <label>Player 2</label>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <select id="p2" style="flex:1"><option value="">loading...</option></select>
+          <button id="mirror" class="link-btn" title="Set P2 = P1 (self-play)">mirror</button>
+        </div>
+
+        <label>Level</label>
+        <select id="level">
+          <optgroup label="Asymmetric (unfair, more interesting)">
+            <option value="asym_6_6">Asymmetric - 6 buildings</option>
+            <option value="asym_8_8" selected>Asymmetric - 8 buildings</option>
+            <option value="asym_8_12">Asymmetric - 8-12 buildings</option>
+            <option value="asym_12_12">Asymmetric - 12 buildings</option>
+            <option value="asym_16_16">Asymmetric - 16 buildings</option>
+            <option value="asym_20_20">Asymmetric - 20 buildings</option>
+            <option value="asym_24_32">Asymmetric - 24-32 buildings</option>
+          </optgroup>
+          <optgroup label="Symmetric (fair, 180-degree mirrored)">
+            <option value="crossroads_6">Crossroads (6 buildings, fixed)</option>
+            <option value="random_6_6">Random - 6 buildings</option>
+            <option value="random_8_8">Random - 8 buildings</option>
+            <option value="random_8_12">Random - 8-12 buildings</option>
+            <option value="random_12_12">Random - 12 buildings</option>
+            <option value="random_16_16">Random - 16 buildings</option>
+            <option value="random_20_20">Random - 20 buildings</option>
+          </optgroup>
+        </select>
+
+        <div></div>
+        <div><button id="play" class="play-button">Play</button></div>
+      </div>
+
+      <div id="status" class="status-line" style="display:none"></div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { sb, publicUrl } from './lib/supabase.js';
+    import { esc } from './lib/ui.js';
+
+    const BASELINE_ID = '00000000-0000-0000-0000-000000000001';
+
+    const $p1     = document.getElementById('p1');
+    const $p2     = document.getElementById('p2');
+    const $level  = document.getElementById('level');
+    const $mirror = document.getElementById('mirror');
+    const $play   = document.getElementById('play');
+    const $status = document.getElementById('status');
+
+    function setStatus(kind, html) {
+      $status.style.display = 'block';
+      const spinner = kind === 'working' ? `<span class="spinner"></span>` : '';
+      const color = kind === 'error' ? 'var(--danger)' : 'var(--fg)';
+      $status.innerHTML = `<span style="color:${color}">${spinner}${html}</span>`;
+    }
+
+    async function populateRuns() {
+      const { data, error } = await sb.from('runs')
+        .select('id, label, finished_at, result, weights_url')
+        .or(`weights_url.not.is.null,id.eq.${BASELINE_ID}`)
+        .eq('status', 'done')
+        .order('finished_at', { ascending: false })
+        .limit(100);
+      if (error) {
+        setStatus('error', `Can't load runs: ${esc(error.message)}`);
+        return;
+      }
+      const options = data.map(r => {
+        const rate = r.result?.rate;
+        const suffix = rate != null ? ` (${(rate * 100).toFixed(0)}%)` : '';
+        return `<option value="${esc(r.id)}">${esc(r.label)}${suffix}</option>`;
+      }).join('');
+      $p1.innerHTML = options;
+      $p2.innerHTML = options;
+      if (data.length > 0) {
+        $p1.value = data[0].id;
+        $p2.value = data[0].id;  // default self-play
+      }
+      updateMirrorButton();
+    }
+
+    // Mirror default: P2 tracks P1 until you manually change P2.
+    // Picking P1 again re-mirrors P2. Picking P2 breaks the mirror.
+    let mirrored = true;
+    function updateMirrorButton() {
+      $mirror.textContent = mirrored ? 'mirrored' : 'mirror';
+      $mirror.title = mirrored
+        ? 'P2 is tracking P1. Click to re-sync.'
+        : 'Click to set P2 = P1 and re-enable tracking.';
+    }
+    $p1.addEventListener('change', () => {
+      if (mirrored) $p2.value = $p1.value;
+    });
+    $p2.addEventListener('change', () => {
+      mirrored = ($p2.value === $p1.value);
+      updateMirrorButton();
+    });
+    $mirror.addEventListener('click', () => {
+      $p2.value = $p1.value;
+      mirrored = true;
+      updateMirrorButton();
+    });
+
+    async function queueAndWatch() {
+      const runA = $p1.value;
+      const runB = $p2.value;
+      const level = $level.value;
+      if (!runA || !runB) {
+        setStatus('error', 'Pick both players.');
+        return;
+      }
+
+      $play.disabled = true;
+      setStatus('working', 'Queuing match...');
+
+      const { data: matchId, error: rpcErr } = await sb.rpc('queue_interactive_play', {
+        p_run_a: runA,
+        p_run_b: runB,
+        p_level_name: level,
+      });
+      if (rpcErr) {
+        $play.disabled = false;
+        setStatus('error', `Queue failed: ${esc(rpcErr.message)}`);
+        return;
+      }
+      setStatus('working', `Queued match <span class="mono">${esc(matchId.slice(0,8))}...</span>. Waiting for worker...`);
+
+      // Poll for completion.
+      const started = Date.now();
+      const timeoutMs = 120_000;
+      let phase = 'queued';
+
+      while (Date.now() - started < timeoutMs) {
+        await new Promise(r => setTimeout(r, 2000));
+        const { data: m } = await sb.from('matches').select('status').eq('id', matchId).single();
+        if (!m) continue;
+        if (m.status === 'running' && phase !== 'running') {
+          phase = 'running';
+          setStatus('working', 'Worker is playing the game...');
+        }
+        if (m.status === 'done') {
+          setStatus('working', 'Loading replay...');
+          const { data: games } = await sb.from('games')
+            .select('id, actions_url')
+            .eq('match_id', matchId)
+            .limit(1);
+          const url = games?.[0]?.actions_url ? publicUrl(games[0].actions_url) : null;
+          if (!url) {
+            $play.disabled = false;
+            setStatus('error', 'Match finished but no replay was uploaded.');
+            return;
+          }
+          location.href = `./game.html?url=${encodeURIComponent(url)}`;
+          return;
+        }
+        if (m.status === 'failed') {
+          $play.disabled = false;
+          setStatus('error', 'Match failed (check worker logs).');
+          return;
+        }
+      }
+      $play.disabled = false;
+      setStatus('error', 'Timed out waiting for a worker. Is one running?');
+    }
+
+    $play.addEventListener('click', queueAndWatch);
+    populateRuns();
+  </script>
+</body>
+</html>
