@@ -5,12 +5,228 @@
   <title>Mushroom Wars v2 — Replay</title>
   <link rel="stylesheet" href="lib/style.css">
   <style>
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1.7fr) minmax(340px, 1fr);
+      gap: 14px;
+    }
+    .workspace-left {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-width: 0;
+    }
+    .workspace-right {
+      align-self: start;
+      position: sticky;
+      top: 12px;
+      max-height: calc(100vh - 100px);
+      min-width: 0;
+    }
+
     .viewer {
       display: grid;
-      grid-template-rows: auto 1fr auto;
-      gap: 12px;
-      height: calc(100vh - 160px);
+      grid-template-rows: minmax(340px, 1fr) auto;
+      gap: 10px;
     }
+
+    /* Compact tick table — right-side timeline */
+    .tick-table-wrap {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+    .tick-table-header {
+      display: grid;
+      grid-template-columns: 40px 1fr 1fr;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--fg-muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      font-weight: 600;
+    }
+    .tick-table-header .h-p1 { color: #fca5a5; }
+    .tick-table-header .h-p2 { color: #93c5fd; }
+    .tick-table {
+      overflow-y: auto;
+      padding: 6px 8px 8px 8px;
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.35;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    .tick-row {
+      display: grid;
+      grid-template-columns: 40px 1fr 1fr;
+      gap: 8px;
+      padding: 4px 4px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .tick-row:hover { background: rgba(96,165,250,0.05); }
+    .tick-row.expanded { background: rgba(96,165,250,0.08); }
+    .tick-row.current  { background: rgba(234,179,8,0.10); }
+    .tick-row .t       { color: var(--fg-muted); text-align: right; }
+    .tick-row .col     { min-width: 0; }
+    .tick-row .col > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tick-row .p1text  { color: #fca5a5; }
+    .tick-row .p2text  { color: #93c5fd; }
+    .tick-row .wait    { color: #4b5366; }
+    .tick-row .cap     { color: #86efac; }
+    .tick-row .loss    { color: #fca5a5; }
+    .tick-row .rein    { color: #8b92a4; }
+    .tick-row .end     { color: #fde68a; font-weight: 600; }
+    .tick-details {
+      grid-column: 1 / -1;
+      margin: 2px 0 6px 44px;
+      padding: 6px 10px;
+      background: rgba(11,13,18,0.65);
+      border-left: 2px solid var(--border);
+      border-radius: 4px;
+      font-size: 10.5px;
+      color: var(--fg-muted);
+    }
+    .tick-details .d-row { margin: 4px 0; }
+    .tick-details .d-side { font-weight: 600; font-size: 11px; margin-bottom: 2px; }
+    .tick-details .d-side.p1 { color: #fca5a5; }
+    .tick-details .d-side.p2 { color: #93c5fd; }
+    .tick-details .bars { display: flex; gap: 3px; flex-wrap: wrap; margin-left: 48px; }
+    .tick-details .head-label { display: inline-block; width: 44px; color: var(--fg-muted); font-size: 10px; }
+    .tick-details .bar {
+      padding: 1px 5px; border-radius: 3px;
+      background: rgba(96,165,250,0.10);
+      color: var(--fg); font-size: 10px;
+    }
+    .tick-details .bar.picked { background: rgba(96,165,250,0.28); color: #dbeafe; font-weight: 600; }
+    .tick-details .vh { margin-bottom: 4px; color: var(--fg-muted); }
+    .tick-details .vh b { color: var(--fg); }
+
+    .log-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.55;
+      max-height: 360px;
+      overflow-y: auto;
+      margin-top: 14px;
+    }
+    .log-panel .row {
+      display: grid;
+      grid-template-columns: 52px 70px 1fr;
+      gap: 10px;
+      align-items: baseline;
+      padding: 1px 0;
+    }
+    .log-panel .tick { color: var(--fg-muted); }
+    .log-panel .p1    { color: #f87171; font-weight: 600; }
+    .log-panel .p2    { color: #60a5fa; font-weight: 600; }
+    .log-panel .neut  { color: var(--fg-muted); }
+    .log-panel .verb  { color: var(--fg); font-weight: 600; }
+    .log-panel .meta  { color: var(--fg-muted); }
+    .log-panel .chip {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 999px;
+      margin-left: 6px;
+      letter-spacing: .3px;
+    }
+    .log-panel .chip.capture   { background: rgba(52,211,153,0.18);  color: #86efac; }
+    .log-panel .chip.reinforce { background: rgba(96,165,250,0.14);  color: #93c5fd; }
+    .log-panel .chip.repelled  { background: rgba(248,113,113,0.14); color: #fca5a5; }
+    .log-panel .chip.end       { background: rgba(234,179,8,0.18);   color: #fde68a; }
+    .log-panel hr {
+      border: none;
+      border-top: 1px dashed var(--border);
+      margin: 4px 0;
+    }
+
+    /* Agent mind — V(s) chart + per-decision bars in log */
+    .mind-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      margin-top: 14px;
+    }
+    .mind-panel .mind-title {
+      color: var(--fg-muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      margin-bottom: 6px;
+    }
+    .mind-chart svg { display: block; width: 100%; height: 140px; }
+    .mind-panel { padding: 8px 12px; margin-top: 0; }
+    .mind-panel .mind-title { margin-bottom: 4px; }
+    .mind-legend {
+      display: flex;
+      gap: 16px;
+      font-size: 11px;
+      color: var(--fg-muted);
+      margin-top: 4px;
+    }
+    .mind-legend .swatch {
+      display: inline-block;
+      width: 10px; height: 2px;
+      vertical-align: middle;
+      margin-right: 4px;
+    }
+
+    .log-panel .think {
+      grid-column: 3;
+      margin: 2px 0 6px 0;
+      padding: 6px 10px;
+      background: rgba(255,255,255,0.02);
+      border-left: 2px solid var(--border);
+      border-radius: 4px;
+      font-size: 11px;
+      color: var(--fg-muted);
+    }
+    .log-panel .think .row-mini {
+      display: grid;
+      grid-template-columns: 52px 1fr;
+      gap: 10px;
+      align-items: center;
+      margin: 2px 0;
+    }
+    .log-panel .think .head-label { color: var(--fg-muted); font-size: 10px; text-transform: uppercase; letter-spacing: .4px; }
+    .log-panel .think .bars { display: flex; gap: 3px; align-items: stretch; flex-wrap: wrap; }
+    .log-panel .think .bar {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-family: var(--mono);
+      font-size: 10px;
+      background: rgba(96,165,250,0.10);
+      color: var(--fg);
+    }
+    .log-panel .think .bar.picked {
+      background: rgba(96,165,250,0.28);
+      color: #dbeafe;
+      font-weight: 600;
+    }
+    .log-panel .think .vh {
+      display: flex; gap: 14px;
+      color: var(--fg-muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+    .log-panel .think .vh b { color: var(--fg); font-weight: 600; }
     .meta-row {
       display: flex;
       gap: 24px;
@@ -109,27 +325,74 @@
       <div class="pair"><span class="label">Status</span><span class="value muted" id="status">Drop an events.json onto the canvas to load</span></div>
     </div>
 
-    <div class="viewer">
-      <div></div>
-      <div class="canvas-wrap" id="canvas-wrap">
-        <canvas id="canvas"></canvas>
-        <div class="dropzone" id="dropzone">
-          <div>Drop an <span class="inline-code">events.json</span> file here</div>
-          <code>or append ?url=&lt;path-to-events.json&gt; to this URL</code>
+    <div class="workspace">
+      <div class="workspace-left">
+        <div class="viewer">
+          <div class="canvas-wrap" id="canvas-wrap">
+            <canvas id="canvas"></canvas>
+            <div class="dropzone" id="dropzone">
+              <div>Drop an <span class="inline-code">events.json</span> file here</div>
+              <code>or append ?url=&lt;path-to-events.json&gt; to this URL</code>
+            </div>
+          </div>
+          <div class="controls">
+            <button id="play" class="primary">Play</button>
+            <button id="restart">Restart</button>
+            <input type="range" id="scrub" min="0" max="100" step="0.01" value="0">
+            <span class="time" id="time">t = 0 / 0</span>
+            <select id="speed">
+              <option value="0.5">0.5×</option>
+              <option value="1">1×</option>
+              <option value="2">2×</option>
+              <option value="4" selected>4×</option>
+              <option value="8">8×</option>
+            </select>
+            <button id="download-log" title="Download a narrated text log of this game">Log .txt</button>
+            <button id="copy-url" title="Copy share link (for sending to Claude)">Copy link</button>
+          </div>
+        </div>
+
+        <div class="mind-panel" id="mind-panel" style="display:none">
+          <div class="mind-title">V(s) — "am I winning?" per agent</div>
+          <div class="mind-chart"><svg id="mind-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg></div>
+          <div class="mind-legend">
+            <span><span class="swatch" style="background:#f87171"></span>P1 critic</span>
+            <span><span class="swatch" style="background:#60a5fa"></span>P2 critic</span>
+            <span>Dashed lines at ±1 and 0.</span>
+          </div>
+        </div>
+
+        <div class="mind-panel" id="force-panel" style="display:none">
+          <div class="mind-title">Force — buildings owned &amp; total units (incl. in-flight)</div>
+          <div class="mind-chart"><svg id="force-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg></div>
+          <div class="mind-legend">
+            <span><span class="swatch" style="background:#f87171"></span>P1</span>
+            <span><span class="swatch" style="background:#60a5fa"></span>P2</span>
+            <span>Solid = total units · dashed = buildings owned.</span>
+          </div>
+        </div>
+
+        <div class="mind-panel" id="reward-panel" style="display:none">
+          <div class="mind-title">Reward accumulation — shaping (±0.1 capture/loss) vs. terminal (±1.0 win/lose)</div>
+          <div class="mind-chart"><svg id="reward-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg></div>
+          <div class="mind-legend" id="reward-breakdown">
+            <span><span class="swatch" style="background:#f87171"></span>P1</span>
+            <span><span class="swatch" style="background:#60a5fa"></span>P2</span>
+          </div>
         </div>
       </div>
-      <div class="controls">
-        <button id="play" class="primary">Play</button>
-        <button id="restart">Restart</button>
-        <input type="range" id="scrub" min="0" max="100" step="0.01" value="0">
-        <span class="time" id="time">t = 0 / 0</span>
-        <select id="speed">
-          <option value="0.5">0.5×</option>
-          <option value="1" selected>1×</option>
-          <option value="2">2×</option>
-          <option value="4">4×</option>
-          <option value="8">8×</option>
-        </select>
+
+      <div class="workspace-right">
+        <div class="tick-table-wrap">
+          <div class="tick-table-header">
+            <span>t</span>
+            <span class="h-p1">P1</span>
+            <span class="h-p2">P2</span>
+          </div>
+          <div class="tick-table" id="tick-table">
+            <div class="muted" style="padding:12px;">Load a replay to see moves.</div>
+          </div>
+        </div>
       </div>
     </div>
   </main>
@@ -147,23 +410,42 @@
     const $scrub    = document.getElementById("scrub");
     const $time     = document.getElementById("time");
     const $speed    = document.getElementById("speed");
+    const $download = document.getElementById("download-log");
+    const $copyUrl  = document.getElementById("copy-url");
+    const $tickTable = document.getElementById("tick-table");
+    const $mindPanel  = document.getElementById("mind-panel");
+    const $mindChart  = document.getElementById("mind-chart");
+    const $forcePanel = document.getElementById("force-panel");
+    const $forceChart = document.getElementById("force-chart");
+    const $rewardPanel = document.getElementById("reward-panel");
+    const $rewardChart = document.getElementById("reward-chart");
+    const $rewardBreakdown = document.getElementById("reward-breakdown");
 
     let player = null;
+    let currentData = null;
 
     function loadReplay(data) {
       if (player) player.destroy();
+      currentData = data;
       player = new ReplayPlayer(data, $canvas);
+      player.setSpeed(parseFloat($speed.value));  // honor the select's default
       $scrub.max = player.duration;
 
       player.onTick(() => {
         $scrub.value = player.t;
         $time.textContent = `t = ${player.t.toFixed(1)} / ${player.duration}`;
+        updateMindCursor(player.t);
+        updateTickTableCursor(player.t);
       });
       player.onStateChange(() => {
         $play.textContent = player.playing ? "Pause" : "Play";
       });
 
       renderMeta(data);
+      renderTickTable(data);
+      renderMindChart(data);
+      renderForceChart(data);
+      renderRewardChart(data);
       $dropzone.style.display = "none";
       $play.textContent = "Play";
       $time.textContent = `t = 0 / ${player.duration}`;
@@ -205,6 +487,672 @@
     $speed.addEventListener("change", () => {
       if (!player) return;
       player.setSpeed(parseFloat($speed.value));
+    });
+
+    // --- Log narration ---------------------------------------------------
+    function ownerName(o) { return o === 1 ? "P1" : o === 2 ? "P2" : "neutral"; }
+    function ownerClass(o) { return o === 1 ? "p1" : o === 2 ? "p2" : "neut"; }
+    function real(internal, scale) { return (internal / scale).toFixed(1); }
+    function esc(s) { return String(s).replace(/[&<>"']/g, c => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+    )); }
+
+    /** Build structured event data once; text + HTML both consume it. */
+    function analyzeEvents(d) {
+      const scale = d.scale ?? 10;
+      const slotOwner = {};
+      const slotGarrison = {};
+      for (const b of d.map.buildings) {
+        slotOwner[b.slot] = b.init.owner;
+        slotGarrison[b.slot] = b.init.garrison;
+      }
+      const sendByGroup = {};
+      const out = [];
+      for (const e of d.events) {
+        if (e.kind === "send") {
+          sendByGroup[e.group] = e;
+          out.push({
+            t: e.t, kind: "send",
+            owner: e.owner, src: e.src, dst: e.dst,
+            count: e.count, count_real: +real(e.count, scale),
+            src_after: e.src_garrison_after, src_after_real: +real(e.src_garrison_after, scale),
+            arrive_t: e.arrive_t, group: e.group,
+          });
+          slotGarrison[e.src] = e.src_garrison_after;
+        } else if (e.kind === "arrive") {
+          const s = sendByGroup[e.group];
+          const beforeOwner = slotOwner[e.dst];
+          const beforeGarrison = slotGarrison[e.dst];
+          let verdict = "reinforce";
+          if (s && s.owner !== beforeOwner) {
+            verdict = e.dst_owner_after === s.owner ? "capture" : "repelled";
+          }
+          out.push({
+            t: e.t, kind: "arrive", group: e.group,
+            owner: s?.owner, count: s?.count,
+            count_real: s ? +real(s.count, scale) : null,
+            dst: e.dst,
+            before: { owner: beforeOwner, garrison: beforeGarrison, garrison_real: +real(beforeGarrison, scale) },
+            after:  { owner: e.dst_owner_after, garrison: e.dst_garrison_after, garrison_real: +real(e.dst_garrison_after, scale) },
+            verdict,
+          });
+          slotOwner[e.dst] = e.dst_owner_after;
+          slotGarrison[e.dst] = e.dst_garrison_after;
+        } else if (e.kind === "end") {
+          out.push({ t: e.t, kind: "end", winner: e.winner });
+        }
+      }
+      return out;
+    }
+
+    /** Plain text, for download/copy. */
+    function narrateText(d) {
+      const scale = d.scale ?? 10;
+      const lines = [];
+      lines.push("# Mushroom Wars v2 — Game log");
+      lines.push(`game_id:     ${d.game_id ?? "?"}`);
+      lines.push(`sim_version: ${d.sim_version ?? "?"}`);
+      lines.push(`level:       ${d.level_name ?? "?"}`);
+      lines.push(`seed:        ${d.seed ?? "?"}`);
+      lines.push(`duration:    ${d.duration_ticks} ticks`);
+      const w = d.winner === 1 ? "P1" : d.winner === 2 ? "P2" : d.winner === 0 ? "draw" : "?";
+      lines.push(`winner:      ${w}`);
+      lines.push("");
+      lines.push("## Initial layout (real units)");
+      for (const b of d.map.buildings) {
+        lines.push(
+          `  slot ${String(b.slot).padStart(2)}  ${ownerName(b.init.owner).padEnd(7)} ` +
+          `garrison=${real(b.init.garrison, scale)}/${real(b.capacity, scale)}  at (${b.x}, ${b.y})`
+        );
+      }
+      lines.push("");
+      lines.push("## Events");
+
+      const evs = analyzeEvents(d);
+      let lastT = null;
+      for (const e of evs) {
+        if (lastT !== null && e.t !== lastT) lines.push("");
+        lastT = e.t;
+        const t = `t=${String(e.t).padStart(3)}`;
+        if (e.kind === "send") {
+          lines.push(
+            `${t}  ${ownerName(e.owner).padEnd(2)}  SEND    slot ${e.src}→${e.dst}  ` +
+            `×${e.count_real.toFixed(1)}   (src→${e.src_after_real.toFixed(1)}, arrives t=${e.arrive_t}) #g${e.group}`
+          );
+        } else if (e.kind === "arrive") {
+          const side = ownerName(e.owner ?? 0);
+          const c = e.count_real?.toFixed(1) ?? "?";
+          const b = `${ownerName(e.before.owner)} ${e.before.garrison_real.toFixed(1)}`;
+          const a = `${ownerName(e.after.owner)} ${e.after.garrison_real.toFixed(1)}`;
+          const v = e.verdict === "capture" ? "CAPTURE"
+                  : e.verdict === "repelled" ? "REPELLED"
+                  : "reinforce";
+          lines.push(
+            `${t}  ${side.padEnd(2)}  ARRIVE  slot ${e.dst}  ×${c}   ` +
+            `${b}  →  ${a}   [${v}] #g${e.group}`
+          );
+        } else if (e.kind === "end") {
+          const w = e.winner === 1 ? "P1" : e.winner === 2 ? "P2" : e.winner === 0 ? "draw" : "?";
+          lines.push(`${t}  END     ${w} wins`);
+        }
+      }
+      return lines.join("\n") + "\n";
+    }
+
+    /** Render the small bar row for one head's top-K (src/type/tgt).
+     * `picked` is the index the agent chose; that slot is highlighted. */
+    function renderHeadBars(label, top, picked, formatter) {
+      if (!top || top.length === 0) return "";
+      const pills = top.map(([idx, p]) => {
+        const pickedCls = idx === picked ? " picked" : "";
+        return `<span class="bar${pickedCls}">${formatter(idx)} ${(p * 100).toFixed(0)}%</span>`;
+      }).join("");
+      return `<div class="row-mini"><span class="head-label">${label}</span><span class="bars">${pills}</span></div>`;
+    }
+
+    const TYPE_LABELS = ["25%", "50%", "75%", "100%", "noop"];
+
+    /** Expandable "mind" block rendered below a SEND or WAIT row. */
+    function renderThinkBlock(decision) {
+      if (!decision) return "";
+      const v = decision.value.toFixed(2);
+      const h = decision.entropy.toFixed(2);
+      const srcBars = renderHeadBars("source", decision.src_top, decision.picked.src, i => `slot ${i}`);
+      const typeBars = renderHeadBars("type", decision.type_top, decision.picked.type, i => TYPE_LABELS[i] ?? `?${i}`);
+      const tgtBars = renderHeadBars("target", decision.tgt_top, decision.picked.tgt, i => `slot ${i}`);
+      return (
+        `<div class="think">` +
+          `<div class="vh">V(s) <b>${v}</b> · entropy <b>${h}</b></div>` +
+          srcBars + typeBars + tgtBars +
+        `</div>`
+      );
+    }
+
+    // ---- Compact tick table (right column) ------------------------------
+    // One row per meaningful tick. Each row has: t | P1 cell | P2 cell.
+    // Click a row to expand an inline "think" panel with policy bars.
+
+    function fmtSend(e, scale) {
+      const ct = (e.count / scale).toFixed(1);
+      const sa = (e.src_garrison_after / scale).toFixed(1);
+      const T  = TYPE_LABELS[e.type_idx ?? 0];
+      return `<span class="send">⇒ SEND s${e.src}→${e.dst} ×${ct} <span class="muted">(s→${sa}, @${e.arrive_t})</span></span>`;
+    }
+    function fmtArriveForPlayer(e, p, scale) {
+      // e is an arrive event (from analyzeEvents). Return the cell text for
+      // player p: captures/losses/reinforces depending on how it affects p.
+      const ct = (e.count_real).toFixed(1);
+      const atk = e.owner;
+      const before = e.before.owner;
+      const after  = e.after.owner;
+      // Reinforce on my building
+      if (atk === p && before === p && after === p) {
+        return `<span class="rein">↩ reinforce s${e.dst} +${ct}</span>`;
+      }
+      // I captured
+      if (atk === p && after === p && before !== p) {
+        return `<span class="cap">+ capture s${e.dst} ×${ct} → ${e.after.garrison_real.toFixed(1)}</span>`;
+      }
+      // I lost (was mine before, now not)
+      if (before === p && after !== p) {
+        return `<span class="loss">− lost s${e.dst} (to ${after === 1 ? "P1" : after === 2 ? "P2" : "neutral"})</span>`;
+      }
+      // My attack bounced off enemy
+      if (atk === p && after !== p) {
+        return `<span class="loss">· attack bounced s${e.dst}</span>`;
+      }
+      return "";
+    }
+
+    function renderTickTable(d) {
+      const scale = d.scale ?? 10;
+      const evs = analyzeEvents(d);
+      const decisions = d.decisions ?? [];
+      const decByKey = new Map();
+      for (const dec of decisions) decByKey.set(`${dec.t}:${dec.player}`, dec);
+      const sendKeys = new Set();
+      for (const e of evs) if (e.kind === "send") sendKeys.add(`${e.t}:${e.owner}`);
+
+      // Collect relevant ticks.
+      const ticks = new Set();
+      for (const e of evs) ticks.add(e.t);
+      for (const dec of decisions) ticks.add(dec.t);
+      const sortedTicks = [...ticks].sort((a, b) => a - b);
+
+      const rows = sortedTicks.map(t => {
+        const sendsAtT = evs.filter(e => e.t === t && e.kind === "send");
+        const arrivesAtT = evs.filter(e => e.t === t && e.kind === "arrive");
+        const endAtT = evs.find(e => e.t === t && e.kind === "end");
+        const decsAtT = decisions.filter(dc => dc.t === t);
+
+        // Per-player cell: their decision + their arrivals.
+        function cell(p) {
+          const parts = [];
+          // The send they issued this tick (if any)
+          const send = sendsAtT.find(s => s.owner === p);
+          if (send) {
+            // find the original send event record (with type_idx)
+            const raw = d.events.find(e => e.kind === "send" && e.group === send.group);
+            const ct = send.count_real.toFixed(1);
+            const sa = send.src_after_real.toFixed(1);
+            const travel = send.arrive_t - send.t + 1;
+            parts.push(
+              `<div><span class="p${p}text">⇒ SEND</span> s${send.src}→${send.dst} ×${ct} ` +
+              `<span class="muted">(s→${sa}, @${send.arrive_t})</span></div>`
+            );
+          } else if (decByKey.has(`${t}:${p}`)) {
+            // Decision at this tick but no send — NOOP
+            parts.push(`<div class="wait">· wait</div>`);
+          }
+          // Arrivals touching this player
+          for (const arr of arrivesAtT) {
+            const html = fmtArriveForPlayer(arr, p, scale);
+            if (html) parts.push(`<div>${html}</div>`);
+          }
+          return parts.join("") || `<div class="wait">·</div>`;
+        }
+
+        const hasDecision = decsAtT.length > 0;
+        const clickable = hasDecision ? "cursor:pointer" : "cursor:default";
+        const tickStr = String(t).padStart(3);
+        let row = (
+          `<div class="tick-row" data-t="${t}" style="${clickable}">` +
+            `<span class="t">t=${tickStr}</span>` +
+            `<span class="col p1text">${cell(1)}</span>` +
+            `<span class="col p2text">${cell(2)}</span>` +
+          `</div>`
+        );
+        if (endAtT) {
+          const w = endAtT.winner === 1 ? "P1" : endAtT.winner === 2 ? "P2" : "draw";
+          row += `<div class="tick-row"><span class="t">t=${tickStr}</span><span class="col end" style="grid-column:2 / span 2">END — ${w} wins</span></div>`;
+        }
+        return row;
+      });
+
+      $tickTable.innerHTML = rows.join("") || `<div class="muted" style="padding:12px;">No events.</div>`;
+
+      // Click-to-expand think blocks. One expanded row at a time.
+      $tickTable.addEventListener("click", (ev) => {
+        const row = ev.target.closest(".tick-row");
+        if (!row || !row.dataset.t) return;
+        const t = parseInt(row.dataset.t, 10);
+        // Collapse any existing detail panels.
+        $tickTable.querySelectorAll(".tick-details").forEach(el => el.remove());
+        $tickTable.querySelectorAll(".tick-row.expanded").forEach(el => el.classList.remove("expanded"));
+        // If this row was already expanded we're done (toggle off).
+        if (row.classList.contains("was-expanded")) {
+          $tickTable.querySelectorAll(".was-expanded").forEach(el => el.classList.remove("was-expanded"));
+          return;
+        }
+        $tickTable.querySelectorAll(".was-expanded").forEach(el => el.classList.remove("was-expanded"));
+        const decs = decisions.filter(dc => dc.t === t);
+        if (decs.length === 0) return;
+        row.classList.add("expanded", "was-expanded");
+        const blocks = decs.map(dc => renderThinkBlockTable(dc)).join("");
+        row.insertAdjacentHTML("afterend", `<div class="tick-details">${blocks}</div>`);
+      }, { once: false });
+    }
+
+    /** Compact "think" block for the tick table — same data as before,
+     * just styled for the narrow right column. */
+    function renderThinkBlockTable(dec) {
+      if (!dec) return "";
+      const sideLbl = dec.player === 1 ? "P1" : "P2";
+      const sideCls = dec.player === 1 ? "p1" : "p2";
+      function bars(label, top, picked, fmt) {
+        if (!top || top.length === 0) return "";
+        const pills = top.slice(0, 5).map(([i, p]) => {
+          const cls = i === picked ? " picked" : "";
+          return `<span class="bar${cls}">${fmt(i)} ${(p * 100).toFixed(0)}%</span>`;
+        }).join("");
+        return `<div class="d-row"><span class="head-label">${label}</span>${pills}</div>`;
+      }
+      const v = dec.value.toFixed(2);
+      const h = dec.entropy.toFixed(2);
+      return (
+        `<div class="d-side ${sideCls}">${sideLbl}</div>` +
+        `<div class="vh">V(s) <b>${v}</b> · entropy <b>${h}</b></div>` +
+        bars("source", dec.src_top,  dec.picked.src,  i => `s${i}`) +
+        bars("type",   dec.type_top, dec.picked.type, i => TYPE_LABELS[i] ?? `?${i}`) +
+        bars("target", dec.tgt_top,  dec.picked.tgt,  i => `s${i}`)
+      );
+    }
+
+    /** Auto-scroll the tick table so the current playback tick is visible,
+     * and highlight the row closest to `t`. */
+    function updateTickTableCursor(t) {
+      const rows = $tickTable.querySelectorAll(".tick-row[data-t]");
+      if (!rows.length) return;
+      let best = rows[0], bestDist = Infinity;
+      for (const row of rows) {
+        const rt = parseInt(row.dataset.t, 10);
+        const d = Math.abs(rt - t);
+        if (d < bestDist) { bestDist = d; best = row; }
+      }
+      rows.forEach(r => r.classList.remove("current"));
+      best.classList.add("current");
+      // Scroll only if the current row is out of view.
+      const container = $tickTable;
+      const rRect = best.getBoundingClientRect();
+      const cRect = container.getBoundingClientRect();
+      if (rRect.top < cRect.top + 20 || rRect.bottom > cRect.bottom - 20) {
+        best.scrollIntoView({ block: "center", behavior: "auto" });
+      }
+    }
+
+    // ---- V(s) + entropy mini-chart ---------------------------------------
+
+    /** Build an SVG polyline from decision data. Returns {minT, maxT, bounds}
+     * stashed on the panel for the cursor updater. */
+    let mindMeta = null;
+
+    /** Shared chart layout used by both V(s) and force charts. */
+    function chartLayout(maxT) {
+      return { W: 800, H: 180, PAD_L: 40, PAD_R: 52, PAD_T: 12, PAD_B: 22, maxT };
+    }
+    function xTickSvg(W, H, PAD_L, PAD_R, PAD_B, maxT, xFor) {
+      const xTicks = [];
+      const step = maxT <= 20 ? 5 : maxT <= 60 ? 10 : maxT <= 200 ? 25 : 50;
+      for (let t = 0; t <= maxT; t += step) xTicks.push(t);
+      if (xTicks[xTicks.length - 1] !== maxT) xTicks.push(maxT);
+      return xTicks.map(t => {
+        const x = xFor(t);
+        return `<line x1="${x}" y1="${H-PAD_B}" x2="${x}" y2="${H-PAD_B+3}" stroke="#3a4155"/>` +
+               `<text x="${x}" y="${H-PAD_B+14}" text-anchor="middle" fill="#8a93a6" font-size="10">${t}</text>`;
+      }).join("");
+    }
+
+    function renderMindChart(d) {
+      const decisions = d.decisions ?? [];
+      const p1 = decisions.filter(dc => dc.player === 1);
+      const p2 = decisions.filter(dc => dc.player === 2);
+      if (p1.length === 0 && p2.length === 0) {
+        $mindPanel.style.display = "none";
+        mindMeta = null;
+        return;
+      }
+      $mindPanel.style.display = "block";
+
+      const { W, H, PAD_L, PAD_R, PAD_T, PAD_B } = chartLayout(1);
+      const maxT = Math.max(d.duration_ticks, 1);
+
+      // Auto-range V so nothing clips; include 0 and ±1 reference lines.
+      const allV = [...p1, ...p2].map(dc => dc.value);
+      const vAbs = Math.max(1.0, ...allV.map(v => Math.abs(v))) + 0.15;
+      const vMin = -vAbs, vMax = vAbs;
+
+      const xFor = t => PAD_L + (t / maxT) * (W - PAD_L - PAD_R);
+      const yForV = v => PAD_T + (1 - (v - vMin) / (vMax - vMin)) * (H - PAD_T - PAD_B);
+
+      const pts = ds => ds.map(dc => `${xFor(dc.t)},${yForV(dc.value)}`).join(" ");
+      const zeroY = yForV(0), oneY = yForV(1), negOneY = yForV(-1);
+
+      const yLabels = [
+        { v:  1, label: "+1 winning" },
+        { v:  0, label: " 0" },
+        { v: -1, label: "−1 losing"  },
+      ].filter(l => l.v >= vMin && l.v <= vMax)
+       .map(l => `<text x="${PAD_L-6}" y="${yForV(l.v)+3}" text-anchor="end" fill="#8a93a6" font-size="10">${l.label}</text>`)
+       .join("");
+
+      // Chart colors match the canvas: P1 = red, P2 = blue.
+      const lineP1 = p1.length ? `<polyline points="${pts(p1)}" fill="none" stroke="#f87171" stroke-width="2"/>` : "";
+      const lineP2 = p2.length ? `<polyline points="${pts(p2)}" fill="none" stroke="#60a5fa" stroke-width="2"/>` : "";
+
+      $mindChart.setAttribute("viewBox", `0 0 ${W} ${H}`);
+      $mindChart.innerHTML = `
+        <rect x="${PAD_L}" y="${PAD_T}" width="${W-PAD_L-PAD_R}" height="${H-PAD_T-PAD_B}" fill="#0b0d12" stroke="#262a36"/>
+        <line x1="${PAD_L}" y1="${oneY}"    x2="${W-PAD_R}" y2="${oneY}"    stroke="#2a3346" stroke-dasharray="2 4"/>
+        <line x1="${PAD_L}" y1="${zeroY}"   x2="${W-PAD_R}" y2="${zeroY}"   stroke="#3a4155" stroke-dasharray="3 3"/>
+        <line x1="${PAD_L}" y1="${negOneY}" x2="${W-PAD_R}" y2="${negOneY}" stroke="#2a3346" stroke-dasharray="2 4"/>
+        ${lineP1}
+        ${lineP2}
+        <line x1="${PAD_L}" y1="${H-PAD_B}" x2="${W-PAD_R}" y2="${H-PAD_B}" stroke="#3a4155"/>
+        ${xTickSvg(W, H, PAD_L, PAD_R, PAD_B, maxT, xFor)}
+        ${yLabels}
+        <line id="mind-cursor" x1="${xFor(0)}" y1="${PAD_T}" x2="${xFor(0)}" y2="${H-PAD_B}"
+              stroke="#e6e8ef" stroke-width="1" opacity="0.7"/>
+      `;
+      mindMeta = { W, H, PAD_L, PAD_R, PAD_T, PAD_B, maxT };
+      updateMindCursor(0);
+    }
+
+    /** Build per-tick time series of (buildings_owned, total_units) per player
+     * from the event stream + initial map. Returns arrays for t=0..maxT. */
+    function computeForceSeries(d) {
+      const scale = d.scale ?? 10;
+      const prod = d.prod_per_tick ?? 10;
+      const maxT = d.duration_ticks;
+      // Per-slot state over time
+      const owner = {};   // slot -> current owner
+      const garr  = {};   // slot -> current garrison (internal)
+      const cap   = {};   // slot -> capacity
+      for (const b of d.map.buildings) {
+        owner[b.slot] = b.init.owner;
+        garr[b.slot]  = b.init.garrison;
+        cap[b.slot]   = b.capacity;
+      }
+      // Group ID -> {owner, count}
+      const squads = {};
+
+      // Bucket events by tick.
+      const byT = {};
+      for (const e of d.events) (byT[e.t] = byT[e.t] || []).push(e);
+
+      const buildings = { 1: [], 2: [] };  // array-by-tick of building counts
+      const units     = { 1: [], 2: [] };
+
+      for (let t = 0; t <= maxT; t++) {
+        // Apply production (each owned building +prod, clamped to cap) —
+        // happens each tick except initial state at t=0.
+        if (t > 0) {
+          for (const slot in owner) {
+            if ((owner[slot] === 1 || owner[slot] === 2) && garr[slot] < cap[slot]) {
+              garr[slot] = Math.min(cap[slot], garr[slot] + prod);
+            }
+          }
+        }
+        // Apply events at this tick (sends subtract src garrison; arrives flip owner/garr).
+        for (const e of (byT[t] ?? [])) {
+          if (e.kind === "send") {
+            squads[e.group] = { owner: e.owner, count: e.count };
+            garr[e.src] = e.src_garrison_after;  // authoritative
+          } else if (e.kind === "arrive") {
+            owner[e.dst] = e.dst_owner_after;
+            garr[e.dst]  = e.dst_garrison_after;
+            delete squads[e.group];
+          }
+        }
+        // Snapshot totals.
+        let b1 = 0, b2 = 0, u1 = 0, u2 = 0;
+        for (const slot in owner) {
+          if (owner[slot] === 1) { b1 += 1; u1 += garr[slot]; }
+          else if (owner[slot] === 2) { b2 += 1; u2 += garr[slot]; }
+        }
+        for (const gid in squads) {
+          const s = squads[gid];
+          if (s.owner === 1) u1 += s.count;
+          else if (s.owner === 2) u2 += s.count;
+        }
+        buildings[1].push(b1); buildings[2].push(b2);
+        units[1].push(u1 / scale); units[2].push(u2 / scale);  // show in real units
+      }
+      return { buildings, units, maxT };
+    }
+
+    function renderForceChart(d) {
+      if (!d.map || !d.events || d.events.length === 0) {
+        $forcePanel.style.display = "none";
+        return;
+      }
+      $forcePanel.style.display = "block";
+
+      const { buildings, units, maxT } = computeForceSeries(d);
+      const { W, H, PAD_L, PAD_R, PAD_T, PAD_B } = chartLayout(maxT);
+
+      // Two y-axes conceptually (buildings 0..N, units 0..M) — we share the
+      // range by scaling buildings to match the units' y-axis.
+      const yMax = Math.max(1, ...units[1], ...units[2]) * 1.1;
+      const bMax = Math.max(1, ...buildings[1], ...buildings[2]);
+
+      const xFor = t => PAD_L + (t / maxT) * (W - PAD_L - PAD_R);
+      const yFor = u => PAD_T + (1 - u / yMax) * (H - PAD_T - PAD_B);
+      // buildings axis on the right: 0 = bottom, bMax = top. Render as dashed line.
+      const yForB = b => PAD_T + (1 - b / bMax) * (H - PAD_T - PAD_B);
+
+      const linePts = arr => arr.map((v, i) => `${xFor(i)},${yFor(v)}`).join(" ");
+      const linePtsB = arr => arr.map((v, i) => `${xFor(i)},${yForB(v)}`).join(" ");
+
+      // Right-axis labels for buildings (0..bMax).
+      const bLabelY = [0, Math.ceil(bMax/2), bMax]
+        .map(b => `<text x="${W - PAD_R + 4}" y="${yForB(b)+3}" text-anchor="start" fill="#8a93a6" font-size="10">${b}</text>`)
+        .join("");
+      const uLabelY = [0, Math.round(yMax/2), Math.round(yMax)]
+        .map(u => `<text x="${PAD_L - 6}" y="${yFor(u)+3}" text-anchor="end" fill="#8a93a6" font-size="10">${u}</text>`)
+        .join("");
+
+      $forceChart.setAttribute("viewBox", `0 0 ${W} ${H}`);
+      $forceChart.innerHTML = `
+        <rect x="${PAD_L}" y="${PAD_T}" width="${W-PAD_L-PAD_R}" height="${H-PAD_T-PAD_B}" fill="#0b0d12" stroke="#262a36"/>
+
+        <!-- Buildings (dashed) -->
+        <polyline points="${linePtsB(buildings[1])}" fill="none" stroke="#f87171" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.85"/>
+        <polyline points="${linePtsB(buildings[2])}" fill="none" stroke="#60a5fa" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.85"/>
+
+        <!-- Total units (solid) -->
+        <polyline points="${linePts(units[1])}" fill="none" stroke="#f87171" stroke-width="2"/>
+        <polyline points="${linePts(units[2])}" fill="none" stroke="#60a5fa" stroke-width="2"/>
+
+        <!-- Axes -->
+        <line x1="${PAD_L}" y1="${H-PAD_B}" x2="${W-PAD_R}" y2="${H-PAD_B}" stroke="#3a4155"/>
+        ${xTickSvg(W, H, PAD_L, PAD_R, PAD_B, maxT, xFor)}
+        <text x="${PAD_L-6}" y="${PAD_T+10}" text-anchor="end" fill="#8a93a6" font-size="10">units</text>
+        <text x="${W-PAD_R+4}" y="${PAD_T+10}" text-anchor="start" fill="#8a93a6" font-size="10">bldgs</text>
+        ${uLabelY}
+        ${bLabelY}
+
+        <!-- Cursor -->
+        <line id="force-cursor" x1="${xFor(0)}" y1="${PAD_T}" x2="${xFor(0)}" y2="${H-PAD_B}"
+              stroke="#e6e8ef" stroke-width="1" opacity="0.7"/>
+      `;
+    }
+
+    /** Derive per-player reward stream from events.
+     * Shaping: +0.1 per capture of a neutral/enemy; −0.1 when a player loses
+     *          a previously-owned building to someone else.
+     * Terminal: +1.0 winner / −1.0 loser (0 on draw).
+     * Returns {cum: {1:[…], 2:[…]}, breakdown: {1:{captures,losses,terminal,total},2:{…}}, maxT}. */
+    function computeRewardSeries(d) {
+      const maxT = d.duration_ticks;
+      const REWARD_CAPTURE = 0.1;
+      const REWARD_LOSS    = -0.1;
+      const REWARD_WIN     = 1.0;
+      const REWARD_LOSE    = -1.0;
+
+      const cum = { 1: new Array(maxT + 1).fill(0), 2: new Array(maxT + 1).fill(0) };
+      const bk  = { 1: { captures: 0, losses: 0, terminal: 0 },
+                    2: { captures: 0, losses: 0, terminal: 0 } };
+
+      const byT = {};
+      for (const e of d.events) (byT[e.t] = byT[e.t] || []).push(e);
+      // Initial owners (for tracking "lost from P1/P2" at each arrive).
+      const owner = {};
+      for (const b of d.map.buildings) owner[b.slot] = b.init.owner;
+      // Need send owner to know who was attacking.
+      const sendOwner = {};
+
+      let r1 = 0, r2 = 0;
+      for (let t = 0; t <= maxT; t++) {
+        for (const e of (byT[t] ?? [])) {
+          if (e.kind === "send") {
+            sendOwner[e.group] = e.owner;
+          } else if (e.kind === "arrive") {
+            const attacker = sendOwner[e.group];
+            const before = owner[e.dst];
+            const after  = e.dst_owner_after;
+            // A capture event = the arriving side is NOT the pre-owner and ends up as owner.
+            if (attacker !== undefined && attacker !== before && after === attacker) {
+              // +0.1 to attacker; −0.1 to defender if the defender was a player
+              if (attacker === 1) { r1 += REWARD_CAPTURE; bk[1].captures += REWARD_CAPTURE; }
+              else if (attacker === 2) { r2 += REWARD_CAPTURE; bk[2].captures += REWARD_CAPTURE; }
+              if (before === 1) { r1 += REWARD_LOSS; bk[1].losses += REWARD_LOSS; }
+              else if (before === 2) { r2 += REWARD_LOSS; bk[2].losses += REWARD_LOSS; }
+            }
+            owner[e.dst] = after;
+          } else if (e.kind === "end") {
+            if (e.winner === 1)      { r1 += REWARD_WIN;  r2 += REWARD_LOSE;
+                                       bk[1].terminal = REWARD_WIN; bk[2].terminal = REWARD_LOSE; }
+            else if (e.winner === 2) { r1 += REWARD_LOSE; r2 += REWARD_WIN;
+                                       bk[1].terminal = REWARD_LOSE; bk[2].terminal = REWARD_WIN; }
+          }
+        }
+        cum[1][t] = r1;
+        cum[2][t] = r2;
+      }
+      bk[1].total = bk[1].captures + bk[1].losses + bk[1].terminal;
+      bk[2].total = bk[2].captures + bk[2].losses + bk[2].terminal;
+      return { cum, bk, maxT };
+    }
+
+    function renderRewardChart(d) {
+      if (!d.map || !d.events || d.events.length === 0) {
+        $rewardPanel.style.display = "none";
+        return;
+      }
+      $rewardPanel.style.display = "block";
+
+      const { cum, bk, maxT } = computeRewardSeries(d);
+      const { W, H, PAD_L, PAD_R, PAD_T, PAD_B } = chartLayout(maxT);
+
+      // Symmetric y-range around 0 so win/lose symmetry reads cleanly.
+      const all = [...cum[1], ...cum[2]];
+      const yAbs = Math.max(1.2, ...all.map(v => Math.abs(v))) * 1.05;
+      const yMin = -yAbs, yMax = yAbs;
+
+      const xFor = t => PAD_L + (t / Math.max(maxT, 1)) * (W - PAD_L - PAD_R);
+      const yFor = v => PAD_T + (1 - (v - yMin) / (yMax - yMin)) * (H - PAD_T - PAD_B);
+
+      const pts = arr => arr.map((v, i) => `${xFor(i)},${yFor(v)}`).join(" ");
+      const zeroY = yFor(0), oneY = yFor(1), negOneY = yFor(-1);
+
+      // Breakdown text — the thing Paul wants to eyeball.
+      const fmt = n => (n >= 0 ? "+" : "") + n.toFixed(1);
+      const pct = (num, denom) => {
+        const a = Math.abs(num), b = Math.abs(denom);
+        if (a + b === 0) return "—";
+        return `${Math.round(100 * a / (a + b))}% shaping`;
+      };
+      $rewardBreakdown.innerHTML = `
+        <span><span class="swatch" style="background:#f87171"></span>
+          <b>P1 total ${fmt(bk[1].total)}</b>
+          <span class="muted"> = captures ${fmt(bk[1].captures)}, losses ${fmt(bk[1].losses)}, terminal ${fmt(bk[1].terminal)}
+            · ${pct(bk[1].captures + bk[1].losses, bk[1].terminal)}</span>
+        </span>
+        <span><span class="swatch" style="background:#60a5fa"></span>
+          <b>P2 total ${fmt(bk[2].total)}</b>
+          <span class="muted"> = captures ${fmt(bk[2].captures)}, losses ${fmt(bk[2].losses)}, terminal ${fmt(bk[2].terminal)}
+            · ${pct(bk[2].captures + bk[2].losses, bk[2].terminal)}</span>
+        </span>
+      `;
+
+      // Y labels at ±1, 0 if in range.
+      const yLabelSvg = [
+        { v:  1, label: "+1 win" },
+        { v:  0, label: " 0" },
+        { v: -1, label: "−1 lose" },
+      ].filter(l => l.v >= yMin && l.v <= yMax)
+       .map(l => `<text x="${PAD_L-6}" y="${yFor(l.v)+3}" text-anchor="end" fill="#8a93a6" font-size="10">${l.label}</text>`)
+       .join("");
+
+      $rewardChart.setAttribute("viewBox", `0 0 ${W} ${H}`);
+      $rewardChart.innerHTML = `
+        <rect x="${PAD_L}" y="${PAD_T}" width="${W-PAD_L-PAD_R}" height="${H-PAD_T-PAD_B}" fill="#0b0d12" stroke="#262a36"/>
+        <line x1="${PAD_L}" y1="${oneY}"    x2="${W-PAD_R}" y2="${oneY}"    stroke="#2a3346" stroke-dasharray="2 4"/>
+        <line x1="${PAD_L}" y1="${zeroY}"   x2="${W-PAD_R}" y2="${zeroY}"   stroke="#3a4155" stroke-dasharray="3 3"/>
+        <line x1="${PAD_L}" y1="${negOneY}" x2="${W-PAD_R}" y2="${negOneY}" stroke="#2a3346" stroke-dasharray="2 4"/>
+
+        <polyline points="${pts(cum[1])}" fill="none" stroke="#f87171" stroke-width="2"/>
+        <polyline points="${pts(cum[2])}" fill="none" stroke="#60a5fa" stroke-width="2"/>
+
+        <line x1="${PAD_L}" y1="${H-PAD_B}" x2="${W-PAD_R}" y2="${H-PAD_B}" stroke="#3a4155"/>
+        ${xTickSvg(W, H, PAD_L, PAD_R, PAD_B, maxT, xFor)}
+        ${yLabelSvg}
+
+        <line id="reward-cursor" x1="${xFor(0)}" y1="${PAD_T}" x2="${xFor(0)}" y2="${H-PAD_B}"
+              stroke="#e6e8ef" stroke-width="1" opacity="0.7"/>
+      `;
+    }
+
+    function updateMindCursor(t) {
+      if (!mindMeta) return;
+      const { W, PAD_L, PAD_R, maxT } = mindMeta;
+      const x = PAD_L + (Math.min(t, maxT) / maxT) * (W - PAD_L - PAD_R);
+      for (const id of ["mind-cursor", "force-cursor", "reward-cursor"]) {
+        const cur = document.getElementById(id);
+        if (cur) { cur.setAttribute("x1", x); cur.setAttribute("x2", x); }
+      }
+    }
+
+    $download.addEventListener("click", () => {
+      if (!currentData) return;
+      const text = narrateText(currentData);
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `mw2-game-${(currentData.game_id ?? "unknown").slice(0, 8)}.log.txt`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
+
+    $copyUrl.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(location.href);
+        const orig = $copyUrl.textContent;
+        $copyUrl.textContent = "Copied ✓";
+        setTimeout(() => { $copyUrl.textContent = orig; }, 1200);
+      } catch (err) {
+        prompt("Copy this link:", location.href);
+      }
     });
 
     // --- Drag + drop ------------------------------------------------------

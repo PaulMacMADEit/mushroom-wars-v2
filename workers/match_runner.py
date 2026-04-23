@@ -110,7 +110,12 @@ def _play_one_game(
 
     from sim.envs.opponents import random_legal_opponent
 
-    # Choose P2: neural net (default) or random_legal baseline.
+    recorder: Recorder | None = None
+    if record and game_id is not None:
+        recorder = Recorder(game_id=str(game_id), level_name=level_name, seed=int(seed))
+
+    # Choose P2: neural net (default) or random_legal baseline. The neural
+    # opponent gets the recorder so P2's decisions are captured too.
     if p2_weights_path is None:
         opponent = random_legal_opponent
     else:
@@ -118,10 +123,8 @@ def _play_one_game(
             weights_path=p2_weights_path,
             obs_norm_path=p2_obs_norm_path,
             device="cpu",
+            recorder=recorder,
         )
-    recorder: Recorder | None = None
-    if record and game_id is not None:
-        recorder = Recorder(game_id=str(game_id), level_name=level_name, seed=int(seed))
 
     env = MushroomEnv(level_name=level_name, opponent=opponent, seed=seed, recorder=recorder)
     obs, info = env.reset(seed=seed)
@@ -135,6 +138,18 @@ def _play_one_game(
     def _pick_p1_action(o, m):
         if p1_agent is not None:
             x = _encode(o)
+            # When recording, use the diag variant so we can capture the
+            # policy breakdown (value, top-k per head, entropy).
+            if recorder is not None:
+                action, diag = p1_agent.act_one_with_diag(x, m)
+                # Decision stamped at post-tick time (matches event timestamps
+                # — env.step increments state.tick by decision_interval).
+                recorder.record_decision(
+                    tick=int(env.state.tick + 1),
+                    player=C.OWNER_P1,
+                    diag=diag,
+                )
+                return int(action)
             return int(p1_agent.act_batch(x[None, :], m[None, :])[0][0])
         # Baseline: sample from valid actions for P1.
         legal_idx = np.where(m)[0]
