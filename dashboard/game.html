@@ -47,8 +47,8 @@
 
     .workspace {
       display: grid;
-      grid-template-columns: 340px minmax(0, 1fr) 360px;
-      gap: 12px;
+      grid-template-columns: 300px minmax(0, 1fr) 320px;
+      gap: 10px;
       flex: 1 1 auto;
       min-height: 0;
     }
@@ -342,7 +342,7 @@
          cap keeps us from overflowing on short windows. */
       width: 100%;
       max-height: 100%;
-      max-width: min(100%, calc(100vh - 120px));
+      max-width: min(100%, calc(100vh - 90px));
       align-self: center;
     }
     canvas { display: block; width: 100%; height: 100%; }
@@ -367,7 +367,7 @@
       border: 1px solid var(--border);
       border-radius: var(--radius);
       width: 100%;
-      max-width: min(100%, calc(100vh - 120px));
+      max-width: min(100%, calc(100vh - 90px));
       box-sizing: border-box;
     }
     .controls button {
@@ -405,6 +405,7 @@
 <body>
   <header>
     <h1>Mushroom Wars v2</h1>
+    <script type="module" src="lib/version.js"></script>
     <nav>
       <a href="./index.html">Overview</a>
       <a href="./runs.html">Runs</a>
@@ -576,8 +577,6 @@
                        : w === 0 ? `<span class="winner-chip draw">Draw</span>`
                        : `<span class="muted">—</span>`;
       $meta.innerHTML = `
-        <div class="pair"><span class="label">Level</span><span class="value">${d.level_name || "—"}</span></div>
-        <div class="pair"><span class="label">Seed</span><span class="value">${d.seed ?? "—"}</span></div>
         <div class="pair"><span class="label">Sim</span><span class="value">${d.sim_version}</span></div>
         <div class="pair"><span class="label">Ticks</span><span class="value">${d.duration_ticks}</span></div>
         <div class="pair"><span class="label">Events</span><span class="value">${d.events.length}</span></div>
@@ -849,16 +848,18 @@
 
       $tickTable.innerHTML = rows.join("") || `<div class="muted" style="padding:12px;">No events.</div>`;
 
-      // Click a row to seek the player to that tick. Also expand the think
-      // block (or collapse if it was already expanded). Play/pause state is
-      // preserved — a click while playing keeps playing from the new tick.
+      // Click a row to jump the player to that tick. Pauses on click so the
+      // moment is observable; user hits play to continue. Also toggles the
+      // think-block expand/collapse on the same click.
       $tickTable.addEventListener("click", (ev) => {
         const row = ev.target.closest(".tick-row");
         if (!row || !row.dataset.t) return;
         const t = parseInt(row.dataset.t, 10);
 
-        // Always seek to the clicked tick.
-        if (player) player.seek(t);
+        if (player) {
+          player.pause();
+          player.seek(t);
+        }
 
         // Collapse any existing detail panels.
         $tickTable.querySelectorAll(".tick-details").forEach(el => el.remove());

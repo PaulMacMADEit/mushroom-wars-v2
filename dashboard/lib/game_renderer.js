@@ -79,6 +79,20 @@ export class ReplayPlayer {
     this.duration    = data.duration_ticks;
     this.endEvent    = data.events.find(e => e.kind === "end") ?? null;
 
+    // Fit-to-bbox: the map is logically 0..map.width but buildings are inset
+    // by a border, so rendering raw map coords leaves visible padding inside
+    // the canvas. Use the actual bbox of placed buildings (with a small
+    // breathing-room margin) so the world fills the canvas tightly.
+    const xs = data.map.buildings.map(b => b.x);
+    const ys = data.map.buildings.map(b => b.y);
+    const margin = 40;  // map units
+    this._bbox = {
+      x0: Math.max(0, Math.min(...xs) - margin),
+      y0: Math.max(0, Math.min(...ys) - margin),
+      x1: Math.min(data.map.width,  Math.max(...xs) + margin),
+      y1: Math.min(data.map.height, Math.max(...ys) + margin),
+    };
+
     this.t = 0;
     this.speed = 1;
     this.playing = false;
@@ -188,15 +202,22 @@ export class ReplayPlayer {
   // --- Rendering ----------------------------------------------------------
 
   _worldToScreen(x, y) {
-    // Just enough padding so buildings near the edge aren't clipped by their radius.
+    // Fit the building bbox into the canvas with uniform scale. Aspect-correct
+    // — leaves a small letterbox on whichever axis is the limiting one.
     const pad = 14;
     const w = this._cssW, h = this._cssH;
-    const size = Math.min(w, h) - pad * 2;
-    const originX = (w - size) / 2;
-    const originY = (h - size) / 2;
+    const bw = this._bbox.x1 - this._bbox.x0;
+    const bh = this._bbox.y1 - this._bbox.y0;
+    const availW = w - pad * 2;
+    const availH = h - pad * 2;
+    const scale = Math.min(availW / bw, availH / bh);
+    const drawnW = bw * scale;
+    const drawnH = bh * scale;
+    const originX = (w - drawnW) / 2;
+    const originY = (h - drawnH) / 2;
     return [
-      originX + (x / this.data.map.width)  * size,
-      originY + (y / this.data.map.height) * size,
+      originX + (x - this._bbox.x0) * scale,
+      originY + (y - this._bbox.y0) * scale,
     ];
   }
 
