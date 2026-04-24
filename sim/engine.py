@@ -75,9 +75,9 @@ def step_tick(
     tb = time.perf_counter_ns()
     state.perf["movement_ns"] += tb - ta
 
-    # 4. Resolve arrivals (sequential reinforce/combat). Produces capture/loss rewards.
+    # 4. Resolve arrivals (simultaneous per target). Produces capture/loss rewards.
     ta = time.perf_counter_ns()
-    dr1, dr2 = _resolve_arrivals(state, arrivals)
+    dr1, dr2 = _resolve_arrivals(state, arrivals, events)
     r1 += dr1
     r2 += dr2
     tb = time.perf_counter_ns()
@@ -205,15 +205,19 @@ def _advance_movement(state: State, events: Optional[list] = None) -> list:
     return arrivals
 
 
-def _resolve_arrivals(state: State, arrivals: list) -> tuple[float, float]:
-    """Apply arrivals in sequence, matching the reference playable sim.
+def _resolve_arrivals(state: State, arrivals: list, events: Optional[list] = None) -> tuple[float, float]:
+    """Apply arrivals simultaneously per target.
 
-    Arrivals are processed in the order produced by `_advance_movement`, which
-    is deterministic because unit-group slots are fixed. Friendly arrivals
-    reinforce up to the building's capacity — excess units are discarded.
-    Hostile arrivals resolve combat against the building's current
-    owner/garrison at that moment, so same-tick contests can capture and then
-    immediately be counterattacked.
+    All groups landing on the same target this tick resolve as one event:
+    friendly groups reinforce together (clamped at capacity); hostile groups
+    attack the (possibly-reinforced) defender simultaneously. When two
+    different hostile owners land the same tick on the same target, the
+    resolution is symmetric — no systematic first-mover advantage.
+
+    Targets are independent — order across different targets doesn't matter.
+    Within a single target, friendlies reinforce before hostile combat.
+
+    Emits `kind:"capture"` events whenever ownership changes.
 
     Returns (reward_p1, reward_p2) from capture/loss events.
     """
@@ -223,7 +227,14 @@ def _resolve_arrivals(state: State, arrivals: list) -> tuple[float, float]:
     b = state.buildings
     r1 = r2 = 0.0
 
+    # Group arrivals by target so the per-target resolution is
+    # order-independent across the full arrival list.
+    from collections import defaultdict
+    by_target: dict[int, list[tuple[int, int]]] = defaultdict(list)
     for tgt, owner, count in arrivals:
+        by_target[int(tgt)].append((int(owner), int(count)))
+
+    for tgt, groups in by_target.items():
         if not b["alive"][tgt]:
             continue
 
@@ -231,28 +242,102 @@ def _resolve_arrivals(state: State, arrivals: list) -> tuple[float, float]:
         garrison = int(b["garrison"][tgt])
         capacity = int(b["capacity"][tgt])
 
-        if owner_before == owner:
-            # Reinforce — clamped at capacity, excess units discarded.
-            b["garrison"][tgt] = min(garrison + count, capacity)
+        # Friendlies match the current owner. Everyone else is hostile.
+        friendlies = sum(c for o, c in groups if o == owner_before)
+        hostile_by_owner: dict[int, int] = defaultdict(int)
+        for o, c in groups:
+            if o != owner_before:
+                hostile_by_owner[o] += c
+
+        # Friendly reinforcement first — clamped at capacity, excess discarded.
+        if friendlies > 0:
+            garrison = min(garrison + friendlies, capacity)
+
+        if not hostile_by_owner:
+            b["garrison"][tgt] = garrison
             continue
 
-        new_garrison, new_owner = _combat(garrison, count, owner, owner_before)
+        new_garrison, new_owner = _simultaneous_combat(
+            garrison, owner_before, hostile_by_owner
+        )
         b["owner"][tgt] = new_owner
         b["garrison"][tgt] = new_garrison
 
-        # Reward bookkeeping.
-        if new_owner == owner:
-            if owner == C.OWNER_P1:
+        if new_owner != owner_before:
+            if events is not None:
+                events.append({
+                    "kind": "capture",
+                    "tgt": int(tgt),
+                    "owner_before": owner_before,
+                    "owner_after": int(new_owner),
+                    "garrison_after": int(new_garrison),
+                })
+            if new_owner == C.OWNER_P1:
                 r1 += C.REWARD_CAPTURE
-            else:
+            elif new_owner == C.OWNER_P2:
                 r2 += C.REWARD_CAPTURE
-        if new_owner != owner_before and owner_before != C.OWNER_NEUTRAL:
             if owner_before == C.OWNER_P1:
                 r1 += C.REWARD_LOSS
-            else:
+            elif owner_before == C.OWNER_P2:
                 r2 += C.REWARD_LOSS
 
     return r1, r2
+
+
+def _simultaneous_combat(
+    garrison: int,
+    owner_before: int,
+    hostile_by_owner: dict[int, int],
+) -> tuple[int, int]:
+    """Resolve one defender against N hostile owners landing simultaneously.
+
+    Model (order-independent, symmetric across hostile owners):
+
+      D  = garrison * DEF_BONUS_NUM                        (defender strength)
+      Ai = count_i  * DEF_BONUS_DEN                        (attacker i strength)
+      A  = sum(Ai)
+
+      A <  D : defender holds, remaining = (D - A) / DEF_BONUS_NUM.
+      A == D : mutual wipeout, defender goes neutral with 0 garrison.
+      A >  D : defender dies. Each attacker loses D * Ai / A (proportional
+               share of defender damage). The attacker with the largest
+               surviving force takes the building; runner-up forces collide
+               1:1 with the winner's survivors. Ties go neutral.
+
+    Reduces to the pre-change single-hostile combat when len(hostile_by_owner)==1.
+    """
+    if not hostile_by_owner:
+        return (garrison, owner_before)
+
+    total_attack = sum(hostile_by_owner.values()) * C.DEF_BONUS_DEN
+    defense = garrison * C.DEF_BONUS_NUM
+
+    if total_attack < defense:
+        remaining_scaled = defense - total_attack
+        remaining = (remaining_scaled + (C.DEF_BONUS_NUM // 2)) // C.DEF_BONUS_NUM
+        return (int(remaining), owner_before)
+    if total_attack == defense:
+        return (0, C.OWNER_NEUTRAL)
+
+    # Attackers overwhelm the defender; split defender damage proportionally.
+    survivors_scaled: dict[int, int] = {}
+    for owner, count in hostile_by_owner.items():
+        attack_i = count * C.DEF_BONUS_DEN
+        # Integer proportional share — floor; residual rounding error is
+        # bounded by len(hostile_by_owner) and is part of the fixed-point model.
+        damage_share = (defense * attack_i) // total_attack
+        survivors_scaled[owner] = attack_i - damage_share
+
+    ordered = sorted(survivors_scaled.items(), key=lambda kv: -kv[1])
+    winner, winner_force = ordered[0]
+    runner_up_force = sum(f for _, f in ordered[1:])
+
+    if winner_force > runner_up_force:
+        remaining_scaled = winner_force - runner_up_force
+        remaining = (remaining_scaled + (C.DEF_BONUS_DEN // 2)) // C.DEF_BONUS_DEN
+        return (int(remaining), winner)
+    # Tied top survivors → mutual kill, neutral.
+    return (0, C.OWNER_NEUTRAL)
 
 
 def _combat(garrison: int, attackers: int, attacker_owner: int, owner_before: int) -> tuple[int, int]:

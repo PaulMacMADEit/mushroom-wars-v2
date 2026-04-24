@@ -1,7 +1,7 @@
 {
   "name": "same tick contest",
   "setup_summary": "neutral 1, p1 10 and p2 6 arrive same tick",
-  "expected_summary": "sequential reference: p1 ends with 4.1",
+  "expected_summary": "simultaneous: p1 larger force wins with 3.7 left",
   "steps": 1,
   "buildings": [
     { "slot": 0, "owner": "p1", "garrison_real": 0, "capacity_real": 100, "x": 0, "y": 0 },
@@ -19,7 +19,7 @@
     "reward_p1_total_eq": 0.1,
     "reward_p2_total_eq": 0.0,
     "buildings": [
-      { "slot": 2, "owner": "p1", "garrison_internal_eq": 41 }
+      { "slot": 2, "owner": "p1", "garrison_internal_eq": 37 }
     ]
   }
 }

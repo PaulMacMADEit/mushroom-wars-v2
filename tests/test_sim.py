@@ -7,9 +7,9 @@ Strategy:
     bounds) run a scripted game and assert on every tick.
   - Movement/production/combat ordering is pinned down with explicit tests so
     accidental re-ordering in engine.step_tick breaks a test loudly.
-  - Key timing/ordering rules (same-tick arrival for 1-tick travel, P1-first
-    action order, production-before-combat, sequential same-tick arrivals)
-    have dedicated tests so any future behaviour change is caught.
+  - Key timing rules (same-tick arrival for 1-tick travel,
+    production-before-combat, simultaneous same-tick arrivals) have
+    dedicated tests so any future behaviour change is caught.
 
 Run: pytest tests/ -v
 """
@@ -576,58 +576,80 @@ def test_send_p1_and_p2_both_act_same_tick():
 # ===========================================================================
 
 
-def test_same_tick_equal_arrivals_resolve_sequentially():
+def test_same_tick_equal_hostiles_mutual_kill():
+    """Equal P1 and P2 forces on a neutral resolve simultaneously → mutual kill.
+
+    50×10 + 50×10 = 1000 attack vs 10×13 = 130 defense. Defender dies.
+    Each attacker loses 130*500/1000 = 65 → survivors 435 each. Tie → neutral.
+    """
     state = reset()
     _clear_groups(state)
     _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP, count=50, travel_ticks=1)
     _inject_group(state, 1, C.OWNER_P2, P2_BASE, N1_TOP, count=50, travel_ticks=1)
     step_tick(state)
-    # P1 lands first: captures with 3.7. P2 then attacks that building with 5.0
-    # and captures with 0.2 remaining.
-    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P2
-    assert int(state.buildings["garrison"][N1_TOP]) == 2
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_NEUTRAL
+    assert int(state.buildings["garrison"][N1_TOP]) == 0
 
 
-def test_same_tick_p1_then_p2_arrivals_chain_resolve():
+def test_same_tick_unequal_hostiles_larger_wins():
+    """Unequal simultaneous hostiles: larger force takes the building."""
     state = reset()
     _clear_groups(state)
     _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP, count=100, travel_ticks=1)
     _inject_group(state, 1, C.OWNER_P2, P2_BASE, N1_TOP, count=60,  travel_ticks=1)
     r1, r2, _ = step_tick(state)
-    # P1 captures with 8.7. P2 then attacks that captured building and leaves it
-    # with (11.31 - 6.0)/1.3 = 4.1 for P1.
+    # total_atk=160*10=1600 vs def=1*13=13. survivors: P1=1000-130*1000/1600=919,
+    # P2=600-130*600/1600=552. P1 wins, remaining=(919-552+5)/10=37.
     assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P1
-    assert int(state.buildings["garrison"][N1_TOP]) == 41
+    assert int(state.buildings["garrison"][N1_TOP]) == 37
     assert r1 == pytest.approx(C.REWARD_CAPTURE)
 
 
-def test_same_tick_p2_second_wave_can_recapture():
+def test_same_tick_swap_order_gives_same_result():
+    """Same two hostiles landing same tick — outcome is insensitive to source
+    unit-group slot order (which used to grant P1 a first-mover advantage)."""
+    state = reset()
+    _clear_groups(state)
+    # Swap slot assignment vs previous test: P2 in slot 0, P1 in slot 1.
+    _inject_group(state, 0, C.OWNER_P2, P2_BASE, N1_TOP, count=60,  travel_ticks=1)
+    _inject_group(state, 1, C.OWNER_P1, P1_BASE, N1_TOP, count=100, travel_ticks=1)
+    step_tick(state)
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P1
+    assert int(state.buildings["garrison"][N1_TOP]) == 37
+
+
+def test_same_tick_p2_larger_force_wins():
+    """P2's larger force beats P1's smaller simultaneous strike."""
     state = reset()
     _clear_groups(state)
     _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP, count=30,  travel_ticks=1)
     _inject_group(state, 1, C.OWNER_P2, P2_BASE, N1_TOP, count=100, travel_ticks=1)
     r1, r2, _ = step_tick(state)
-    # P1 captures first with 1.7. P2 then attacks and recaptures with 7.8.
+    # total_atk=1300, def=13. survivors: P1=300-30=270, P2=1000-100=900.
+    # P2 wins, remaining=(900-270+5)/10=63.
     assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P2
-    assert int(state.buildings["garrison"][N1_TOP]) == 78
+    assert int(state.buildings["garrison"][N1_TOP]) == 63
     assert r2 == pytest.approx(C.REWARD_CAPTURE)
 
 
-def test_same_tick_multiple_groups_apply_in_slot_order():
-    """Two P1 groups + one P2 group all arrive same tick — no pre-cancel."""
+def test_same_tick_multiple_friendly_plus_hostile():
+    """Two P1 groups pool as friendlies… wait, defender is NEUTRAL so both P1
+    groups are hostile. They pool as one P1 attacker vs P2's hostile."""
     state = reset()
     _clear_groups(state)
     _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP, count=40, travel_ticks=1)
     _inject_group(state, 1, C.OWNER_P1, P1_BASE, N1_TOP, count=30, travel_ticks=1)
     _inject_group(state, 2, C.OWNER_P2, P2_BASE, N1_TOP, count=40, travel_ticks=1)
     step_tick(state)
-    # P1 captures with 2.7, reinforces to 5.7, then P2 attacks and leaves P1 with 2.6.
+    # Hostiles: P1=70, P2=40. total=110*10=1100 vs def=13.
+    # survivors: P1=700-130*700/1100=618, P2=400-130*400/1100=353.
+    # P1 wins, remaining=(618-353+5)/10=27.
     assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P1
-    assert int(state.buildings["garrison"][N1_TOP]) == 26
+    assert int(state.buildings["garrison"][N1_TOP]) == 27
 
 
-def test_same_tick_reinforcement_then_attack_resolves_sequentially():
-    """A same-tick reinforcement can land before an enemy attack in slot order."""
+def test_same_tick_reinforcement_defends_vs_simultaneous_attack():
+    """A same-tick reinforcement pools with the defender against the attack."""
     state = reset()
     # Make P1 own N1 with 100 garrison.
     state.buildings["owner"][N1_TOP] = C.OWNER_P1
@@ -636,8 +658,9 @@ def test_same_tick_reinforcement_then_attack_resolves_sequentially():
     _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP, count=40, travel_ticks=1)
     _inject_group(state, 1, C.OWNER_P2, P2_BASE, N1_TOP, count=80, travel_ticks=1)
     step_tick(state)
-    # Production runs before movement, so garrison reaches 110.
-    # P1 reinforcement lands first -> 150. Then P2 attack 80 leaves 88.
+    # Production runs before movement → 110. Friendly reinforcement +40 = 150.
+    # P2 attack 80×10=800 vs defense 150×13=1950 → defender holds, remaining
+    # = (1950-800+6)//13 = 88.
     assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P1
     assert int(state.buildings["garrison"][N1_TOP]) == 88
 
@@ -1197,8 +1220,73 @@ def test_reward_mutual_wipe_both_lose_none_captures():
     assert r1 == 0.0 and r2 == 0.0
 
 
-def test_reward_double_flip_same_tick_nets_out():
-    """If a building flips twice in one tick, capture/loss rewards net to zero."""
+def test_capture_event_emitted_on_ownership_change():
+    """`kind: "capture"` is emitted when a building changes owner."""
+    state = reset()
+    _clear_groups(state)
+    _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP, count=100, travel_ticks=1)
+    events: list = []
+    step_tick(state, events=events)
+    captures = [e for e in events if e.get("kind") == "capture"]
+    assert len(captures) == 1
+    c = captures[0]
+    assert c["tgt"] == N1_TOP
+    assert c["owner_before"] == C.OWNER_NEUTRAL
+    assert c["owner_after"] == C.OWNER_P1
+
+
+def test_no_capture_event_when_defender_holds():
+    """No capture event when ownership is unchanged (defender holds)."""
+    state = reset()
+    state.buildings["owner"][N1_TOP] = C.OWNER_P1
+    state.buildings["garrison"][N1_TOP] = 100
+    _clear_groups(state)
+    _inject_group(state, 0, C.OWNER_P2, P2_BASE, N1_TOP, count=20, travel_ticks=1)
+    events: list = []
+    step_tick(state, events=events)
+    assert not any(e.get("kind") == "capture" for e in events)
+    assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P1
+
+
+def test_p1_p2_symmetric_random_play_winrate():
+    """Scripted random policy for both players — P1 and P2 should win
+    roughly equally. Catches any systematic first-mover or ordering bias.
+
+    With 200 games (2 per seed, swapping sides) the stat band for a fair coin
+    is ~45–55% at 2σ. The OLD sequential sim had ~68% P1 bias on the same
+    sample size — this test would fail loudly under the old engine.
+    """
+    p1_wins = 0
+    total = 0
+    n_games = 200
+    for seed in range(n_games):
+        rng = np.random.default_rng(seed)
+        state = reset(level_name="random_8_12", seed=seed)
+        done = False
+        for _ in range(C.GAME_TIMEOUT_TICKS + 10):
+            a1 = _random_action(state, C.OWNER_P1, rng)
+            a2 = _random_action(state, C.OWNER_P2, rng)
+            _, _, done = step_tick(state, a1, a2)
+            if done:
+                break
+        p1_b = count_owned_buildings(state, C.OWNER_P1)
+        p2_b = count_owned_buildings(state, C.OWNER_P2)
+        if p1_b > p2_b:
+            p1_wins += 1
+            total += 1
+        elif p2_b > p1_b:
+            total += 1
+        # ties/draws (both zero, timeout with equal buildings) don't count
+    p1_rate = p1_wins / max(total, 1)
+    assert 0.40 <= p1_rate <= 0.60, (
+        f"P1 win rate {p1_rate:.3f} out of fair band [0.40, 0.60] "
+        f"({p1_wins}/{total}) — systematic side bias?"
+    )
+
+
+def test_reward_defender_reinforcement_pools_no_flip():
+    """Simultaneous same-size attack + defender reinforcement → defender holds,
+    no ownership change, no capture/loss rewards."""
     state = reset()
     state.buildings["owner"][N1_TOP] = C.OWNER_P2
     state.buildings["garrison"][N1_TOP] = 10
@@ -1206,8 +1294,11 @@ def test_reward_double_flip_same_tick_nets_out():
     _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP, count=100, travel_ticks=1)
     _inject_group(state, 1, C.OWNER_P2, P2_BASE, N1_TOP, count=100, travel_ticks=1)
     r1, r2, _ = step_tick(state)
+    # Prod tick for P2-owned N1 → garrison 10+10=20. Friendly P2 +100 = 120.
+    # P1 attack 100×10=1000 vs defense 120×13=1560 → defender holds,
+    # remaining=(1560-1000+6)//13=43. No flip, no rewards.
     assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P2
-    assert int(state.buildings["garrison"][N1_TOP]) == 4
+    assert int(state.buildings["garrison"][N1_TOP]) == 43
     assert r1 == pytest.approx(0.0)
     assert r2 == pytest.approx(0.0)
 
