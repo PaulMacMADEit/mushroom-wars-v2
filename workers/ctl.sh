@@ -14,40 +14,54 @@
 set -euo pipefail
 
 PC_HOST="paul@192.168.1.137"
-MAC_LABEL="com.mushroomwars.worker"
-MAC_DOMAIN="gui/$(id -u)"
-MAC_PLIST="$HOME/Library/LaunchAgents/$MAC_LABEL.plist"
 PC_UNIT="mushroom-worker.service"
+# Mac manages the worker as a plain nohup process rather than a launchd
+# agent — launchd runs outside TCC's granted-apps list, so it can't read
+# files inside ~/Documents (where this repo lives).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MAC_VENV_PYTHON="$REPO_ROOT/.venv/bin/python"
+MAC_LOG_DIR="$HOME/Library/Logs/mushroom-worker"
+MAC_PID_FILE="$MAC_LOG_DIR/worker.pid"
+
+mac_pid() { [[ -f "$MAC_PID_FILE" ]] && cat "$MAC_PID_FILE" || echo ""; }
+mac_running() {
+  local pid; pid=$(mac_pid)
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
 
 mac() {
+  mkdir -p "$MAC_LOG_DIR"
   case "$1" in
     on)
-      if [[ ! -f "$MAC_PLIST" ]]; then
-        echo "mac: plist missing — run './workers/install_service.sh install' first" >&2
-        exit 1
+      if mac_running; then echo "mac: already running pid=$(mac_pid)"; return; fi
+      (cd "$REPO_ROOT" && \
+        PYTHONUNBUFFERED=1 nohup "$MAC_VENV_PYTHON" -u workers/worker.py \
+          >>"$MAC_LOG_DIR/worker.out.log" 2>>"$MAC_LOG_DIR/worker.err.log" &
+        echo $! > "$MAC_PID_FILE")
+      sleep 1
+      if mac_running; then
+        echo "mac: started pid=$(mac_pid)"
+      else
+        echo "mac: failed to start — see $MAC_LOG_DIR/worker.err.log" >&2; exit 1
       fi
-      # bootstrap is idempotent-ish: errors if already loaded, so ignore.
-      launchctl bootstrap "$MAC_DOMAIN" "$MAC_PLIST" 2>/dev/null || true
-      launchctl kickstart -k "$MAC_DOMAIN/$MAC_LABEL"
-      echo "mac: started"
       ;;
     off)
-      # KeepAlive=true means `stop` auto-restarts; bootout is the only way
-      # to keep it down. Service stays registered via the plist file.
-      launchctl bootout "$MAC_DOMAIN/$MAC_LABEL" 2>/dev/null || true
+      if ! mac_running; then echo "mac: not running"; rm -f "$MAC_PID_FILE"; return; fi
+      kill "$(mac_pid)" 2>/dev/null || true
+      sleep 1
+      if mac_running; then kill -9 "$(mac_pid)" 2>/dev/null || true; fi
+      rm -f "$MAC_PID_FILE"
       echo "mac: stopped"
       ;;
     status)
-      if info=$(launchctl print "$MAC_DOMAIN/$MAC_LABEL" 2>/dev/null); then
-        pid=$(echo "$info"   | awk -F= '/[[:space:]]pid[[:space:]]*=/ {gsub(/[[:space:]]/,"",$2); print $2; exit}')
-        state=$(echo "$info" | awk -F= '/[[:space:]]state[[:space:]]*=/ {sub(/^[[:space:]]*/,"",$2); print $2; exit}')
-        echo "mac: ${state:-unknown} pid=${pid:-none}"
+      if mac_running; then
+        echo "mac: running pid=$(mac_pid)"
       else
-        echo "mac: not loaded (run './workers/ctl.sh mac on' to start, or install_service.sh to register)"
+        echo "mac: not running"
       fi
       ;;
     logs)
-      tail -n 40 -f ~/Library/Logs/mushroom-worker/worker.out.log ~/Library/Logs/mushroom-worker/worker.err.log
+      tail -n 40 -f "$MAC_LOG_DIR/worker.out.log" "$MAC_LOG_DIR/worker.err.log"
       ;;
     *) echo "usage: ctl.sh mac on|off|status|logs" >&2; exit 1 ;;
   esac
