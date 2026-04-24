@@ -137,6 +137,15 @@ class Recorder:
                     "dst_owner_after":     int(b["owner"][dst]),
                     "dst_garrison_after":  int(b["garrison"][dst]),
                 })
+            elif kind == "capture":
+                self._events.append({
+                    "t":              t,
+                    "kind":           "capture",
+                    "tgt":            int(e["tgt"]),
+                    "owner_before":   int(e["owner_before"]),
+                    "owner_after":    int(e["owner_after"]),
+                    "garrison_after": int(e["garrison_after"]),
+                })
             elif kind == "end":
                 w = phase_to_winner(int(e["phase"]))
                 self._winner = w
