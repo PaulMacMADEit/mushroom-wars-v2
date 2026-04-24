@@ -548,6 +548,20 @@ def test_send_to_own_building_reinforces_no_combat():
     assert int(state.buildings["garrison"][N1_TOP]) == 257
 
 
+def test_friendly_reinforce_clamps_at_capacity():
+    """Friendly arrivals must not push garrison above the building's capacity."""
+    state = reset()
+    state.buildings["owner"][N1_TOP] = C.OWNER_P1
+    cap = int(state.buildings["capacity"][N1_TOP])
+    state.buildings["garrison"][N1_TOP] = cap - 5
+    _clear_groups(state)
+    # Inject a 100-unit P1 arrival landing this tick — would overshoot by 95.
+    _inject_group(state, 0, C.OWNER_P1, P1_BASE, N1_TOP,
+                  count=100, travel_ticks=1, progress=0)
+    step_tick(state)
+    assert int(state.buildings["garrison"][N1_TOP]) == cap
+
+
 def test_send_p1_and_p2_both_act_same_tick():
     state = reset()
     a1 = Action(kind="send", type_idx=3, src=P1_BASE, tgt=N3_LEFT)
@@ -640,6 +654,11 @@ def test_victory_playing_by_default():
     assert state.phase == C.PHASE_PLAYING
 
 
+def _expected_win_reward(state) -> float:
+    bonus = C.REWARD_SPEED_BONUS * max(0.0, 1.0 - state.tick / C.GAME_TIMEOUT_TICKS)
+    return C.REWARD_WIN + bonus
+
+
 def test_victory_elimination_p1_wins():
     state = reset()
     state.buildings["owner"][P2_BASE] = C.OWNER_NEUTRAL
@@ -648,7 +667,7 @@ def test_victory_elimination_p1_wins():
     r1, r2, done = step_tick(state)
     assert done
     assert state.phase == C.PHASE_P1_WINS
-    assert r1 == pytest.approx(C.REWARD_WIN)
+    assert r1 == pytest.approx(_expected_win_reward(state))
     assert r2 == pytest.approx(C.REWARD_LOSE)
 
 
@@ -661,7 +680,7 @@ def test_victory_elimination_p2_wins():
     assert done
     assert state.phase == C.PHASE_P2_WINS
     assert r1 == pytest.approx(C.REWARD_LOSE)
-    assert r2 == pytest.approx(C.REWARD_WIN)
+    assert r2 == pytest.approx(_expected_win_reward(state))
 
 
 def test_victory_in_flight_keeps_player_alive():
@@ -1019,7 +1038,12 @@ def test_integration_p1_cant_solo_a_full_base():
 # ===========================================================================
 
 
-def test_spec_friendly_reinforcement_can_exceed_capacity():
+def test_spec_friendly_reinforcement_clamps_at_capacity():
+    """Friendly reinforcement cannot push garrison above the building's capacity.
+
+    Excess incoming units are discarded. This matches the documented spec
+    (``DEFAULT_CAPACITY`` is the max garrison) and was a sim bug fix.
+    """
     state = reset()
     target = N1_TOP
     state.buildings["owner"][target] = C.OWNER_P1
@@ -1030,7 +1054,7 @@ def test_spec_friendly_reinforcement_can_exceed_capacity():
     for _ in range(int(state.travel_matrix[P1_BASE, target]) - 1):
         step_tick(state)
 
-    assert int(state.buildings["garrison"][target]) > int(state.buildings["capacity"][target])
+    assert int(state.buildings["garrison"][target]) == int(state.buildings["capacity"][target])
 
 
 def test_spec_capture_preserves_all_surviving_attackers():

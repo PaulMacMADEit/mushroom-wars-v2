@@ -98,3 +98,7 @@ REWARD_LOSS           = -0.1          # losing a building
 REWARD_WIN            = 1.0
 REWARD_LOSE           = -1.0
 REWARD_DRAW           = 0.0
+# Bonus added to the winner that scales linearly with how quickly they won.
+# Final terminal reward (winner) = REWARD_WIN + REWARD_SPEED_BONUS * (1 - tick / GAME_TIMEOUT_TICKS)
+# At tick=0 the bonus is REWARD_SPEED_BONUS; at timeout it is 0.
+REWARD_SPEED_BONUS    = 0.5

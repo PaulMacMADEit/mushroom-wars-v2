@@ -210,9 +210,10 @@ def _resolve_arrivals(state: State, arrivals: list) -> tuple[float, float]:
 
     Arrivals are processed in the order produced by `_advance_movement`, which
     is deterministic because unit-group slots are fixed. Friendly arrivals
-    reinforce without a cap. Hostile arrivals resolve combat against the
-    building's current owner/garrison at that moment, so same-tick contests
-    can capture and then immediately be counterattacked.
+    reinforce up to the building's capacity — excess units are discarded.
+    Hostile arrivals resolve combat against the building's current
+    owner/garrison at that moment, so same-tick contests can capture and then
+    immediately be counterattacked.
 
     Returns (reward_p1, reward_p2) from capture/loss events.
     """
@@ -228,10 +229,11 @@ def _resolve_arrivals(state: State, arrivals: list) -> tuple[float, float]:
 
         owner_before = int(b["owner"][tgt])
         garrison = int(b["garrison"][tgt])
+        capacity = int(b["capacity"][tgt])
 
         if owner_before == owner:
-            # Reinforce — not combat.
-            b["garrison"][tgt] = garrison + count
+            # Reinforce — clamped at capacity, excess units discarded.
+            b["garrison"][tgt] = min(garrison + count, capacity)
             continue
 
         new_garrison, new_owner = _combat(garrison, count, owner, owner_before)
@@ -299,17 +301,22 @@ def _check_victory(state: State) -> tuple[float, float, bool]:
     p1_alive = p1_bldgs > 0 or has_in_flight(state, C.OWNER_P1)
     p2_alive = p2_bldgs > 0 or has_in_flight(state, C.OWNER_P2)
 
+    # Linear speed bonus: faster wins earn more. Decays from REWARD_SPEED_BONUS
+    # at tick=0 to 0 at timeout. Loser/draw rewards are unchanged.
+    speed_bonus = C.REWARD_SPEED_BONUS * max(0.0, 1.0 - state.tick / C.GAME_TIMEOUT_TICKS)
+    win_reward = C.REWARD_WIN + speed_bonus
+
     if not p1_alive and not p2_alive:
         state.phase = C.PHASE_DRAW
         return C.REWARD_DRAW, C.REWARD_DRAW, True
     if not p1_alive:
         state.phase = C.PHASE_P2_WINS
-        return C.REWARD_LOSE, C.REWARD_WIN, True
+        return C.REWARD_LOSE, win_reward, True
     if not p2_alive:
         state.phase = C.PHASE_P1_WINS
-        return C.REWARD_WIN, C.REWARD_LOSE, True
+        return win_reward, C.REWARD_LOSE, True
 
-    # Timeout: tiebreak buildings → units → draw.
+    # Timeout: tiebreak buildings → units → draw. No speed bonus on timeout.
     if state.tick >= C.GAME_TIMEOUT_TICKS:
         if p1_bldgs > p2_bldgs:
             state.phase = C.PHASE_P1_WINS

@@ -185,7 +185,11 @@ def test_env_terminates_on_elimination():
     _, reward, terminated, truncated, info = env.step(NOOP_INDEX)
     assert terminated
     assert not truncated
-    assert reward == pytest.approx(C.REWARD_WIN)
+    # Win reward includes a speed bonus that decays from REWARD_SPEED_BONUS at
+    # tick=0 to 0 at GAME_TIMEOUT_TICKS. Elimination happens within the first
+    # decision interval, so the bonus is essentially full.
+    expected_bonus = C.REWARD_SPEED_BONUS * max(0.0, 1.0 - env.state.tick / C.GAME_TIMEOUT_TICKS)
+    assert reward == pytest.approx(C.REWARD_WIN + expected_bonus)
     assert info["phase"] == C.PHASE_P1_WINS
 
 

@@ -1,7 +1,7 @@
 {
-  "name": "reinforce over cap",
+  "name": "reinforce clamps at cap",
   "setup_summary": "friendly target 30/30, reinforced by 40",
-  "expected_summary": "30 + 40 = 70 on target",
+  "expected_summary": "30 + 40 clamped to cap = 30 on target (excess discarded)",
   "steps": 1,
   "buildings": [
     { "slot": 0, "owner": "p1", "garrison_real": 40, "capacity_real": 100, "x": 0, "y": 0 },
@@ -19,7 +19,7 @@
     "reward_p2_total_eq": 0.0,
     "buildings": [
       { "slot": 0, "owner": "p1", "garrison_internal_eq": 10 },
-      { "slot": 1, "owner": "p1", "garrison_internal_eq": 700 }
+      { "slot": 1, "owner": "p1", "garrison_internal_eq": 300 }
     ]
   }
 }

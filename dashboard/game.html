@@ -1076,14 +1076,19 @@
     /** Derive per-player reward stream from events.
      * Shaping: +0.1 per capture of a neutral/enemy; −0.1 when a player loses
      *          a previously-owned building to someone else.
-     * Terminal: +1.0 winner / −1.0 loser (0 on draw).
+     * Terminal: winner = +1.0 + speed_bonus, loser = −1.0 (0 on draw).
+     *   speed_bonus = REWARD_SPEED_BONUS * max(0, 1 - end_tick / TIMEOUT_TICKS),
+     *   so faster wins earn more. Timeout wins (end_tick == TIMEOUT) get no bonus.
+     * Mirrors sim/config.py reward constants and sim/engine.py _check_victory.
      * Returns {cum: {1:[…], 2:[…]}, breakdown: {1:{captures,losses,terminal,total},2:{…}}, maxT}. */
     function computeRewardSeries(d) {
       const maxT = d.duration_ticks;
-      const REWARD_CAPTURE = 0.1;
-      const REWARD_LOSS    = -0.1;
-      const REWARD_WIN     = 1.0;
-      const REWARD_LOSE    = -1.0;
+      const REWARD_CAPTURE     = 0.1;
+      const REWARD_LOSS        = -0.1;
+      const REWARD_WIN         = 1.0;
+      const REWARD_LOSE        = -1.0;
+      const REWARD_SPEED_BONUS = 0.5;
+      const TIMEOUT_TICKS      = 200;
 
       const cum = { 1: new Array(maxT + 1).fill(0), 2: new Array(maxT + 1).fill(0) };
       const bk  = { 1: { captures: 0, losses: 0, terminal: 0 },
@@ -1116,10 +1121,12 @@
             }
             owner[e.dst] = after;
           } else if (e.kind === "end") {
-            if (e.winner === 1)      { r1 += REWARD_WIN;  r2 += REWARD_LOSE;
-                                       bk[1].terminal = REWARD_WIN; bk[2].terminal = REWARD_LOSE; }
-            else if (e.winner === 2) { r1 += REWARD_LOSE; r2 += REWARD_WIN;
-                                       bk[1].terminal = REWARD_LOSE; bk[2].terminal = REWARD_WIN; }
+            const speedBonus = REWARD_SPEED_BONUS * Math.max(0, 1 - e.t / TIMEOUT_TICKS);
+            const winReward  = REWARD_WIN + speedBonus;
+            if (e.winner === 1)      { r1 += winReward;  r2 += REWARD_LOSE;
+                                       bk[1].terminal = winReward; bk[2].terminal = REWARD_LOSE; }
+            else if (e.winner === 2) { r1 += REWARD_LOSE; r2 += winReward;
+                                       bk[1].terminal = REWARD_LOSE; bk[2].terminal = winReward; }
           }
         }
         cum[1][t] = r1;
