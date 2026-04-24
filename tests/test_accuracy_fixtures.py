@@ -20,7 +20,6 @@ import pytest
 
 from sim import config as C
 from sim.actions import Action
-from sim.engine import step_tick
 from sim.state import empty_state, precompute_distances
 
 
@@ -213,7 +212,13 @@ def _actual_summary(state, rewards_total: tuple[float, float], expected: dict) -
 
 
 @pytest.mark.parametrize("fixture_path", _fixture_paths())
-def test_accuracy_fixture(fixture_path: Path, request: pytest.FixtureRequest):
+def test_accuracy_fixture(fixture_path: Path, backend_step_tick, request: pytest.FixtureRequest):
+    """Runs each accuracy fixture on both numpy and jax backends.
+
+    `backend_step_tick` is the shared fixture from conftest.py that routes
+    through whichever backend is selected; end-state assertions apply to
+    both.
+    """
     data = _load_fixture(fixture_path)
     state = _build_state(data)
 
@@ -221,7 +226,7 @@ def test_accuracy_fixture(fixture_path: Path, request: pytest.FixtureRequest):
     r2_total = 0.0
     for _ in range(int(data["steps"])):
         action_p1, action_p2 = _actions_for_tick(data, state.tick)
-        r1, r2, _ = step_tick(state, action_p1=action_p1, action_p2=action_p2)
+        r1, r2, _ = backend_step_tick(state, action_p1=action_p1, action_p2=action_p2)
         r1_total += r1
         r2_total += r2
 

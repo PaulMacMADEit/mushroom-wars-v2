@@ -270,8 +270,13 @@ def _resolve_one_target(
     hostile = incoming.at[owner_i32].set(jnp.int64(0))  # zero-out friendly slot
     hostile_total = hostile.sum().astype(jnp.int64)
 
-    # Friendly reinforcement (clamp at capacity).
-    g_after_reinforce = jnp.minimum(garrison_i32 + friendlies, capacity_i32)
+    # Friendly reinforcement: only clamp when friendlies > 0. Numpy leaves an
+    # over-capacity garrison alone when no friendlies arrive — a building that
+    # survived a capture with garrison > capacity stays that way until either
+    # friendly reinforcement lands (then it's clamped at capacity) or hostiles
+    # knock it down.
+    reinforced = jnp.minimum(garrison_i32 + friendlies, capacity_i32)
+    g_after_reinforce = jnp.where(friendlies > 0, reinforced, garrison_i32)
 
     # --- Simultaneous combat ---
     total_attack = hostile_total.astype(jnp.int64) * C.DEF_BONUS_DEN

@@ -106,6 +106,67 @@ def test_parity_long_run_single_seed():
     _run_parity(seed=42, n_ticks=200, level="random_10_16")
 
 
+@pytest.mark.slow
+def test_parity_100_seeds_200_ticks():
+    """JAX_PORT_PLAN §5 parity invariant — 100 seeds × 200 ticks, byte-identical
+    state every tick. Tagged `slow` so the default pytest run can skip this if
+    wanted; unmarked runs pick it up automatically.
+    """
+    for seed in range(100):
+        _run_parity(seed=seed, n_ticks=200, level="random_8_16")
+
+
+def test_symmetric_winrate_on_jax_backend():
+    """Plan §5 DoD: test_p1_p2_symmetric_random_play_winrate must pass on
+    the JAX backend. Parity guarantees byte-identical game outcomes, so this
+    is a safety net that catches any future regression (e.g. a silent
+    determinism drift in the JAX path) at the win-rate level rather than
+    requiring a full 200-tick diff.
+
+    Cheaper version than the numpy test: 50 games instead of 200, 90% CI
+    ~[37%, 63%] → loosened stat band.
+    """
+    from sim.engine_jax import ACTION_KIND_NOOP, ACTION_KIND_SEND, encode_action
+
+    def _enc(a):
+        if a.kind == "noop":
+            return encode_action(ACTION_KIND_NOOP)
+        return encode_action(ACTION_KIND_SEND, a.type_idx, a.src, a.tgt)
+
+    p1_wins = 0
+    total = 0
+    n_games = 50
+    for seed in range(n_games):
+        rng = np.random.default_rng(seed)
+        state_np = reset(level_name="random_8_12", seed=seed)
+        state_jx = from_numpy_state(state_np)
+        for _ in range(C.GAME_TIMEOUT_TICKS + 10):
+            m1 = compute_mask(state_np, C.OWNER_P1)
+            m2 = compute_mask(state_np, C.OWNER_P2)
+            a1_idx = int(rng.choice(np.where(m1)[0])) if m1.any() else NOOP_INDEX
+            a2_idx = int(rng.choice(np.where(m2)[0])) if m2.any() else NOOP_INDEX
+            a1 = decode(a1_idx); a2 = decode(a2_idx)
+            state_jx, _, _, done = step_tick_single(state_jx, _enc(a1), _enc(a2))
+            # Mirror to numpy so we can recompute the mask next tick.
+            state_np = to_numpy_state(state_jx)
+            if bool(done):
+                break
+        from sim.state import count_owned_buildings as _count
+        p1_b = _count(state_np, C.OWNER_P1)
+        p2_b = _count(state_np, C.OWNER_P2)
+        if p1_b > p2_b:
+            p1_wins += 1; total += 1
+        elif p2_b > p1_b:
+            total += 1
+    p1_rate = p1_wins / max(total, 1)
+    # Loose band — 50 games has a wide error bar; tight parity test already
+    # guarantees strict byte-equality against numpy.
+    assert 0.30 <= p1_rate <= 0.70, (
+        f"P1 rate under JAX backend = {p1_rate:.3f} (n_settled={total}); "
+        f"symmetry check failed. Run parity harness to diagnose."
+    )
+
+
 def test_jaxpr_is_finite():
     """The jit'd step_tick must trace to a finite jaxpr — no Python branching
     over traced values."""
