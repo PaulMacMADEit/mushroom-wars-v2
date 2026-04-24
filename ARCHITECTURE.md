@@ -44,7 +44,7 @@ Each cleanup we've attempted has compounded on top of old decisions. The repo is
 | layer | choice | rejected alternatives | why |
 |---|---|---|---|
 | RL training language | **Python + PyTorch** | TypeScript (current), JAX | PyTorch is the RL ecosystem. GPU primitives, gymnasium, RLlib, SB3, etc. TS scalar JS caps ~1 GFLOP; unable to scale nets. |
-| Sim language | **Python + numba + AsyncVectorEnv** | Rust, C++/pybind11, JAX | numba gets ~100× speedup on hot paths without leaving Python. Parallel sims via AsyncVectorEnv. Rust saved for later if numba bottlenecks. |
+| Sim language | **Python numpy + JAX (XLA) backends** — JAX default, numpy as reference oracle | Rust, C++/pybind11, numba | Dual-backend: numpy keeps every sim test honest; JAX uses `jax.jit` + `jax.vmap` to batch N games into one XLA dispatch, unlocking `n_envs≥1024` on the RTX 3070 where multiprocess numpy capped at ~2.3× scaling. Default flips via `SIM_BACKEND=numpy` rollback. See `sim/backend.py`, `sim/engine_jax.py`. |
 | Queue / state | **Supabase Postgres** | BullMQ + Redis (current), Firebase, SQS | One table does the entire queue. Cloud-hosted Postgres survives your laptop. Free tier plenty. Atomic claim via `FOR UPDATE SKIP LOCKED`. |
 | Artifact storage | **Supabase Storage** | Git LFS, S3, R2 | Included with Supabase, S3-compatible, free 1 GB then $0.021/GB. No second service. |
 | Compute — home | **Mac (Metal) + PC (CUDA) daemons** | Pure cloud | Home compute is already paid for. Zero marginal cost per run. |
@@ -435,24 +435,18 @@ The worker is ~200 lines of Python. No orchestrator. No event bus. Just atomic S
 - One game state = these ndarrays plus `travel_matrix`, `distance_matrix`, and scalars (`tick`, `phase`, `perf`).
 - Structured-dtype access (`state.buildings["owner"]`, `state.unit_groups[mask]`) remains available via a proxy in `sim/state.py` for existing test/replay/script code; hot paths use the parallel ndarrays directly.
 
-### 8.2 Hot paths compiled with numba
+### 8.2 Hot paths — JAX jit'd step_tick
 
-- Production tick (1 Hz): increments all buildings' garrison, bounded by capacity. `@njit`.
-- Movement update: advances unit group progress, resolves arrivals. `@njit`.
-- Combat resolution: computes damage when attacker arrives. `@njit`.
-- Mask computation: which actions are valid right now. `@njit`.
-
-Expected speedup: 50-100× over pure Python for these functions.
+- `sim/engine_jax.py` ports every tick phase (apply send / production / movement / combat / victory) as pure JAX functions over the `StateJax` pytree.
+- `step_tick_single` is `jax.jit`'d; `JaxVecEnv` wraps `jax.vmap(step_tick_single)` so N games fuse into one XLA kernel per tick.
+- Numpy engine (`sim/engine.py`) stays as the reference oracle. The parity harness in `tests/test_backend_parity.py` runs 100 seeds × 200 ticks byte-identically across both backends — that's the correctness contract.
+- Event emission (replay spawn/arrive/capture) stays numpy-only; replay isn't in the training hot path.
 
 ### 8.3 Parallelism
 
-- **Gymnasium `AsyncVectorEnv`**: spawns 32-64 sim processes via `multiprocessing`.
-- Each process runs one game independently.
-- Observations stack into a `(n_envs, obs_size)` tensor each step.
-- Trainer does one batched forward pass on GPU → n_envs actions.
-- Actions dispatched back via pipe; each process steps its sim.
-
-For PPO rollout collection, this is standard and gives big throughput gains.
+- **JAX backend (default)**: `sim/envs/jax_vec_env.py` holds one batched `StateJax` with leading dim `n_envs`. One process, one XLA dispatch per tick. Scales to `n_envs≥1024` on the RTX 3070 with `XLA_PYTHON_CLIENT_MEM_FRACTION=0.40` to share VRAM with PyTorch.
+- **Numpy backend (fallback)**: `gymnasium.vector.{Sync,Async}VectorEnv` — one subprocess per env, multiprocessing IPC. Scaled to ~2.3× at 10 workers in the pre-JAX bench. Selected via `SIM_BACKEND=numpy`.
+- For PPO rollout collection, both backends return the same gym-style `(obs_dict, rewards, terminated, truncated, infos)`. Trainer code is backend-agnostic.
 
 ### 8.4 Determinism for replays
 

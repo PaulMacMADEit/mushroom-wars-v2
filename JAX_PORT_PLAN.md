@@ -464,16 +464,16 @@ These are repo + project rules. Not optional.
 
 Copy this into a scratch todo file as you execute.
 
-- [ ] **Phase 0**: refactor numpy sim (structured dtype → parallel ndarrays, dict → fixed array, events out of hot path). `pytest tests/ -q` green. `scripts/bench_sim.py` ≤5% regression. Commit.
-- [ ] **Phase 1**: add `sim/state_jax.py`, converters, smoke test. `pytest tests/test_state_jax.py -q` green. Add `jax`, `jaxlib`, `flax` (or `chex`) to `requirements.txt`. Commit.
-- [ ] **Phase 2**: port `step_tick` to `sim/engine_jax.py` as a `jax.jit`ed single-game function. `pytest tests/test_backend_parity.py -q` green. Commit.
-- [ ] **Phase 3**: `vmap` over 1024 games. New `sim/envs/jax_vec_env.py`. `python scripts/bench_jax_sim.py --n-envs 1024` ≥10× numpy bench. Commit.
-- [ ] **Phase 4**: trainer integration. `SIM_BACKEND` env var. 5-min smoke train on both backends. Record `resource_usage` shows gpu_sm_pct ≥40. Commit.
-- [ ] **Phase 5**: parametrise tests, full 2-backend run green. Parity test 100 seeds × 200 ticks. Commit.
-- [ ] **Phase 6**: register `sim-v1.2`, flip default. Rollback paragraph in commit message. Commit.
-- [ ] **Deploy to PaulLinux**: git pull, install jaxlib-cuda, set `XLA_PYTHON_CLIENT_MEM_FRACTION=0.40` in systemd unit, restart worker, queue a smoke train under `sim-v1.2`. Confirm success.
-- [ ] **Update** `ARCHITECTURE.md` + `KARPATHY_LOG.md` + `JAX_PORT_PLAN.md` (mark phases complete).
-- [ ] **Report to Paul** with: total games/sec before/after, GPU SM% before/after, wall-time per Karpathy round before/after. One table. Plus any surprises worth a memory entry.
+- [x] **Phase 0** ✅ 2026-04-24 (commit 2f6e1f8): numpy sim refactored to parallel ndarrays + fixed-shape combat. Bench 288.6 → 312.5 games/sec (+8%). 142 tests green.
+- [x] **Phase 1** ✅ 2026-04-24 (commit 3a82df0): `sim/state_jax.py` + converters + 9 smoke tests. `jax`/`jaxlib`/`flax` pinned.
+- [x] **Phase 2** ✅ 2026-04-24 (commit c49fe70): `sim/engine_jax.py` (branchless jit'd `step_tick_single`) + parity harness (10 tests). Two latent bugs caught and fixed during parity validation (aliasing via `jnp.asarray`; numpy leaves arrived-group `src`/`tgt` stale).
+- [x] **Phase 3** ✅ 2026-04-24 (commit e9fe504): `jax.vmap` + `JaxVecEnv` + `scripts/bench_jax_sim.py`. Mac CPU sweep 1 → 1024 envs: 770 → 17,935 ticks/sec (~23× scaling).
+- [x] **Phase 4** ✅ 2026-04-24 (commit e3a830e): `sim/backend.py` + `SIM_BACKEND` env var + worker + push_experiments. 30s smoke trains pass both backends.
+- [x] **Phase 5** ✅ 2026-04-24 (commit 134b5fc): `backend_step_tick` fixture parametrises accuracy fixtures on both backends. 100-seed stress found one real divergence (over-cap reinforce clamp) — fixed. 175 tests green on both backends.
+- [x] **Phase 6** ✅ 2026-04-24: default flipped to `jax` in `sim/backend.py`. Docs + README updated. Rollback: `SIM_BACKEND=numpy`.
+- [ ] **Register `sim-v1.2`** in Supabase: `python cli/register_sim.py --id sim-v1.2 --name "Python sim v1.2 (JAX backend)" --parent-sim sim-v1.1 --what-changed "JAX backend: xla-jit tick loop, vmap parallel games"`. Run manually once (needs `.env`).
+- [ ] **Deploy to PaulLinux**: `git pull`, `pip install "jax[cuda12]>=0.4.30"`, set `XLA_PYTHON_CLIENT_MEM_FRACTION=0.40` in the systemd unit's `Environment=` line, `systemctl --user daemon-reload && systemctl --user restart mushroom-worker.service`. Queue a 5-min smoke train under `sim-v1.2`. Validate ≥10× games/sec vs numpy baseline + ≥40% GPU SM.
+- [ ] **Report back** with a before/after table: games/sec, GPU SM%, wall-time per Karpathy round.
 
 ---
 

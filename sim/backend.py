@@ -29,9 +29,17 @@ import os
 from typing import Any, Callable, Optional
 
 
+# Default backend. Flipped to "jax" at the end of JAX_PORT_PLAN Phase 6.
+# To roll back: set `SIM_BACKEND=numpy` in the worker's environment (e.g.
+# `~/.config/systemd/user/mushroom-worker.service` `Environment=` line on
+# PaulLinux, or export it in the shell for a one-off run).
+_DEFAULT_BACKEND = "jax"
+
+
 def get_backend_name() -> str:
-    """Resolve the active backend. Respects the `SIM_BACKEND` env var."""
-    name = os.environ.get("SIM_BACKEND", "numpy").strip().lower()
+    """Resolve the active backend. Respects the `SIM_BACKEND` env var;
+    falls back to `_DEFAULT_BACKEND` (currently "jax")."""
+    name = os.environ.get("SIM_BACKEND", _DEFAULT_BACKEND).strip().lower()
     if name not in ("numpy", "jax"):
         raise ValueError(f"SIM_BACKEND must be 'numpy' or 'jax'; got {name!r}")
     return name
