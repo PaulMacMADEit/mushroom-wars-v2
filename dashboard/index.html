@@ -54,7 +54,7 @@
     async function loadWorkers() {
       const { data, error } = await sb
         .from('worker_state')
-        .select('machine, paused, updated_at')
+        .select('machine, paused, matches_only, updated_at')
         .order('machine');
       if (error) {
         $workers.innerHTML = `<div class="error">error: ${esc(error.message)}</div>`;
@@ -64,28 +64,36 @@
         $workers.innerHTML = `<div class="muted">no workers seen yet — start one and refresh</div>`;
         return;
       }
+      const modeOf = w => w.paused ? 'off' : (w.matches_only ? 'matches' : 'full');
+      const descOf = m => m === 'off' ? 'paused' : m === 'matches' ? 'matches only' : 'taking jobs';
+      const dotOf  = m => m === 'off' ? 'off' : 'on';
       $workers.innerHTML = data.map(w => {
         const label = MACHINE_LABEL[w.machine] ?? w.machine;
-        const on    = !w.paused;
-        const btn   = on
-          ? `<button data-machine="${esc(w.machine)}" data-action="pause"  class="btn-danger">Turn off</button>`
-          : `<button data-machine="${esc(w.machine)}" data-action="resume" class="btn-primary">Turn on</button>`;
+        const mode = modeOf(w);
+        const btn = (m, target, cls) =>
+          `<button data-machine="${esc(w.machine)}" data-target="${target}" class="${cls}"${m===target?' disabled':''}>${target==='full'?'Full':target==='matches'?'Matches only':'Off'}</button>`;
         return `<div class="worker-row">
-          <span class="worker-dot ${on ? 'on' : 'off'}"></span>
+          <span class="worker-dot ${dotOf(mode)}"></span>
           <strong>${esc(label)}</strong>
           <span class="muted mono">${esc(w.machine)}</span>
-          <span class="muted">${on ? 'taking jobs' : 'paused'}</span>
-          ${btn}
+          <span class="muted">${descOf(mode)}</span>
+          <span class="worker-btns">
+            ${btn(mode,'full','btn-primary')}
+            ${btn(mode,'matches','btn-primary')}
+            ${btn(mode,'off','btn-danger')}
+          </span>
           <span class="muted small">updated ${fmtTime(w.updated_at)}</span>
         </div>`;
       }).join('');
       $workers.querySelectorAll('button[data-machine]').forEach(b => {
         b.addEventListener('click', async () => {
           const m = b.getAttribute('data-machine');
-          const paused = b.getAttribute('data-action') === 'pause';
+          const target = b.getAttribute('data-target');
+          const paused = target === 'off';
+          const matches_only = target === 'matches';
           b.disabled = true;
           const { error } = await sb.from('worker_state')
-            .update({ paused, updated_at: new Date().toISOString() })
+            .update({ paused, matches_only, updated_at: new Date().toISOString() })
             .eq('machine', m);
           if (error) { alert(error.message); b.disabled = false; return; }
           loadWorkers();

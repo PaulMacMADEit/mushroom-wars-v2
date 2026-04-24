@@ -274,9 +274,15 @@ def _queue_admission_matches(conn, new_run_id, level_name: str = ADMISSION_LEVEL
 # Match claim + finalize (eval jobs)
 # ---------------------------------------------------------------------------
 
-def _is_paused(conn, machine: str) -> bool:
-    """Dashboard soft-pause flag. Upserts the row if missing so first-ever
-    run of a new machine isn't a no-op — we want an explicit off switch.
+def _worker_mode(conn, machine: str) -> tuple[bool, bool]:
+    """Dashboard-controlled flags for this machine. Returns (paused, matches_only).
+
+    - paused=True → skip everything, just sleep.
+    - matches_only=True → skip training runs, still claim eval matches.
+    - both False → normal full operation.
+
+    Upserts the row if missing so a new machine defaults to "full on" but
+    can be flipped from the dashboard.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -284,10 +290,15 @@ def _is_paused(conn, machine: str) -> bool:
             "ON CONFLICT (machine) DO NOTHING",
             (machine,),
         )
-        cur.execute("SELECT paused FROM worker_state WHERE machine = %s", (machine,))
+        cur.execute(
+            "SELECT paused, matches_only FROM worker_state WHERE machine = %s",
+            (machine,),
+        )
         row = cur.fetchone()
     conn.commit()
-    return bool(row and row[0])
+    if not row:
+        return False, False
+    return bool(row[0]), bool(row[1])
 
 
 def claim_one_match(conn):
@@ -701,25 +712,29 @@ def main():
     print(f"[worker] machine={args.machine}  device={device}")
 
     idle_streak = 0
-    last_pause_log = False
+    last_mode: str | None = None  # "paused" | "matches_only" | "full" — log only on change
     while True:
         claimed = None
         try:
             with connect() as conn:
-                # Soft pause from the dashboard: if this machine's worker_state
-                # row is paused, don't claim anything; just sleep.
-                if _is_paused(conn, args.machine):
-                    if not last_pause_log:
-                        print(f"[worker] paused via worker_state for machine={args.machine}")
-                        last_pause_log = True
+                paused, matches_only = _worker_mode(conn, args.machine)
+                if paused:
+                    mode = "paused"
+                elif matches_only:
+                    mode = "matches_only"
+                else:
+                    mode = "full"
+                if mode != last_mode:
+                    print(f"[worker] mode={mode} for machine={args.machine}")
+                    last_mode = mode
+
+                if paused:
                     time.sleep(args.poll_interval)
                     continue
-                if last_pause_log:
-                    print(f"[worker] resumed for machine={args.machine}")
-                    last_pause_log = False
 
-                # 1) Try training runs first (longer, higher priority).
-                job = claim_one(conn, args.machine)
+                # 1) Try training runs first (longer, higher priority) — unless
+                # this machine is in matches_only mode (dashboard-controlled).
+                job = None if matches_only else claim_one(conn, args.machine)
                 if job is None:
                     # 2) Fall back to queued eval matches.
                     match = claim_one_match(conn)

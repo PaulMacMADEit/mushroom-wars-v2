@@ -139,3 +139,6 @@ pre {
 .btn-danger       { background: #7f1d1d; border-color: #991b1b; }
 .btn-danger:hover { background: #991b1b; }
 .small { font-size: 11px; }
+
+.worker-btns { display: inline-flex; gap: 4px; }
+.worker-btns button[disabled] { opacity: 0.5; cursor: default; }

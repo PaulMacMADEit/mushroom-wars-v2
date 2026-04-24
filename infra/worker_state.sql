@@ -5,10 +5,12 @@
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS worker_state (
-    machine    TEXT PRIMARY KEY,
-    paused     BOOLEAN NOT NULL DEFAULT false,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    machine      TEXT PRIMARY KEY,
+    paused       BOOLEAN NOT NULL DEFAULT false,
+    matches_only BOOLEAN NOT NULL DEFAULT false,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE worker_state ADD COLUMN IF NOT EXISTS matches_only BOOLEAN NOT NULL DEFAULT false;
 
 -- RLS: let anon read + write (no secrets here; same posture as the rest of the
 -- project's public dashboards).
