@@ -3,3 +3,5 @@ psycopg[binary]>=3.2
 python-dotenv>=1.0
 modal>=1.0
 pygame-ce>=2.5
+psutil>=5.9
+pynvml>=11.5

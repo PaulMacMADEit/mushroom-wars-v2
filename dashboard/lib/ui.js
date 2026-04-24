@@ -56,3 +56,33 @@ export function gamesPerMin(gamesPlayed, wallMs) {
   if (!gamesPlayed || !wallMs) return '—';
   return (gamesPlayed / (wallMs / 60000)).toFixed(0);
 }
+
+/** Games/sec for compact display. Prefer result.games_per_sec (captured during
+ *  training only); fallback to games_played / wall_ms (includes admission). */
+export function gamesPerSec(result, gamesPlayed, wallMs) {
+  if (result && typeof result.games_per_sec === 'number') {
+    return result.games_per_sec.toFixed(1);
+  }
+  if (!gamesPlayed || !wallMs) return '—';
+  return (gamesPlayed / (wallMs / 1000)).toFixed(1);
+}
+
+/** Parameter count → "185k" / "2.3M". */
+export function fmtParams(n) {
+  if (n == null) return '—';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return Math.round(n / 1e3) + 'k';
+  return String(n);
+}
+
+/** Compact bottleneck pill. */
+export function bottleneckPill(b) {
+  const tone = {
+    cpu:                '#dc2626',
+    gpu:                '#f59e0b',
+    balanced:           '#16a34a',
+    neither_saturated:  '#6b7280',
+  }[b] || '#6b7280';
+  if (!b) return '';
+  return `<span style="background:${tone}; color:#fff; padding:1px 6px; border-radius:8px; font-size:10px;">${esc(b)}</span>`;
+}

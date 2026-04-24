@@ -50,7 +50,8 @@
 
   <script type="module">
     import { sb } from './lib/supabase.js';
-    import { fmtTime, fmtDuration, fmtPct, esc, statusPill, tr, gamesPerMin } from './lib/ui.js';
+    import { fmtTime, fmtDuration, fmtPct, esc, statusPill, tr,
+             gamesPerSec, fmtParams, bottleneckPill } from './lib/ui.js';
 
     const $runs = document.getElementById('runs');
     const $status = document.getElementById('filter-status');
@@ -75,19 +76,22 @@
         `<a href="./run.html?id=${esc(r.id)}">${esc(r.label)}</a>`,
         `<span class="mono">${esc(r.model_id)}</span>`,
         `<span class="mono">${esc(r.simulator_id)}</span>`,
+        `<span class="mono">${fmtParams(r.result?.param_count)}</span>`,
+        `<span class="mono">${gamesPerSec(r.result, r.games_played, r.wall_ms)}</span>`,
+        bottleneckPill(r.result?.resource_usage?.bottleneck),
         `<span class="mono">${esc(r.seed || '')}</span>`,
         `<span class="mono">${esc(r.machine)}</span>`,
         fmtDuration(r.wall_ms),
         esc(String(r.games_played ?? '—')),
-        `<span class="mono">${gamesPerMin(r.games_played, r.wall_ms)}</span>`,
         fmtPct(r.result?.rate),
         `<span class="muted">${fmtTime(r.queued_at)}</span>`,
       ]));
       $runs.innerHTML = `
         <table>
           <thead><tr>
-            <th>status</th><th>label</th><th>model</th><th>sim</th><th>seed</th>
-            <th>machine</th><th>wall</th><th>games</th><th>g/min</th><th>rate</th><th>queued</th>
+            <th>status</th><th>label</th><th>model</th><th>sim</th><th>params</th>
+            <th>g/s</th><th>bottleneck</th>
+            <th>seed</th><th>machine</th><th>wall</th><th>games</th><th>rate</th><th>queued</th>
           </tr></thead>
           <tbody>${rows.join('')}</tbody>
         </table>

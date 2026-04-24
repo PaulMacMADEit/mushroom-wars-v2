@@ -90,6 +90,17 @@ class PPOTrainer:
         self._update_count = 0
         self._rng = np.random.default_rng(seed)
 
+        # Cumulative wall-time spent in each high-level phase. Surfaced via
+        # sim_phase_breakdown() so the run result JSON can record where
+        # compute went (CPU-bound sim vs GPU-bound learn, etc).
+        self._phase_ns: dict[str, int] = {
+            "act_batch_ns":   0,   # GPU inference during rollout
+            "env_step_ns":    0,   # async vec env step (returns across IPC)
+            "rollout_ns":     0,   # full rollout loop incl. act + step
+            "learn_ns":       0,   # PPO minibatch forward + backward + optim
+            "update_total_ns": 0,  # everything from update() entry to return
+        }
+
         # Self-play pool. Only populated when cfg.self_play is True.
         self.pool: OpponentPool | None = None
         if self.cfg.self_play:
@@ -215,10 +226,13 @@ class PPOTrainer:
         rew_buf   = np.zeros((T, N),          dtype=np.float32)
         done_buf  = np.zeros((T, N),          dtype=np.float32)
 
+        import time as _time
         for t in range(T):
+            _t_act = _time.perf_counter_ns()
             actions, srcs, types, tgts, logps, values = self.agent.act_batch(
                 self._obs, self._masks,
             )
+            self._phase_ns["act_batch_ns"] += _time.perf_counter_ns() - _t_act
             obs_buf[t]  = self._obs
             mask_buf[t] = self._masks
             src_buf[t]  = srcs
@@ -227,7 +241,9 @@ class PPOTrainer:
             logp_buf[t] = logps
             val_buf[t]  = values
 
+            _t_env = _time.perf_counter_ns()
             next_obs_batch, rewards, terminated, truncated, infos = self.vec.step(actions)
+            self._phase_ns["env_step_ns"] += _time.perf_counter_ns() - _t_env
             rewards = np.asarray(rewards, dtype=np.float32)
             done = np.logical_or(terminated, truncated)
             rew_buf[t]  = rewards
@@ -304,8 +320,13 @@ class PPOTrainer:
     # ------------------------------------------------------------------
 
     def update(self) -> dict:
+        import time as _time
+        _t_update = _time.perf_counter_ns()
+        _t_rollout = _time.perf_counter_ns()
         batch = self.collect_rollout()
+        self._phase_ns["rollout_ns"] += _time.perf_counter_ns() - _t_rollout
         B = len(batch["obs"])
+        _t_learn = _time.perf_counter_ns()
 
         obs_t     = torch.as_tensor(batch["obs"],       device=self.device)
         mask_t    = torch.as_tensor(batch["mask"],      device=self.device)
@@ -372,6 +393,7 @@ class PPOTrainer:
             metrics["win_rate"]            = float(np.mean([e[2] for e in ep]))
             self._completed_episodes = []
 
+        self._phase_ns["learn_ns"] += _time.perf_counter_ns() - _t_learn
         self._update_count += 1
 
         # Self-play refresh: register a snapshot at the cadence and rebuild
@@ -381,7 +403,24 @@ class PPOTrainer:
                 self._refresh_opponents()
                 metrics["pool_size"] = len(self.pool)
 
+        self._phase_ns["update_total_ns"] += _time.perf_counter_ns() - _t_update
         return metrics
+
+    def sim_phase_breakdown(self) -> dict:
+        """Return cumulative wall-time breakdown of training phases.
+
+        Keys are percentages of `update_total_ns` so the result is
+        dimensionless and easy to compare across machines. Also returns
+        raw ms totals for debugging.
+        """
+        total = self._phase_ns.get("update_total_ns", 0) or 1
+        pct = {k: round(100.0 * v / total, 1) for k, v in self._phase_ns.items()}
+        ms = {k: round(v / 1e6, 1) for k, v in self._phase_ns.items()}
+        return {
+            "pct_of_update": pct,
+            "ms_cumulative": ms,
+            "updates": self._update_count,
+        }
 
     def _refresh_opponents(self) -> None:
         """Snapshot learner + rebuild vec env with fresh per-env opponents.

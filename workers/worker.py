@@ -199,7 +199,10 @@ def mark_done(
 # ---------------------------------------------------------------------------
 
 ADMISSION_TOP_K           = 10  # play vs current top-K Elo runs
-ADMISSION_GAMES_PER_MATCH = 30  # ±8.4% SE on 30% win-rate; enough to see 3-5% moves
+ADMISSION_GAMES_PER_MATCH = 12  # ±12% SE on 30% win-rate; 4-5 min total drain
+                                  # (was 30, dropped 2026-04-24 to cap drain time
+                                  # at larger model sizes; ranking signal is
+                                  # still strong enough at 12 games × 10 opps).
 # Baseline auto-admission dropped 2026-04-24: trained models saturate vs
 # random_legal (85-100%), so the match was signal-free. Random pseudo-run
 # stays in the DB for historical queries; nothing new gets queued against it.
@@ -638,11 +641,22 @@ def run_training(
     # Budget loop: update until we hit budget_ms. Keep full metrics history
     # for the log artifact; keep overall win-rate stats for `result`.
     deadline = time.time() + job["budget_ms"] / 1000.0
+    training_started_at = time.time()
     metrics_history: list[dict] = []
     total_eps = 0
     total_wins = 0
 
     live_log_url: str | None = None
+
+    # Per-run telemetry: CPU%, GPU%, VRAM, RAM. Summarised into result JSON.
+    from workers.telemetry import ResourceSampler
+    sampler = ResourceSampler(interval_s=2.0)
+    sampler.start()
+
+    # Per-update phase timings: how much wall time goes to rollouts vs
+    # optimisation. Filled in by trainer.update() if the trainer exposes
+    # `last_phase_ms`; otherwise stays empty.
+    phase_times_ms: dict[str, float] = {}
 
     try:
         while time.time() < deadline:
@@ -678,6 +692,21 @@ def run_training(
         # across claimed runs in the polling worker.
         pass  # trainer.close() happens in the caller after save_and_upload
 
+    training_wall_s = max(time.time() - training_started_at, 1e-3)
+    resource_usage = sampler.stop()
+
+    # Pull the trainer's in-training sim-phase breakdown if available.
+    sim_phase_breakdown = None
+    try:
+        sim_phase_breakdown = getattr(trainer, "sim_phase_breakdown", None)
+        if callable(sim_phase_breakdown):
+            sim_phase_breakdown = sim_phase_breakdown()
+    except Exception:
+        sim_phase_breakdown = None
+
+    param_count = sum(p.numel() for p in net.parameters())
+    trunk_width = getattr(net, "body_width", None) or getattr(cfg, "body_width", None)
+
     overall_win_rate = total_wins / total_eps if total_eps else 0.0
     result = {
         "rate":                 overall_win_rate,
@@ -687,6 +716,14 @@ def run_training(
         "final_metrics":        metrics_history[-1] if metrics_history else {},
         "config":               asdict(cfg),
         "device":               str(device),
+        "param_count":          int(param_count),
+        "trunk_width":          trunk_width,
+        "games_per_sec":        round(total_eps / training_wall_s, 2),
+        "steps_per_sec":        round(len(metrics_history) * cfg.n_envs * cfg.rollout_steps /
+                                       training_wall_s, 1) if cfg.rollout_steps else 0,
+        "training_wall_s":      round(training_wall_s, 1),
+        "resource_usage":       resource_usage,
+        "sim_phase_breakdown":  sim_phase_breakdown,
     }
     return result, total_eps, trainer, metrics_history
 
