@@ -39,3 +39,33 @@ kar-ent-010 at baseline config hit 90%, kar-lr-3e4 at same config hit 75%.
 **Finding:** mixed / within noise. `rollout_steps` isn't a major knob at 15 min.
 256 slightly better vs baseline; 64 ties on top-5. Baseline 128 unexpectedly
 weakest vs baseline — likely seed variance (128 elsewhere hit 75-90%).
+
+## Sweep 4 — snapshot_every @ 15 min
+
+| run | snapshot_every | vs baseline (20) | vs top-5 (10 each, avg) |
+|---|---|---|---|
+| kar-snap-5 | 5 (freshest) | 85% (17/20) | 4% |
+| kar-snap-10 | 10 (baseline) | 55% (11/20) | 6% |
+| kar-snap-20 | 20 (stalest) | **90% (18/20)** | **20%** |
+
+**Finding:** **snap=20 wins decisively**, especially on vs-top-5 (20% — 3-5×
+the other two). At short budgets, a stale self-play pool helps: fresh
+snapshots of a half-trained agent add noise; infrequent updates give the
+policy time to breathe. Would likely invert at long budgets where fresh
+opponents matter more.
+
+## Sweep 5 — entropy_coef @ 30 min (confirm)
+
+Mac paused during training for clean CUDA-only comparison, re-enabled for match drain.
+
+| run | entropy_coef | vs baseline (20) | vs top-5 (10 each, avg) |
+|---|---|---|---|
+| kar-ent30-003 | 0.003 | **100% (20/20)** | 16% |
+| kar-ent30-010 | 0.01 (baseline) | 80% (16/20) | 16% |
+| kar-ent30-030 | 0.03 | 90% (18/20) | 16% |
+
+**Finding:** **flip from 15-min result** — at 30 min, low entropy (0.003) wins
+vs baseline. Confirms hypothesis: low exploration needs more time to exploit.
+vs-top-5 coincidentally identical at 16% across all three (all faced same top-5
+chain runs; per-opponent rates differ but sum to 0.8 in each case).
+Overall skill has jumped vs 15-min runs (80–100% vs baseline, was 50–90%).

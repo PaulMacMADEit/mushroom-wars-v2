@@ -75,7 +75,8 @@ def _load_agent(state: dict, device: torch.device) -> tuple[PPOAgent | None, Run
     """
     if state.get("weights") is None:
         return None, None
-    net = ActorCritic()
+    from training.net import infer_body_dim
+    net = ActorCritic(body_dim=infer_body_dim(state["weights"]))
     net.load_state_dict(state["weights"])
     agent = PPOAgent(net, device=device)
     obs_norm: RunningNorm | None = None

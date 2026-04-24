@@ -119,11 +119,14 @@ def make_neural_opponent(
 
     from training.agent import PPOAgent
     from training.encoder import OBS_DIM, encode_obs
-    from training.net import ActorCritic
+    from training.net import ActorCritic, infer_body_dim
     from training.obs_norm import RunningNorm
 
-    net = ActorCritic()
     state_dict = torch.load(str(weights_path), map_location=device, weights_only=True)
+    # Capacity-sweep snapshots (v9.0-256 etc) have wider trunks; infer from
+    # trunk.0.weight so we construct the right-sized net for load_state_dict.
+    body_dim = infer_body_dim(state_dict)
+    net = ActorCritic(body_dim=body_dim)
     net.load_state_dict(state_dict)
     agent = PPOAgent(net, device=device)
 

@@ -56,9 +56,11 @@ def main():
     ap.add_argument("--action-decoder", default="sim.actions.decode (flat 4097 env-side; factored src/type/tgt on the net side)")
     ap.add_argument("--keep-weights", action="store_true")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--body-dim", type=int, default=128,
+                    help="ActorCritic trunk width. Must match build_net_for_model's dispatch.")
     args = ap.parse_args()
 
-    net = ActorCritic()
+    net = ActorCritic(body_dim=args.body_dim)
     layers = layers_blob(net)
     total_params = sum(p.numel() for p in net.parameters())
 

@@ -66,15 +66,22 @@ def build_net_for_model(model_id: str, obs_size: int, num_actions: int) -> Actor
     from training.encoder import OBS_DIM
     from training.net import ActorCritic
 
+    # (obs_dim, action_dim, builder) — builder takes no args; produces the net.
+    def _mk(body_dim: int):
+        return lambda: ActorCritic(body_dim=body_dim)
     KNOWN = {
         # v9.0-enc-full was the interim commit-1 model (full encoder + old
         # flat 4097 head). Code has since moved to chained heads — running
         # that model against this code will fail at inference, which is
         # correct: the net topology doesn't match.
-        "v9.0-enc-full": (OBS_DIM, ACTION_SPACE_SIZE, ActorCritic),
+        "v9.0-enc-full": (OBS_DIM, ACTION_SPACE_SIZE, _mk(128)),
         # v9.0-full: full encoder + chained source/type/target heads
-        # (ARCHITECTURE §9.4). This is the current production model.
-        "v9.0-full":     (OBS_DIM, ACTION_SPACE_SIZE, ActorCritic),
+        # (ARCHITECTURE §9.4). Default 128-wide body (production baseline).
+        "v9.0-full":     (OBS_DIM, ACTION_SPACE_SIZE, _mk(128)),
+        # Capacity-sweep variants (same architecture, wider trunk).
+        "v9.0-256":      (OBS_DIM, ACTION_SPACE_SIZE, _mk(256)),
+        "v9.0-512":      (OBS_DIM, ACTION_SPACE_SIZE, _mk(512)),
+        "v9.0-1024":     (OBS_DIM, ACTION_SPACE_SIZE, _mk(1024)),
     }
     entry = KNOWN.get(model_id)
     if entry is None:

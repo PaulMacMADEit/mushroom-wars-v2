@@ -33,36 +33,51 @@ NUM_TYPE_CHOICES  = NUM_TYPES + 1                 # +1 for noop (type=4)
 NUM_SRC           = C.MAX_BUILDING_SLOTS          # 32
 NUM_TGT           = C.MAX_BUILDING_SLOTS          # 32
 
-BODY_DIM     = 128
+BODY_DIM     = 128   # default; can be overridden per-model via ActorCritic(body_dim=…)
 HEAD_HIDDEN  = 64
 EMBED_DIM    = 16
+
+
+def infer_body_dim(state_dict: dict, default: int = BODY_DIM) -> int:
+    """Peek the body size from a saved ActorCritic state_dict.
+
+    `trunk.0.weight` has shape (body_dim, obs_dim). Lets match_runner /
+    opponent loaders reconstruct the right-sized net without storing size
+    in the runs row.
+    """
+    w = state_dict.get("trunk.0.weight")
+    return int(w.shape[0]) if w is not None else default
 
 
 class ActorCritic(nn.Module):
     """Chained-head actor-critic. Forward is done in pieces so the agent can
     sample source → (type, tgt | source) in two passes sharing the body."""
 
-    def __init__(self, obs_dim: int = OBS_DIM):
+    def __init__(self, obs_dim: int = OBS_DIM,
+                 body_dim: int = BODY_DIM,
+                 head_hidden: int = HEAD_HIDDEN):
         super().__init__()
+        self.body_dim    = body_dim
+        self.head_hidden = head_hidden
         self.trunk = nn.Sequential(
-            nn.Linear(obs_dim, BODY_DIM), nn.ReLU(),
-            nn.Linear(BODY_DIM, BODY_DIM), nn.ReLU(),
+            nn.Linear(obs_dim, body_dim), nn.ReLU(),
+            nn.Linear(body_dim, body_dim), nn.ReLU(),
         )
         self.source_head = nn.Sequential(
-            nn.Linear(BODY_DIM, HEAD_HIDDEN), nn.ReLU(),
-            nn.Linear(HEAD_HIDDEN, NUM_SRC),
+            nn.Linear(body_dim, head_hidden), nn.ReLU(),
+            nn.Linear(head_hidden, NUM_SRC),
         )
         self.type_head = nn.Sequential(
-            nn.Linear(BODY_DIM + EMBED_DIM, HEAD_HIDDEN), nn.ReLU(),
-            nn.Linear(HEAD_HIDDEN, NUM_TYPE_CHOICES),
+            nn.Linear(body_dim + EMBED_DIM, head_hidden), nn.ReLU(),
+            nn.Linear(head_hidden, NUM_TYPE_CHOICES),
         )
         self.target_head = nn.Sequential(
-            nn.Linear(BODY_DIM + EMBED_DIM, HEAD_HIDDEN), nn.ReLU(),
-            nn.Linear(HEAD_HIDDEN, NUM_TGT),
+            nn.Linear(body_dim + EMBED_DIM, head_hidden), nn.ReLU(),
+            nn.Linear(head_hidden, NUM_TGT),
         )
         self.value_head = nn.Sequential(
-            nn.Linear(BODY_DIM, HEAD_HIDDEN), nn.ReLU(),
-            nn.Linear(HEAD_HIDDEN, 1),
+            nn.Linear(body_dim, head_hidden), nn.ReLU(),
+            nn.Linear(head_hidden, 1),
         )
         self.src_embed = nn.Embedding(NUM_SRC, EMBED_DIM)
 
