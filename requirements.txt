@@ -5,3 +5,10 @@ modal>=1.0
 pygame-ce>=2.5
 psutil>=5.9
 pynvml>=11.5
+# Sim backend — JAX path (see sim/state_jax.py, sim/engine_jax.py).
+# On Mac, `jax` + `jaxlib` install the CPU wheel. On PaulLinux (RTX 3070),
+# replace jaxlib with the CUDA wheel:
+#   pip install "jax[cuda12]>=0.4.30"
+jax>=0.4.30
+jaxlib>=0.4.30
+flax>=0.8
