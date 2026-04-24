@@ -63,8 +63,8 @@ class PPOConfig:
     # Cross-lineage: include external leaderboard top-K as opponents.
     # P(env uses leaderboard opp) per snapshot = leaderboard_bias. Remainder
     # falls through to the self-play pool (latest_bias rules within).
-    # Default 0 (pure self-play) for backward-compat.
-    leaderboard_bias:     float = 0.0
+    # Default 0.3 gives roughly: 30% leaderboard, 56% latest own, 14% older own.
+    leaderboard_bias:     float = 0.3
     leaderboard_top_k:    int   = 10
     # Level
     # Static name (e.g. "crossroads_6") or dynamic "random_<min>_<max>".
