@@ -73,9 +73,7 @@ def send_amount(garrison_internal: int, percentage: int) -> int:
     Always a multiple of SCALE (i.e. a whole number of real units).
     Respects MIN_GARRISON_AFTER_SEND (0 in v0.1; reserved for future rule).
     """
-    # Cap by max sendable (respects the "leave at least X behind" future rule).
     max_sendable = max(0, garrison_internal - C.MIN_GARRISON_AFTER_SEND)
-    # Compute requested amount in real units, floor to integer, then scale back.
     real_units = (max_sendable * percentage) // (100 * C.SCALE)
     return real_units * C.SCALE
 
@@ -100,18 +98,16 @@ def is_valid(state: State, player: int, action: Action) -> bool:
     if tgt < 0 or tgt >= C.MAX_BUILDING_SLOTS:
         return False
 
-    b = state.buildings
-    if not b["alive"][src] or not b["alive"][tgt]:
+    if not state.buildings_alive[src] or not state.buildings_alive[tgt]:
         return False
-    if b["owner"][src] != player:
+    if state.buildings_owner[src] != player:
         return False
 
     pct = C.SEND_PERCENTAGES[action.type_idx]
-    if send_amount(int(b["garrison"][src]), pct) < C.MIN_SEND_INTERNAL:
+    if send_amount(int(state.buildings_garrison[src]), pct) < C.MIN_SEND_INTERNAL:
         return False
 
-    # Free slot required for the unit group.
-    if not np.any(state.unit_groups["alive"] == 0):
+    if not np.any(state.groups_alive == 0):
         return False
 
     return True
@@ -125,33 +121,27 @@ def compute_mask(state: State, player: int) -> np.ndarray:
     mask = np.zeros(ACTION_SPACE_SIZE, dtype=bool)
     mask[NOOP_INDEX] = True                     # noop always valid
 
-    b = state.buildings
-    g = state.unit_groups
-    has_free_group = bool(np.any(g["alive"] == 0))
+    has_free_group = bool(np.any(state.groups_alive == 0))
     if not has_free_group:
         return mask
 
-    alive = b["alive"].astype(bool)
-    owned = alive & (b["owner"] == player)
-    valid_tgt = alive                          # any alive building; self-pairs removed below
+    alive = state.buildings_alive.astype(bool)
+    owned = alive & (state.buildings_owner == player)
+    valid_tgt = alive
 
+    garrison = state.buildings_garrison
     for type_idx, pct in enumerate(C.SEND_PERCENTAGES):
-        # Source eligibility also requires enough garrison for this pct.
-        garrison = b["garrison"]
-        # Vectorized send_amount check.
         max_sendable = np.maximum(0, garrison - C.MIN_GARRISON_AFTER_SEND)
         real_units = (max_sendable.astype(np.int32) * pct) // (100 * C.SCALE)
         enough = (real_units * C.SCALE) >= C.MIN_SEND_INTERNAL
-        src_ok = owned & enough                  # (N,) bool
+        src_ok = owned & enough
 
         if not np.any(src_ok):
             continue
 
-        # Build a (N, N) eligibility matrix: rows=src, cols=tgt.
         pair_ok = src_ok[:, None] & valid_tgt[None, :]
         np.fill_diagonal(pair_ok, False)
 
-        # Flatten to action indices for this type.
         base = type_idx * SLOTS_SQ
         flat = pair_ok.reshape(-1)
         mask[base:base + SLOTS_SQ] = flat

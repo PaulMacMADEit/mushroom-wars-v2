@@ -1,16 +1,26 @@
 """
-Core sim step loop. Pure numpy — numba can wrap the hot functions later.
+Core sim step loop. Pure numpy — the JAX backend (sim/engine_jax.py) mirrors
+this exactly; changes here must keep gameplay semantics byte-identical.
 
 Per-tick phases:
   1. apply actions       (if caller provided any)
   2. advance production  (owned buildings regenerate garrison up to capacity)
   3. advance movement    (unit groups progress; collect arrivals)
-  4. resolve arrivals    (sequential reinforce/combat)
+  4. resolve arrivals    (per-target simultaneous reinforce/combat)
   5. check victory
 
 All five phases are wrapped in perf_counter timers (state.perf). The total cost
-is ~1 µs/tick — essentially free — and lets the benchmarker show exact phase
-breakdown without a separate profiler run.
+is ~1 µs/tick and lets the bench show per-phase breakdown without a separate
+profiler run.
+
+Storage is parallel ndarrays (see sim/state.py). Combat resolves via a
+fixed-shape 3-slot hostile-counts array (indexed by owner 0/1/2) rather than a
+Python dict — this is what the JAX port needs and stays JIT-friendly.
+
+Event emission (spawn/arrive/capture/end) is optional and gated on
+`events is not None`. The hot training path passes `events=None`; the replay
+path passes a list. Emitting events is not in the JAX hot path — replay runs
+on the numpy backend.
 """
 
 from __future__ import annotations
@@ -35,26 +45,21 @@ def step_tick(
     action_p2: Optional[Action] = None,
     events: Optional[list] = None,
 ) -> tuple[float, float, bool]:
-    """Advance the sim by exactly one tick.
+    """Advance the sim by exactly one tick. Returns (reward_p1, reward_p2, done).
 
     Actions (if provided) are applied BEFORE production/movement this tick.
-    Pass None for a player if they have no action this tick (e.g. between
-    decision intervals, or they chose noop).
+    Pass None for a player if they have no action this tick.
 
-    If `events` is a list, low-level engine events (spawn/arrive/end) are
-    appended to it for the replay recorder to consume. No-op when None.
-
-    Returns (reward_p1, reward_p2, done).
+    If `events` is a list, low-level engine events (spawn/arrive/capture/end)
+    are appended to it for the replay recorder to consume. No-op when None.
     """
     t0 = time.perf_counter_ns()
 
     if state.phase != C.PHASE_PLAYING:
-        # Terminal — nothing to do.
         return 0.0, 0.0, True
 
     r1 = r2 = 0.0
 
-    # 1. Actions
     ta = time.perf_counter_ns()
     if action_p1 is not None and action_p1.kind == "send":
         _apply_send(state, C.OWNER_P1, action_p1, events)
@@ -63,19 +68,16 @@ def step_tick(
     tb = time.perf_counter_ns()
     state.perf["actions_ns"] += tb - ta
 
-    # 2. Production
     ta = time.perf_counter_ns()
     _advance_production(state)
     tb = time.perf_counter_ns()
     state.perf["production_ns"] += tb - ta
 
-    # 3. Movement → collect arrivals
     ta = time.perf_counter_ns()
     arrivals = _advance_movement(state, events)
     tb = time.perf_counter_ns()
     state.perf["movement_ns"] += tb - ta
 
-    # 4. Resolve arrivals (simultaneous per target). Produces capture/loss rewards.
     ta = time.perf_counter_ns()
     dr1, dr2 = _resolve_arrivals(state, arrivals, events)
     r1 += dr1
@@ -85,7 +87,6 @@ def step_tick(
 
     state.tick += 1
 
-    # 5. Victory check
     ta = time.perf_counter_ns()
     dr1, dr2, done = _check_victory(state)
     r1 += dr1
@@ -111,32 +112,28 @@ def _apply_send(state: State, player: int, action: Action, events: Optional[list
     if not is_valid(state, player, action):
         return
 
-    b = state.buildings
-    g = state.unit_groups
     src, tgt = action.src, action.tgt
     pct = C.SEND_PERCENTAGES[action.type_idx]
 
-    amount = send_amount(int(b["garrison"][src]), pct)
+    amount = send_amount(int(state.buildings_garrison[src]), pct)
     if amount <= 0:
         return
 
-    # Find a free unit-group slot.
-    free_idx = np.where(g["alive"] == 0)[0]
+    free_idx = np.where(state.groups_alive == 0)[0]
     if free_idx.size == 0:
         return
     slot = int(free_idx[0])
 
     travel_ticks = int(state.travel_matrix[src, tgt])
 
-    # Deduct from source garrison; spawn the group.
-    b["garrison"][src] -= amount
-    g[slot]["alive"]        = 1
-    g[slot]["owner"]        = player
-    g[slot]["src_slot"]     = src
-    g[slot]["tgt_slot"]     = tgt
-    g[slot]["count"]        = amount
-    g[slot]["progress"]     = 0
-    g[slot]["travel_ticks"] = travel_ticks
+    state.buildings_garrison[src] -= amount
+    state.groups_alive[slot]    = 1
+    state.groups_owner[slot]    = player
+    state.groups_src[slot]      = src
+    state.groups_tgt[slot]      = tgt
+    state.groups_count[slot]    = amount
+    state.groups_progress[slot] = 0
+    state.groups_travel[slot]   = travel_ticks
 
     if events is not None:
         events.append({
@@ -153,22 +150,18 @@ def _apply_send(state: State, player: int, action: Action, events: Optional[list
 def _advance_production(state: State) -> None:
     """Each owned + alive building regenerates garrison up to capacity.
 
-    Buildings may already sit above capacity due to friendly reinforcement or a
-    large capture. In that case production should stop, not clamp them back
-    down.
+    Buildings may already sit above capacity (friendly reinforcement / large
+    capture). In that case production stops, not clamps them back down.
     """
-    b = state.buildings
-    alive = b["alive"] == 1
-    owned = (b["owner"] == C.OWNER_P1) | (b["owner"] == C.OWNER_P2)
-    below_cap = b["garrison"] < b["capacity"]
+    alive = state.buildings_alive == 1
+    owned = (state.buildings_owner == C.OWNER_P1) | (state.buildings_owner == C.OWNER_P2)
+    below_cap = state.buildings_garrison < state.buildings_capacity
     eligible = alive & owned & below_cap
 
-    # v0.1: all buildings are TYPE_BASIC with one rate. When more types land,
-    # this becomes a per-type rate lookup (cheap — 32-entry gather).
-    garrison = b["garrison"].astype(np.int32)
-    capacity = b["capacity"].astype(np.int32)
+    garrison = state.buildings_garrison.astype(np.int32)
+    capacity = state.buildings_capacity.astype(np.int32)
     new_garrison = np.minimum(garrison + C.PRODUCTION_PER_TICK, capacity)
-    b["garrison"] = np.where(eligible, new_garrison, garrison).astype(np.int16)
+    state.buildings_garrison[:] = np.where(eligible, new_garrison, garrison).astype(np.int16)
 
 
 def _advance_movement(state: State, events: Optional[list] = None) -> list:
@@ -176,16 +169,15 @@ def _advance_movement(state: State, events: Optional[list] = None) -> list:
 
     An arrival is (tgt_slot, owner, count). Freed slots are cleared.
     """
-    g = state.unit_groups
-    alive_idx = np.where(g["alive"] == 1)[0]
-    arrivals = []
+    alive_idx = np.where(state.groups_alive == 1)[0]
+    arrivals: list = []
 
     for idx in alive_idx:
-        g[idx]["progress"] += 1
-        if g[idx]["progress"] >= g[idx]["travel_ticks"]:
-            tgt = int(g[idx]["tgt_slot"])
-            owner = int(g[idx]["owner"])
-            count = int(g[idx]["count"])
+        state.groups_progress[idx] += 1
+        if state.groups_progress[idx] >= state.groups_travel[idx]:
+            tgt = int(state.groups_tgt[idx])
+            owner = int(state.groups_owner[idx])
+            count = int(state.groups_count[idx])
             arrivals.append((tgt, owner, count))
             if events is not None:
                 events.append({
@@ -195,17 +187,20 @@ def _advance_movement(state: State, events: Optional[list] = None) -> list:
                     "tgt": tgt,
                     "count": count,
                 })
-            # Clear the slot.
-            g[idx]["alive"] = 0
-            g[idx]["owner"] = 0
-            g[idx]["count"] = 0
-            g[idx]["progress"] = 0
-            g[idx]["travel_ticks"] = 0
+            state.groups_alive[idx]    = 0
+            state.groups_owner[idx]    = 0
+            state.groups_count[idx]    = 0
+            state.groups_progress[idx] = 0
+            state.groups_travel[idx]   = 0
 
     return arrivals
 
 
-def _resolve_arrivals(state: State, arrivals: list, events: Optional[list] = None) -> tuple[float, float]:
+def _resolve_arrivals(
+    state: State,
+    arrivals: list,
+    events: Optional[list] = None,
+) -> tuple[float, float]:
     """Apply arrivals simultaneously per target.
 
     All groups landing on the same target this tick resolve as one event:
@@ -219,49 +214,52 @@ def _resolve_arrivals(state: State, arrivals: list, events: Optional[list] = Non
 
     Emits `kind:"capture"` events whenever ownership changes.
 
-    Returns (reward_p1, reward_p2) from capture/loss events.
+    Returns (reward_p1, reward_p2).
     """
     if not arrivals:
         return 0.0, 0.0
 
-    b = state.buildings
     r1 = r2 = 0.0
 
-    # Group arrivals by target so the per-target resolution is
-    # order-independent across the full arrival list.
-    from collections import defaultdict
-    by_target: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    # Group arrivals by target. Use per-target fixed-shape (3,) int arrays
+    # indexed by owner (0=neutral, 1=P1, 2=P2) so combat resolution is
+    # arithmetic-only — no Python dict in the hot path.
+    by_target: dict[int, np.ndarray] = {}
     for tgt, owner, count in arrivals:
-        by_target[int(tgt)].append((int(owner), int(count)))
+        tgt = int(tgt)
+        by_owner = by_target.get(tgt)
+        if by_owner is None:
+            by_owner = np.zeros(3, dtype=np.int64)
+            by_target[tgt] = by_owner
+        by_owner[int(owner)] += int(count)
 
-    for tgt, groups in by_target.items():
-        if not b["alive"][tgt]:
+    for tgt, by_owner in by_target.items():
+        if not state.buildings_alive[tgt]:
             continue
 
-        owner_before = int(b["owner"][tgt])
-        garrison = int(b["garrison"][tgt])
-        capacity = int(b["capacity"][tgt])
+        owner_before = int(state.buildings_owner[tgt])
+        garrison = int(state.buildings_garrison[tgt])
+        capacity = int(state.buildings_capacity[tgt])
 
-        # Friendlies match the current owner. Everyone else is hostile.
-        friendlies = sum(c for o, c in groups if o == owner_before)
-        hostile_by_owner: dict[int, int] = defaultdict(int)
-        for o, c in groups:
-            if o != owner_before:
-                hostile_by_owner[o] += c
+        friendlies = int(by_owner[owner_before]) if 0 <= owner_before <= 2 else 0
+        # Hostile totals — a fixed-shape (3,) array with the friendly slot zeroed.
+        hostile = by_owner.copy()
+        if 0 <= owner_before <= 2:
+            hostile[owner_before] = 0
+        hostile_total = int(hostile.sum())
 
-        # Friendly reinforcement first — clamped at capacity, excess discarded.
         if friendlies > 0:
             garrison = min(garrison + friendlies, capacity)
 
-        if not hostile_by_owner:
-            b["garrison"][tgt] = garrison
+        if hostile_total == 0:
+            state.buildings_garrison[tgt] = garrison
             continue
 
         new_garrison, new_owner = _simultaneous_combat(
-            garrison, owner_before, hostile_by_owner
+            garrison, owner_before, hostile
         )
-        b["owner"][tgt] = new_owner
-        b["garrison"][tgt] = new_garrison
+        state.buildings_owner[tgt] = new_owner
+        state.buildings_garrison[tgt] = new_garrison
 
         if new_owner != owner_before:
             if events is not None:
@@ -287,9 +285,9 @@ def _resolve_arrivals(state: State, arrivals: list, events: Optional[list] = Non
 def _simultaneous_combat(
     garrison: int,
     owner_before: int,
-    hostile_by_owner: dict[int, int],
+    hostile: np.ndarray,   # shape (3,) int64 — counts by owner, friendly slot = 0
 ) -> tuple[int, int]:
-    """Resolve one defender against N hostile owners landing simultaneously.
+    """Resolve one defender against simultaneous hostile arrivals.
 
     Model (order-independent, symmetric across hostile owners):
 
@@ -303,13 +301,12 @@ def _simultaneous_combat(
                share of defender damage). The attacker with the largest
                surviving force takes the building; runner-up forces collide
                1:1 with the winner's survivors. Ties go neutral.
-
-    Reduces to the pre-change single-hostile combat when len(hostile_by_owner)==1.
     """
-    if not hostile_by_owner:
+    total_hostile = int(hostile.sum())
+    if total_hostile == 0:
         return (garrison, owner_before)
 
-    total_attack = sum(hostile_by_owner.values()) * C.DEF_BONUS_DEN
+    total_attack = total_hostile * C.DEF_BONUS_DEN
     defense = garrison * C.DEF_BONUS_NUM
 
     if total_attack < defense:
@@ -319,59 +316,35 @@ def _simultaneous_combat(
     if total_attack == defense:
         return (0, C.OWNER_NEUTRAL)
 
-    # Attackers overwhelm the defender; split defender damage proportionally.
-    survivors_scaled: dict[int, int] = {}
-    for owner, count in hostile_by_owner.items():
-        attack_i = count * C.DEF_BONUS_DEN
-        # Integer proportional share — floor; residual rounding error is
-        # bounded by len(hostile_by_owner) and is part of the fixed-point model.
-        damage_share = (defense * attack_i) // total_attack
-        survivors_scaled[owner] = attack_i - damage_share
+    # Attackers overwhelm — fixed-shape proportional damage across 3 owner slots.
+    attack_i = hostile.astype(np.int64) * C.DEF_BONUS_DEN
+    damage_share = (defense * attack_i) // total_attack
+    survivors = attack_i - damage_share  # (3,) int64; friendly slot stays 0.
 
-    ordered = sorted(survivors_scaled.items(), key=lambda kv: -kv[1])
-    winner, winner_force = ordered[0]
-    runner_up_force = sum(f for _, f in ordered[1:])
+    # Pick winner = argmax of survivors; tie detection via sorted order.
+    order = np.argsort(-survivors, kind="stable")
+    winner = int(order[0])
+    winner_force = int(survivors[winner])
+    # Runner-up and below — everything else that's hostile.
+    runner_up_force = int(survivors.sum() - winner_force)
 
     if winner_force > runner_up_force:
         remaining_scaled = winner_force - runner_up_force
         remaining = (remaining_scaled + (C.DEF_BONUS_DEN // 2)) // C.DEF_BONUS_DEN
         return (int(remaining), winner)
-    # Tied top survivors → mutual kill, neutral.
     return (0, C.OWNER_NEUTRAL)
 
 
 def _combat(garrison: int, attackers: int, attacker_owner: int, owner_before: int) -> tuple[int, int]:
-    """Proportional combat with integer fixed-point. Returns (new_garrison, new_owner).
-
-    Buildings defend at a constant multiplier:
-
-      effective_defense = garrison * DEF_NUM / DEF_DEN
-
-    Outcomes:
-      attack <  effective_defense → defender holds, remaining garrison is reduced
-                                  proportionally: (defense - attack) / defense_multiplier
-      attack == effective_defense → both wiped, neutral
-      attack >  effective_defense → attacker captures, survivors = attack - defense
-
-    We round to the nearest internal unit so the sim can preserve chip damage
-    using fixed-point integers instead of floats.
+    """Single-hostile combat shim. Preserved for tests that exercise the
+    proportional-damage math in isolation. Delegates to _simultaneous_combat
+    with a one-owner hostile vector so the model stays single-sourced.
     """
     if attackers <= 0:
         return (garrison, owner_before)
-
-    attack_scaled = attackers * C.DEF_BONUS_DEN
-    defense_scaled = garrison * C.DEF_BONUS_NUM
-
-    if attack_scaled < defense_scaled:
-        remaining_scaled = defense_scaled - attack_scaled
-        remaining = (remaining_scaled + (C.DEF_BONUS_NUM // 2)) // C.DEF_BONUS_NUM
-        return (int(remaining), owner_before)
-    if attack_scaled == defense_scaled:
-        return (0, C.OWNER_NEUTRAL)
-
-    remaining_scaled = attack_scaled - defense_scaled
-    remaining = (remaining_scaled + (C.DEF_BONUS_DEN // 2)) // C.DEF_BONUS_DEN
-    return (int(remaining), attacker_owner)
+    hostile = np.zeros(3, dtype=np.int64)
+    hostile[int(attacker_owner)] = int(attackers)
+    return _simultaneous_combat(garrison, owner_before, hostile)
 
 
 def _check_victory(state: State) -> tuple[float, float, bool]:
@@ -382,12 +355,9 @@ def _check_victory(state: State) -> tuple[float, float, bool]:
     p1_bldgs = count_owned_buildings(state, C.OWNER_P1)
     p2_bldgs = count_owned_buildings(state, C.OWNER_P2)
 
-    # Elimination: player owns 0 buildings AND has 0 in-flight groups.
     p1_alive = p1_bldgs > 0 or has_in_flight(state, C.OWNER_P1)
     p2_alive = p2_bldgs > 0 or has_in_flight(state, C.OWNER_P2)
 
-    # Linear speed bonus: faster wins earn more. Decays from REWARD_SPEED_BONUS
-    # at tick=0 to 0 at timeout. Loser/draw rewards are unchanged.
     speed_bonus = C.REWARD_SPEED_BONUS * max(0.0, 1.0 - state.tick / C.GAME_TIMEOUT_TICKS)
     win_reward = C.REWARD_WIN + speed_bonus
 
@@ -401,7 +371,6 @@ def _check_victory(state: State) -> tuple[float, float, bool]:
         state.phase = C.PHASE_P1_WINS
         return win_reward, C.REWARD_LOSE, True
 
-    # Timeout: tiebreak buildings → units → draw. No speed bonus on timeout.
     if state.tick >= C.GAME_TIMEOUT_TICKS:
         if p1_bldgs > p2_bldgs:
             state.phase = C.PHASE_P1_WINS
@@ -409,7 +378,6 @@ def _check_victory(state: State) -> tuple[float, float, bool]:
         if p2_bldgs > p1_bldgs:
             state.phase = C.PHASE_P2_WINS
             return C.REWARD_LOSE, C.REWARD_WIN, True
-        # Buildings tied — compare units.
         from sim.state import count_owned_units
         u1 = count_owned_units(state, C.OWNER_P1)
         u2 = count_owned_units(state, C.OWNER_P2)

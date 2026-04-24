@@ -429,10 +429,11 @@ The worker is ~200 lines of Python. No orchestrator. No event bus. Just atomic S
 
 ### 8.1 Representation
 
-- Entities as **numpy-structured arrays**, not Python objects. Stays JIT-friendly and fits into shared memory for vec env.
-- Building array: `(N_buildings,)` dtype with fields `(id, x, y, owner, type, level, garrison, capacity, production_timer, upgrade_state, ...)`.
-- Unit groups array: `(N_groups,)` similar.
-- One game state = a dict of these arrays + scalars (`elapsed_ms`, `phase`).
+- Entities as **parallel numpy ndarrays** (struct-of-arrays, not array-of-structs). Each field is a contiguous 1-D `ndarray` of shape `(MAX_BUILDING_SLOTS,)` or `(MAX_UNIT_GROUP_SLOTS,)` — the layout XLA/vmap consumes cleanly for the JAX backend.
+- Buildings: `buildings_alive`, `buildings_owner`, `buildings_type`, `buildings_garrison`, `buildings_capacity`, `buildings_x`, `buildings_y` (all length MAX_BUILDING_SLOTS).
+- Unit groups: `groups_alive`, `groups_owner`, `groups_src`, `groups_tgt`, `groups_count`, `groups_progress`, `groups_travel` (all length MAX_UNIT_GROUP_SLOTS).
+- One game state = these ndarrays plus `travel_matrix`, `distance_matrix`, and scalars (`tick`, `phase`, `perf`).
+- Structured-dtype access (`state.buildings["owner"]`, `state.unit_groups[mask]`) remains available via a proxy in `sim/state.py` for existing test/replay/script code; hot paths use the parallel ndarrays directly.
 
 ### 8.2 Hot paths compiled with numba
 

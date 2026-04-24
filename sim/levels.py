@@ -191,22 +191,32 @@ def apply(state: State, level_name: str = "crossroads_6", seed: int | None = Non
     if len(level) > C.MAX_BUILDING_SLOTS:
         raise ValueError(f"Level has {len(level)} buildings; max is {C.MAX_BUILDING_SLOTS}")
 
-    b = state.buildings
-    g = state.unit_groups
-    b[:] = 0  # clear all slots
-    g[:] = 0  # clear all in-flight groups
+    state.buildings_alive[:]    = 0
+    state.buildings_owner[:]    = 0
+    state.buildings_type[:]     = 0
+    state.buildings_garrison[:] = 0
+    state.buildings_capacity[:] = 0
+    state.buildings_x[:]        = 0
+    state.buildings_y[:]        = 0
+    state.groups_alive[:]    = 0
+    state.groups_owner[:]    = 0
+    state.groups_src[:]      = 0
+    state.groups_tgt[:]      = 0
+    state.groups_count[:]    = 0
+    state.groups_progress[:] = 0
+    state.groups_travel[:]   = 0
 
     for slot, (owner, x, y, garrison_real, type_id) in enumerate(level):
         if type_id not in C.BUILDING_STATS:
             raise ValueError(f"Unknown building type_id: {type_id}")
         stats = C.BUILDING_STATS[type_id]
-        b[slot]["alive"]    = 1
-        b[slot]["owner"]    = owner
-        b[slot]["type_id"]  = type_id
-        b[slot]["garrison"] = garrison_real * C.SCALE
-        b[slot]["capacity"] = stats["capacity"]
-        b[slot]["x"]        = x
-        b[slot]["y"]        = y
+        state.buildings_alive[slot]    = 1
+        state.buildings_owner[slot]    = owner
+        state.buildings_type[slot]     = type_id
+        state.buildings_garrison[slot] = garrison_real * C.SCALE
+        state.buildings_capacity[slot] = stats["capacity"]
+        state.buildings_x[slot]        = x
+        state.buildings_y[slot]        = y
 
     # Slots len(level)..MAX are left as alive=0 (empty).
     state.tick = 0

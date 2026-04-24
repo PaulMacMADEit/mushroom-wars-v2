@@ -2,11 +2,15 @@
 State container for one game.
 
 Storage philosophy:
-- Fixed-size structured numpy arrays (not Python objects). Numba-ready,
-  vec-env-friendly, fits in L1 cache.
+- Parallel (struct-of-arrays) numpy ndarrays, not array-of-structs. Each field is
+  a contiguous 1-D ndarray of shape `(MAX_BUILDING_SLOTS,)` or `(MAX_UNIT_GROUP_SLOTS,)`.
+  This layout is what a JAX pytree wants and what XLA can vmap cleanly.
+- Fixed capacity: MAX_BUILDING_SLOTS / MAX_UNIT_GROUP_SLOTS so the neural
+  observation shape never changes and every batched state has the same shape.
 - All quantities integer. Floats only during distance precomputation (once at reset()).
-- Capacity pre-allocated at MAX_BUILDING_SLOTS / MAX_UNIT_GROUP_SLOTS so the
-  neural observation shape never changes.
+- Structured-array-style access (`state.buildings["owner"]`, `state.unit_groups["count"]`)
+  is preserved via read/write proxies that forward to the underlying parallel ndarrays.
+  Hot-path code should prefer `state.buildings_owner` etc.
 """
 
 from __future__ import annotations
@@ -19,41 +23,120 @@ from sim import config as C
 
 
 # ---------------------------------------------------------------------------
-# Structured dtypes
+# Back-compat proxies (structured-array-style views over parallel ndarrays)
 # ---------------------------------------------------------------------------
 
-# Smallest sensible types per field. See ARCHITECTURE §8.1 + discussion.
-BUILDING_DTYPE = np.dtype([
-    ("alive",    np.int8),    # 0 = empty slot, 1 = in-play
-    ("owner",    np.int8),    # 0=neutral, 1=P1, 2=P2
-    ("type_id",  np.int8),    # 0=BASIC in v0.1; extension point for more types
-    ("garrison", np.int16),   # fixed-point, scale=10 (so 35 = 3.5 real)
-    ("capacity", np.int16),   # fixed-point, scale=10
-    ("x",        np.int16),   # map units
-    ("y",        np.int16),   # map units
-])
+class _ArrayProxy:
+    """Dict-of-ndarrays with structured-array ergonomics.
 
-UNIT_GROUP_DTYPE = np.dtype([
-    ("alive",         np.int8),    # 0 = slot free
-    ("owner",         np.int8),    # 1=P1, 2=P2 (groups are never neutral)
-    ("src_slot",      np.int8),    # index into buildings
-    ("tgt_slot",      np.int8),
-    ("count",         np.int16),   # fixed-point units in flight
-    ("progress",      np.int16),   # ticks elapsed since spawn
-    ("travel_ticks",  np.int16),   # ticks needed to arrive
-])
+    - `proxy["owner"]` returns the owner ndarray (read+write).
+    - `proxy[i]` returns a row view for one slot (scalar integer index).
+    - `proxy[bool_mask]` / `proxy[slice]` returns a sub-proxy with each field
+      sliced — so `len(proxy[mask])` counts selected rows.
+    - `proxy[:] = 0` broadcasts the assignment to every field.
+    - Equality is fieldwise: two proxies with the same fields compare equal
+      iff all underlying ndarrays compare equal. This lets
+      `np.array_equal(s1.buildings, s2.buildings)` work in tests.
+    """
+
+    __slots__ = ("_fields",)
+
+    def __init__(self, fields: dict[str, np.ndarray]):
+        object.__setattr__(self, "_fields", fields)
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            return self._fields[key]
+        # Scalar integer → row view (one slot).
+        if isinstance(key, (int, np.integer)):
+            return _RowView(self._fields, int(key))
+        # slice / ndarray / list → sub-proxy with each field sliced.
+        return _ArrayProxy({name: arr[key] for name, arr in self._fields.items()})
+
+    def __setitem__(self, key, value):
+        if isinstance(key, str):
+            self._fields[key][:] = value
+            return
+        # `proxy[:] = 0` — broadcast the assignment to every field.
+        for arr in self._fields.values():
+            arr[key] = value
+
+    def __len__(self):
+        return next(iter(self._fields.values())).shape[0]
+
+    def __iter__(self):
+        n = len(self)
+        for i in range(n):
+            yield _RowView(self._fields, i)
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, _ArrayProxy):
+            return NotImplemented
+        if set(self._fields.keys()) != set(other._fields.keys()):
+            return False
+        return all(
+            np.array_equal(self._fields[k], other._fields[k])
+            for k in self._fields
+        )
+
+    def __hash__(self):
+        return id(self)
+
+    def __array__(self, dtype=None):
+        """Assemble a structured ndarray from the parallel fields.
+
+        Called by `np.array_equal(proxy1, proxy2)` and `np.asarray(proxy)`.
+        Structured-array equality is fieldwise, which matches the proxy's
+        semantics. Returning a copy here is fine — this path is test-only.
+        """
+        dt = np.dtype([(name, arr.dtype) for name, arr in self._fields.items()])
+        out = np.empty(len(self), dtype=dt)
+        for name, arr in self._fields.items():
+            out[name] = arr
+        return out if dtype is None else out.astype(dtype)
+
+
+class _RowView:
+    """One-row view of the parallel ndarrays. Read/write flows through."""
+
+    __slots__ = ("_fields", "_idx")
+
+    def __init__(self, fields: dict[str, np.ndarray], idx):
+        object.__setattr__(self, "_fields", fields)
+        object.__setattr__(self, "_idx", idx)
+
+    def __getitem__(self, name: str):
+        return self._fields[name][self._idx]
+
+    def __setitem__(self, name: str, value) -> None:
+        self._fields[name][self._idx] = value
 
 
 # ---------------------------------------------------------------------------
-# State dataclass
+# State dataclass — parallel ndarrays for buildings + unit groups
 # ---------------------------------------------------------------------------
 
 @dataclass
 class State:
-    """One game's full state. All fields are either numpy arrays or small scalars."""
+    """One game's full state. Every field is a numpy ndarray or small scalar."""
 
-    buildings:   np.ndarray    # (MAX_BUILDING_SLOTS,) BUILDING_DTYPE
-    unit_groups: np.ndarray    # (MAX_UNIT_GROUP_SLOTS,) UNIT_GROUP_DTYPE
+    # Buildings (parallel ndarrays, all length MAX_BUILDING_SLOTS)
+    buildings_alive:    np.ndarray   # int8
+    buildings_owner:    np.ndarray   # int8
+    buildings_type:     np.ndarray   # int8
+    buildings_garrison: np.ndarray   # int16
+    buildings_capacity: np.ndarray   # int16
+    buildings_x:        np.ndarray   # int16
+    buildings_y:        np.ndarray   # int16
+
+    # Unit groups (parallel ndarrays, all length MAX_UNIT_GROUP_SLOTS)
+    groups_alive:    np.ndarray     # int8
+    groups_owner:    np.ndarray     # int8
+    groups_src:      np.ndarray     # int8
+    groups_tgt:      np.ndarray     # int8
+    groups_count:    np.ndarray     # int16
+    groups_progress: np.ndarray     # int16
+    groups_travel:   np.ndarray     # int16
 
     # Precomputed once in reset(). Read-only during play.
     travel_matrix:   np.ndarray  # (MAX_BUILDING_SLOTS, MAX_BUILDING_SLOTS) int16 ticks
@@ -64,7 +147,6 @@ class State:
     phase:         int = C.PHASE_PLAYING
 
     # Lightweight per-subsystem profiling (nanoseconds accumulated this game).
-    # Always on; cost ~200 ns per phase per tick. Zeroed at reset.
     perf: dict = field(default_factory=lambda: {
         "production_ns": 0,
         "movement_ns":   0,
@@ -75,6 +157,34 @@ class State:
         "n_ticks":       0,
     })
 
+    # Cached structured-style proxies — built once per State instance so
+    # `state.buildings["owner"]` keeps working for test + external code.
+    # Not a dataclass field (excluded from repr/equality); populated in
+    # __post_init__.
+    def __post_init__(self) -> None:
+        self._refresh_proxies()
+
+    def _refresh_proxies(self) -> None:
+        # Structured-dtype field names are the second segment of buildings_*.
+        object.__setattr__(self, "buildings", _ArrayProxy({
+            "alive":    self.buildings_alive,
+            "owner":    self.buildings_owner,
+            "type_id":  self.buildings_type,
+            "garrison": self.buildings_garrison,
+            "capacity": self.buildings_capacity,
+            "x":        self.buildings_x,
+            "y":        self.buildings_y,
+        }))
+        object.__setattr__(self, "unit_groups", _ArrayProxy({
+            "alive":        self.groups_alive,
+            "owner":        self.groups_owner,
+            "src_slot":     self.groups_src,
+            "tgt_slot":     self.groups_tgt,
+            "count":        self.groups_count,
+            "progress":     self.groups_progress,
+            "travel_ticks": self.groups_travel,
+        }))
+
 
 # ---------------------------------------------------------------------------
 # Factories
@@ -82,15 +192,25 @@ class State:
 
 def empty_state() -> State:
     """Zero-initialized state. Use `levels.apply(state, level)` to populate."""
-    buildings   = np.zeros(C.MAX_BUILDING_SLOTS,   dtype=BUILDING_DTYPE)
-    unit_groups = np.zeros(C.MAX_UNIT_GROUP_SLOTS, dtype=UNIT_GROUP_DTYPE)
-    travel    = np.zeros((C.MAX_BUILDING_SLOTS, C.MAX_BUILDING_SLOTS), dtype=np.int16)
-    distance  = np.zeros((C.MAX_BUILDING_SLOTS, C.MAX_BUILDING_SLOTS), dtype=np.float32)
+    N = C.MAX_BUILDING_SLOTS
+    M = C.MAX_UNIT_GROUP_SLOTS
     return State(
-        buildings=buildings,
-        unit_groups=unit_groups,
-        travel_matrix=travel,
-        distance_matrix=distance,
+        buildings_alive    = np.zeros(N, dtype=np.int8),
+        buildings_owner    = np.zeros(N, dtype=np.int8),
+        buildings_type     = np.zeros(N, dtype=np.int8),
+        buildings_garrison = np.zeros(N, dtype=np.int16),
+        buildings_capacity = np.zeros(N, dtype=np.int16),
+        buildings_x        = np.zeros(N, dtype=np.int16),
+        buildings_y        = np.zeros(N, dtype=np.int16),
+        groups_alive    = np.zeros(M, dtype=np.int8),
+        groups_owner    = np.zeros(M, dtype=np.int8),
+        groups_src      = np.zeros(M, dtype=np.int8),
+        groups_tgt      = np.zeros(M, dtype=np.int8),
+        groups_count    = np.zeros(M, dtype=np.int16),
+        groups_progress = np.zeros(M, dtype=np.int16),
+        groups_travel   = np.zeros(M, dtype=np.int16),
+        travel_matrix   = np.zeros((N, N), dtype=np.int16),
+        distance_matrix = np.zeros((N, N), dtype=np.float32),
     )
 
 
@@ -100,22 +220,18 @@ def precompute_distances(state: State) -> None:
     Called once from reset() after a level is applied. Distances never change
     during a game (buildings don't move), so this is pure setup cost.
     """
-    b = state.buildings
-    alive = b["alive"].astype(bool)
+    alive = state.buildings_alive.astype(bool)
 
-    xs = b["x"].astype(np.float32)
-    ys = b["y"].astype(np.float32)
+    xs = state.buildings_x.astype(np.float32)
+    ys = state.buildings_y.astype(np.float32)
 
-    # Broadcast to (N, N) distances. float32 is fine — this runs once.
     dx = xs[:, None] - xs[None, :]
     dy = ys[:, None] - ys[None, :]
     dist = np.sqrt(dx * dx + dy * dy)
 
-    # Travel ticks: ceil(distance / speed), clamped to [MIN, MAX].
     travel = np.ceil(dist / C.TRAVEL_SPEED).astype(np.int32)
     travel = np.clip(travel, C.MIN_TRAVEL_TICKS, C.MAX_TRAVEL_TICKS)
 
-    # Zero out rows/cols for dead slots and self-pairs (i == j).
     mask_2d = alive[:, None] & alive[None, :]
     travel = np.where(mask_2d, travel, 0)
     np.fill_diagonal(travel, 0)
@@ -126,25 +242,24 @@ def precompute_distances(state: State) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Small helpers
+# Small helpers (kept as a compatibility shim per JAX_PORT_PLAN §4 Phase 0)
 # ---------------------------------------------------------------------------
 
 def count_owned_buildings(state: State, owner: int) -> int:
-    b = state.buildings
-    return int(np.sum((b["alive"] == 1) & (b["owner"] == owner)))
+    alive = state.buildings_alive == 1
+    return int(np.sum(alive & (state.buildings_owner == owner)))
 
 
 def count_owned_units(state: State, owner: int) -> int:
     """Total units (garrison + in-flight) for a player, in internal scale."""
-    b = state.buildings
-    g = state.unit_groups
-    in_garrison = int(np.sum(np.where((b["alive"] == 1) & (b["owner"] == owner),
-                                      b["garrison"], 0)))
-    in_flight   = int(np.sum(np.where((g["alive"] == 1) & (g["owner"] == owner),
-                                      g["count"], 0)))
+    in_garrison = int(np.sum(np.where(
+        (state.buildings_alive == 1) & (state.buildings_owner == owner),
+        state.buildings_garrison, 0)))
+    in_flight = int(np.sum(np.where(
+        (state.groups_alive == 1) & (state.groups_owner == owner),
+        state.groups_count, 0)))
     return in_garrison + in_flight
 
 
 def has_in_flight(state: State, owner: int) -> bool:
-    g = state.unit_groups
-    return bool(np.any((g["alive"] == 1) & (g["owner"] == owner)))
+    return bool(np.any((state.groups_alive == 1) & (state.groups_owner == owner)))
