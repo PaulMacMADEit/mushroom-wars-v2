@@ -5,29 +5,70 @@
   <title>Mushroom Wars v2 — Replay</title>
   <link rel="stylesheet" href="lib/style.css">
   <style>
-    .workspace {
-      display: grid;
-      grid-template-columns: minmax(0, 1.7fr) minmax(340px, 1fr);
-      gap: 14px;
-    }
-    .workspace-left {
+    /* Fill viewport: no scroll on body, three-column workspace */
+    body { overflow: hidden; }
+    main {
+      max-width: none !important;
+      padding: 10px 12px !important;
+      margin: 0 !important;
+      height: calc(100vh - 60px);
       display: flex;
       flex-direction: column;
-      gap: 10px;
-      min-width: 0;
+      gap: 8px;
+      box-sizing: border-box;
     }
-    .workspace-right {
-      align-self: start;
-      position: sticky;
-      top: 12px;
-      max-height: calc(100vh - 100px);
+
+    /* Top bar: meta + colored P1/P2 chips */
+    .top-bar {
+      display: flex;
+      gap: 18px;
+      align-items: center;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+    }
+    .player-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: var(--mono);
+    }
+    .player-chip.p1 { background: rgba(248,113,113,0.16); color: #fca5a5; border: 1px solid rgba(248,113,113,0.35); }
+    .player-chip.p2 { background: rgba(96,165,250,0.16); color: #93c5fd; border: 1px solid rgba(96,165,250,0.35); }
+    .player-chip .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+    }
+    .player-chip.p1 .dot { background: #f87171; }
+    .player-chip.p2 .dot { background: #60a5fa; }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 340px minmax(0, 1fr) 360px;
+      gap: 12px;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    .col-left, .col-right {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow-y: auto;
+      min-height: 0;
+    }
+    .col-middle {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      min-height: 0;
       min-width: 0;
     }
 
     .viewer {
-      display: grid;
-      grid-template-rows: minmax(340px, 1fr) auto;
-      gap: 10px;
+      display: contents;  /* let canvas-wrap + controls live directly in col-middle */
     }
 
     /* Compact tick table — right-side timeline */
@@ -35,9 +76,10 @@
       background: var(--bg-card);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      height: 100%;
+      flex: 1 1 auto;
       display: flex;
       flex-direction: column;
+      min-height: 0;
     }
     .tick-table-header {
       display: grid;
@@ -252,6 +294,11 @@
       border: 1px solid var(--border);
       border-radius: var(--radius);
       overflow: hidden;
+      aspect-ratio: 1;
+      width: 100%;
+      max-height: 100%;
+      max-width: min(100%, calc(100vh - 180px));
+      align-self: center;
     }
     canvas { display: block; width: 100%; height: 100%; }
 
@@ -268,12 +315,15 @@
 
     .controls {
       display: flex;
-      gap: 12px;
+      gap: 8px;
       align-items: center;
-      padding: 12px;
+      padding: 6px 10px;
       background: var(--bg-card);
       border: 1px solid var(--border);
       border-radius: var(--radius);
+      width: 100%;
+      max-width: min(100%, calc(100vh - 180px));
+      box-sizing: border-box;
     }
     .controls button {
       background: #1f2433;
@@ -315,79 +365,76 @@
       <a href="./runs.html">Runs</a>
       <a href="./models.html">Models</a>
       <a href="./elo.html">Leaderboard</a>
+      <a href="./training.html">Training</a>
       <a href="./replays.html">Replays</a>
       <a href="./play.html">Play</a>
     </nav>
   </header>
 
   <main>
-    <div class="meta-row" id="meta">
-      <div class="pair"><span class="label">Status</span><span class="value muted" id="status">Drop an events.json onto the canvas to load</span></div>
+    <div class="top-bar">
+      <span class="player-chip p1"><span class="dot"></span>P1</span>
+      <span class="player-chip p2"><span class="dot"></span>P2</span>
+      <div class="meta-row" id="meta" style="margin:0;">
+        <div class="pair"><span class="label">Status</span><span class="value muted" id="status">Drop an events.json onto the canvas to load</span></div>
+      </div>
     </div>
 
     <div class="workspace">
-      <div class="workspace-left">
-        <div class="viewer">
-          <div class="canvas-wrap" id="canvas-wrap">
-            <canvas id="canvas"></canvas>
-            <div class="dropzone" id="dropzone">
-              <div>Drop an <span class="inline-code">events.json</span> file here</div>
-              <code>or append ?url=&lt;path-to-events.json&gt; to this URL</code>
-            </div>
-          </div>
-          <div class="controls">
-            <button id="play" class="primary">Play</button>
-            <button id="restart">Restart</button>
-            <input type="range" id="scrub" min="0" max="100" step="0.01" value="0">
-            <span class="time" id="time">t = 0 / 0</span>
-            <select id="speed">
-              <option value="0.5">0.5×</option>
-              <option value="1">1×</option>
-              <option value="2">2×</option>
-              <option value="4" selected>4×</option>
-              <option value="8">8×</option>
-            </select>
-            <button id="download-log" title="Download a narrated text log of this game">Log .txt</button>
-            <button id="copy-url" title="Copy share link (for sending to Claude)">Copy link</button>
-          </div>
-        </div>
-
+      <div class="col-left">
         <div class="mind-panel" id="mind-panel" style="display:none">
-          <div class="mind-title">V(s) — "am I winning?" per agent</div>
+          <div class="mind-title">V(s) — "am I winning?"</div>
           <div class="mind-chart"><svg id="mind-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg></div>
-          <div class="mind-legend">
-            <span><span class="swatch" style="background:#f87171"></span>P1 critic</span>
-            <span><span class="swatch" style="background:#60a5fa"></span>P2 critic</span>
-            <span>Dashed lines at ±1 and 0.</span>
-          </div>
         </div>
 
         <div class="mind-panel" id="force-panel" style="display:none">
-          <div class="mind-title">Force — buildings owned &amp; total units (incl. in-flight)</div>
+          <div class="mind-title">Force — buildings &amp; total units</div>
           <div class="mind-chart"><svg id="force-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg></div>
-          <div class="mind-legend">
-            <span><span class="swatch" style="background:#f87171"></span>P1</span>
-            <span><span class="swatch" style="background:#60a5fa"></span>P2</span>
-            <span>Solid = total units · dashed = buildings owned.</span>
-          </div>
+          <div class="mind-legend"><span>Solid = units · dashed = buildings</span></div>
         </div>
 
         <div class="mind-panel" id="reward-panel" style="display:none">
-          <div class="mind-title">Reward accumulation — shaping (±0.1 capture/loss) vs. terminal (±1.0 win/lose)</div>
+          <div class="mind-title">Reward accumulation</div>
           <div class="mind-chart"><svg id="reward-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg></div>
-          <div class="mind-legend" id="reward-breakdown">
-            <span><span class="swatch" style="background:#f87171"></span>P1</span>
-            <span><span class="swatch" style="background:#60a5fa"></span>P2</span>
-          </div>
+          <div class="mind-legend" id="reward-breakdown"></div>
+        </div>
+
+        <div class="mind-panel" id="entropy-panel" style="display:none">
+          <div class="mind-title">Decision entropy — low = decisive, high = torn</div>
+          <div class="mind-chart"><svg id="entropy-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg></div>
         </div>
       </div>
 
-      <div class="workspace-right">
+      <div class="col-middle">
+        <div class="canvas-wrap" id="canvas-wrap">
+          <canvas id="canvas"></canvas>
+          <div class="dropzone" id="dropzone">
+            <div>Drop an <span class="inline-code">events.json</span> file here</div>
+            <code>or append ?url=&lt;path-to-events.json&gt; to this URL</code>
+          </div>
+        </div>
+        <div class="controls">
+          <button id="play" class="primary">Play</button>
+          <button id="restart">Restart</button>
+          <input type="range" id="scrub" min="0" max="100" step="0.01" value="0">
+          <span class="time" id="time">t = 0 / 0</span>
+          <select id="speed">
+            <option value="0.5">0.5×</option>
+            <option value="1">1×</option>
+            <option value="2">2×</option>
+            <option value="4" selected>4×</option>
+            <option value="8">8×</option>
+          </select>
+          <button id="download-log" title="Download a narrated text log">↓</button>
+        </div>
+      </div>
+
+      <div class="col-right">
         <div class="tick-table-wrap">
           <div class="tick-table-header">
             <span>t</span>
-            <span class="h-p1">P1</span>
-            <span class="h-p2">P2</span>
+            <span class="h-p1">● P1</span>
+            <span class="h-p2">● P2</span>
           </div>
           <div class="tick-table" id="tick-table">
             <div class="muted" style="padding:12px;">Load a replay to see moves.</div>

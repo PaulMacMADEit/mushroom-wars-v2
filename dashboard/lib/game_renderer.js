@@ -181,7 +181,8 @@ export class ReplayPlayer {
   // --- Rendering ----------------------------------------------------------
 
   _worldToScreen(x, y) {
-    const pad = 40;
+    // Just enough padding so buildings near the edge aren't clipped by their radius.
+    const pad = 14;
     const w = this._cssW, h = this._cssH;
     const size = Math.min(w, h) - pad * 2;
     const originX = (w - size) / 2;
@@ -195,18 +196,7 @@ export class ReplayPlayer {
   render() {
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this._cssW, this._cssH);
-
-    // Subtle playfield backdrop.
-    const pad = 40;
-    const size = Math.min(this._cssW, this._cssH) - pad * 2;
-    const ox = (this._cssW - size) / 2;
-    const oy = (this._cssH - size) / 2;
-    ctx.save();
-    ctx.strokeStyle = "#262a36";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(ox, oy, size, size);
-    ctx.restore();
-
+    // (Inner border removed — the outer canvas-wrap already has one.)
     const t = this.t;
 
     // Squads first so they pass under building labels.

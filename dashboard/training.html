@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mushroom Wars v2 — Training program</title>
+  <link rel="stylesheet" href="lib/style.css">
+  <style>
+    .narrative { max-width: 820px; }
+    .narrative h3 { margin-top: 28px; }
+    .narrative li { margin: 6px 0; }
+    .kv { display: grid; grid-template-columns: 180px 1fr; gap: 4px 16px; margin: 8px 0; }
+    .kv dt { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+    .kv dd { margin: 0; }
+    .quick { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0 24px 0; }
+    .quick .card { flex: 1 1 160px; min-width: 140px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Mushroom Wars v2</h1>
+    <nav>
+      <a href="./index.html">Overview</a>
+      <a href="./runs.html">Runs</a>
+      <a href="./models.html">Models</a>
+      <a href="./elo.html">Leaderboard</a>
+      <a href="./training.html">Training</a>
+      <a href="./replays.html">Replays</a>
+      <a href="./play.html">Play</a>
+    </nav>
+  </header>
+
+  <main class="narrative">
+    <h2>What the training loop actually does</h2>
+
+    <h3>1. The PPO cycle</h3>
+    <p>Each training run is a loop of <strong>Proximal Policy Optimization</strong>
+      updates until a wall-clock budget runs out. One update:</p>
+    <ul>
+      <li><strong>Rollout</strong> — 32 envs run in parallel (one subprocess each). Each env plays
+        a game where P1 is the current agent, P2 is the opponent (see below). We collect
+        <span class="mono">rollout_steps</span> (default 128) action-decisions per env,
+        → 32 × 128 = 4096 transitions per batch.</li>
+      <li><strong>Update</strong> — 4 epochs over the batch in minibatches of 512.
+        Policy-gradient with clipped ratio + value-head regression + entropy bonus.</li>
+      <li><strong>Repeat</strong> — until budget (15 min, 30 min, 3 h etc.) expires.</li>
+    </ul>
+
+    <h3>2. Who you're playing (and why it changes over time)</h3>
+    <p>Each env picks its P2 opponent from a <strong>self-play pool</strong>:</p>
+    <ul>
+      <li>Before any snapshot exists → <span class="mono">random_legal</span> (uniform over the action mask).
+        This is the "absolute" baseline on the Leaderboard too.</li>
+      <li>Every <span class="mono">snapshot_every</span> updates (default 10), a frozen
+        copy of the current weights is added to the pool. Pool caps at
+        <span class="mono">pool_max_size=20</span> — oldest get evicted.</li>
+      <li>After the first snapshot: each env draws an opponent with
+        <span class="mono">latest_bias=0.8</span> probability of the newest snapshot,
+        and 20% chance of an older one (uniform over the rest).</li>
+    </ul>
+    <p>Effect: you spend most of your training playing <em>slightly older copies of yourself</em>,
+      occasionally revisiting older versions to avoid forgetting how to beat them.
+      The agent is mirrored (P1 ↔ P2 ownership swapped) before encoding so a P1-trained
+      net can act as P2.</p>
+
+    <h3>3. Post-training evaluation</h3>
+    <p>When a run finishes, the worker <strong>auto-admits</strong> it into the ranking pool:</p>
+    <ul>
+      <li>10 games against each of the current top-5 Elo runs (50 games total).</li>
+      <li>20 games against the fixed <span class="mono">random_legal</span> baseline — this is the
+        "vs random" column on the leaderboard.</li>
+    </ul>
+    <p>Results feed into per-game Elo updates (K=32, init=1200), so the leaderboard
+      doesn't inflate as the meta gets stronger. Every game played is a row in
+      <span class="mono">games</span>; the per-match summary goes in
+      <span class="mono">matches.summary</span>.</p>
+
+    <h3>4. Maps</h3>
+    <ul>
+      <li><span class="mono">random_8_12</span> — 180°-symmetric random geometry, 8-12 buildings per episode.
+        Fresh map every reset. Current production baseline.</li>
+      <li><span class="mono">random_N_M</span> — any N-M range (e.g. 8-24, 8-32) for breadth sweeps.</li>
+      <li><span class="mono">asym_N_M</span> — asymmetric variant for OOD stress testing.</li>
+      <li><span class="mono">crossroads_6</span> — fixed handmade level (not used for current training).</li>
+    </ul>
+
+    <h3>5. Reward signal (already shaped, not sparse)</h3>
+    <dl class="kv">
+      <dt>+0.1</dt><dd>for each building <strong>captured</strong> (neutral or enemy)</dd>
+      <dt>−0.1</dt><dd>for each of yours <strong>lost</strong> to an enemy (not neutral-to-enemy)</dd>
+      <dt>+1.0</dt><dd>on <strong>win</strong> (enemy base destroyed / all enemy buildings gone)</dd>
+      <dt>−1.0</dt><dd>on <strong>lose</strong></dd>
+      <dt>0.0</dt><dd>on <strong>draw</strong> (tick cap hit)</dd>
+    </dl>
+    <p>Dense (capture/loss) + sparse (terminal). Credit assignment should be healthy —
+      if the agent still makes bad decisions it's more likely a capacity / budget
+      issue than a reward-signal issue.</p>
+
+    <h3>Live stats</h3>
+    <div class="quick" id="quick"></div>
+  </main>
+
+  <script type="module">
+    import { sb } from './lib/supabase.js';
+    import { esc, fmtDuration } from './lib/ui.js';
+
+    const $q = document.getElementById('quick');
+    async function loadQuick() {
+      const [{ count: runsDone }, { count: matchesDone }, { data: totals, error }] = await Promise.all([
+        sb.from('runs').select('id', { count: 'exact', head: true }).eq('status', 'done'),
+        sb.from('matches').select('id', { count: 'exact', head: true }).eq('status', 'done'),
+        sb.from('runs').select('games_played, wall_ms').eq('status', 'done'),
+      ]);
+      if (error) { $q.innerHTML = `<div class="card error">${esc(error.message)}</div>`; return; }
+      let games = 0, wall = 0;
+      for (const r of (totals ?? [])) { games += (r.games_played ?? 0); wall += (r.wall_ms ?? 0); }
+      const cells = [
+        ['runs completed', runsDone ?? 0],
+        ['eval matches',   matchesDone ?? 0],
+        ['training games', games.toLocaleString()],
+        ['total train wall', fmtDuration(wall)],
+      ];
+      $q.innerHTML = cells.map(([l, v]) =>
+        `<div class="card"><div class="stat">${esc(String(v))}</div><div class="stat-label">${esc(l)}</div></div>`
+      ).join('');
+    }
+    loadQuick().catch(e => $q.innerHTML = `<div class="card error">${esc(e.message)}</div>`);
+  </script>
+</body>
+</html>
