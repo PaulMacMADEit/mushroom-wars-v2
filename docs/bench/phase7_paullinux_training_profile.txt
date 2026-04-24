@@ -1,0 +1,33 @@
+PaulLinux RTX 3070 — integrated training profile, numpy vs JAX backend.
+Measured via `scripts/profile_rollout.py`. Same seed, same rollout_steps=64,
+same ActorCritic net, same device (cuda), same vec_mode=sync. Higher is
+better on upd/s. env_step == time spent in vec.step() per 3 updates (or
+2 at larger n_envs).
+
+n_envs   backend   env_step_ms   update_total_ms   upd/s     vs numpy
+────────────────────────────────────────────────────────────────────────
+    64   numpy        3,460          6,110          0.49      1.00× (ref)
+    64   jax          4,748          7,620          0.39      0.80×    <- JAX worse
+   256   numpy        9,311         15,697          0.13      1.00×
+   256   jax          9,246         15,810          0.13      0.99×    <- parity
+   512   numpy       18,748         31,176          0.064     1.00×
+   512   jax         12,678         25,431          0.079     1.23×
+  1024   numpy       37,548         61,660          0.032     1.00×
+  1024   jax         20,118         44,890          0.045     1.37×    <- 1.4× end-to-end
+  1024   jax env_step alone:        20,118 ms vs numpy 37,548 ms = 1.87× on sim step
+
+Key observations:
+- At small n_envs the per-tick overhead floor (host syncs, Python loop,
+  kernel launch latency) dominates. Below ~256, numpy AsyncVectorEnv
+  multiprocess IPC is faster than one XLA dispatch per tick.
+- Crossover at n_envs ≈ 256 on this machine.
+- JAX scales better: doubling n_envs barely changes env_step_ms (vmap
+  hides it in one kernel), while numpy doubles linearly with CPU work.
+- End-to-end speedup caps at ~1.4× here because `learn` and `act_batch`
+  (torch) are unchanged and start to dominate at large batch.
+
+Remaining upside not captured in this profile:
+- Fused `step_many` rollout: if the PPO loop collected T ticks in one
+  XLA dispatch (requires rewriting collect_rollout to not need per-tick
+  net forward), sim throughput would rise another ~10× — but that's a
+  bigger trainer change than tonight's scope.
