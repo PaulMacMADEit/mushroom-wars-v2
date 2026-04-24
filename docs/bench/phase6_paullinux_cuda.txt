@@ -1,0 +1,12 @@
+host: PaulLinux | platform: Linux-6.17.0-19-generic-x86_64-with-glibc2.39
+jax devices: ['cuda:0']
+ticks per env: 200  level: random_8_16  seed: 0
+
+mode: fused (chunk=50)
+
+  n_envs    wall_s     ticks/sec     games/sec   games
+       1     0.020        10,097         50.49       1
+      16     0.025       128,331        641.65      16
+      64     0.027       473,216       2366.08      64
+     256     0.033     1,552,810      12131.32     400
+    1024     0.055     3,694,827      20981.86    1163
