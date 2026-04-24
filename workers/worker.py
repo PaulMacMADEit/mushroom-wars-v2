@@ -37,6 +37,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# PyTorch and JAX share the RTX 3070's 8 GiB of VRAM. JAX pre-allocates 75%
+# of device memory on first import, which causes PyTorch OOMs in self-play.
+# Cap JAX to 40% (3.2 GiB) BEFORE any JAX import happens elsewhere in the
+# process. See JAX_PORT_PLAN §3.6. Only applies when SIM_BACKEND=jax is
+# requested; numpy runs fine without the cap, but setting the env var early
+# is harmless.
+os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.40")
+
 import torch
 
 from cli.db import PROJECT, connect
@@ -595,6 +603,12 @@ def run_training(
     hp = job["hyperparams"] or {}
     seed_int = _seed_to_int(job["seed"])
 
+    # Optional per-run backend pin. hyperparams.sim_backend overrides any
+    # ambient SIM_BACKEND env var for this run only. sim/backend.py reads the
+    # env var each call so setting it here is enough.
+    if "sim_backend" in hp:
+        os.environ["SIM_BACKEND"] = str(hp["sim_backend"])
+
     # Build config: start from defaults, overlay any hyperparams the caller provided.
     cfg_kwargs = {k: v for k, v in hp.items() if k in PPOConfig.__dataclass_fields__}
     cfg = PPOConfig(**cfg_kwargs)
@@ -707,6 +721,7 @@ def run_training(
     param_count = sum(p.numel() for p in net.parameters())
     trunk_width = getattr(net, "body_width", None) or getattr(cfg, "body_width", None)
 
+    from sim.backend import get_backend_name
     overall_win_rate = total_wins / total_eps if total_eps else 0.0
     result = {
         "rate":                 overall_win_rate,
@@ -716,6 +731,7 @@ def run_training(
         "final_metrics":        metrics_history[-1] if metrics_history else {},
         "config":               asdict(cfg),
         "device":               str(device),
+        "sim_backend":          get_backend_name(),
         "param_count":          int(param_count),
         "trunk_width":          trunk_width,
         "games_per_sec":        round(total_eps / training_wall_s, 2),

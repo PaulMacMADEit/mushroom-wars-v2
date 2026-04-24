@@ -31,10 +31,15 @@ def main():
     ap.add_argument("--seeds", default="a", help="comma-separated seeds (e.g. a,b,c)")
     ap.add_argument("--config", default="{}", help="JSON hyperparams dict")
     ap.add_argument("--description", default=None)
+    ap.add_argument("--sim-backend", default=None, choices=["numpy", "jax"],
+                    help="Pin a backend for this run. Recorded in hyperparams.sim_backend. "
+                         "If unset, the worker falls back to SIM_BACKEND env or 'numpy'.")
     args = ap.parse_args()
 
     seeds = [s.strip() for s in args.seeds.split(",") if s.strip()]
     hyperparams = json.loads(args.config)
+    if args.sim_backend is not None:
+        hyperparams["sim_backend"] = args.sim_backend
     budget_ms = args.budget * 1000
     launch_at = int(time.time() * 1000)
 

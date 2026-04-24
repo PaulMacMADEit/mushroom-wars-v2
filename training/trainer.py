@@ -137,7 +137,15 @@ class PPOTrainer:
         If `opponent_specs` is None, every env uses `self._initial_opponent_name`
         (stateless). Otherwise, each entry is a dict passed to `make_env` as
         `opponent_kwargs` with `opponent_name="neural"`.
+
+        Vec-env backend is chosen by `SIM_BACKEND` (see sim/backend.py):
+          numpy → existing gymnasium.vector.{Sync,Async}VectorEnv path;
+          jax   → JaxVecEnv adapter (one process, XLA-batched sim).
+        Trainer logic below is backend-agnostic — both paths return the same
+        gym-style (obs_dict, rewards, term, trunc, infos).
         """
+        from sim.backend import get_backend_name
+
         # Tear down any previous vec env — AsyncVectorEnv leaks subprocs.
         if hasattr(self, "vec"):
             try:
@@ -146,38 +154,57 @@ class PPOTrainer:
                 pass
 
         N = self.cfg.n_envs
-        factories = []
-        for i in range(N):
-            if opponent_specs is None:
-                factories.append(make_env(
-                    seed=self.seed + i,
-                    level_name=self.cfg.level_name,
-                    opponent_name=self._initial_opponent_name,
-                ))
-            else:
-                factories.append(make_env(
-                    seed=self.seed + i,
-                    level_name=self.cfg.level_name,
-                    opponent_name="neural",
-                    opponent_kwargs=opponent_specs[i],
-                ))
+        backend = get_backend_name()
 
-        if self.cfg.vec_mode == "async":
-            # Context choice: Linux's default is `fork`. Fork is fast (~0.5s
-            # to spawn 16 workers) but breaks after CUDA init in the parent —
-            # forked children inherit broken CUDA state and deadlock when
-            # they import torch. That only matters if subprocs touch torch,
-            # which they do exactly when self-play's neural opponent is loaded.
-            # So: use `spawn` for self-play (safe, +15s startup), fork
-            # elsewhere (fast).
-            ctx = "spawn" if self.cfg.self_play else None
-            self.vec = gym.vector.AsyncVectorEnv(
-                factories, shared_memory=False, context=ctx,
+        if backend == "jax":
+            # JaxVecEnv is a single-process, one-opponent env. Per-env neural
+            # opponent specs (self-play pool) aren't supported on this path
+            # yet — fall back to the initial opponent name for now.
+            if opponent_specs is not None:
+                raise NotImplementedError(
+                    "SIM_BACKEND=jax doesn't yet support per-env neural "
+                    "opponents. Set self_play=False, or run numpy backend."
+                )
+            from sim.backend import make_vec_env
+            self.vec = make_vec_env(
+                n_envs=N,
+                seed=self.seed,
+                level_name=self.cfg.level_name,
+                opponent_name=self._initial_opponent_name,
             )
-        elif self.cfg.vec_mode == "sync":
-            self.vec = gym.vector.SyncVectorEnv(factories)
         else:
-            raise ValueError(f"unknown vec_mode: {self.cfg.vec_mode!r}")
+            factories = []
+            for i in range(N):
+                if opponent_specs is None:
+                    factories.append(make_env(
+                        seed=self.seed + i,
+                        level_name=self.cfg.level_name,
+                        opponent_name=self._initial_opponent_name,
+                    ))
+                else:
+                    factories.append(make_env(
+                        seed=self.seed + i,
+                        level_name=self.cfg.level_name,
+                        opponent_name="neural",
+                        opponent_kwargs=opponent_specs[i],
+                    ))
+
+            if self.cfg.vec_mode == "async":
+                # Context choice: Linux's default is `fork`. Fork is fast (~0.5s
+                # to spawn 16 workers) but breaks after CUDA init in the parent —
+                # forked children inherit broken CUDA state and deadlock when
+                # they import torch. That only matters if subprocs touch torch,
+                # which they do exactly when self-play's neural opponent is loaded.
+                # So: use `spawn` for self-play (safe, +15s startup), fork
+                # elsewhere (fast).
+                ctx = "spawn" if self.cfg.self_play else None
+                self.vec = gym.vector.AsyncVectorEnv(
+                    factories, shared_memory=False, context=ctx,
+                )
+            elif self.cfg.vec_mode == "sync":
+                self.vec = gym.vector.SyncVectorEnv(factories)
+            else:
+                raise ValueError(f"unknown vec_mode: {self.cfg.vec_mode!r}")
 
         obs_batch, _ = self.vec.reset(seed=self.seed)
         self._obs_raw, self._masks = self._encode_batch(obs_batch)
