@@ -87,24 +87,27 @@ def from_numpy_state(state: State, rng_key: jnp.ndarray | None = None) -> StateJ
     """
     if rng_key is None:
         rng_key = jax.random.PRNGKey(0)
+    # Use jnp.array (not asarray) so same-dtype numpy arrays get copied
+    # onto device. asarray would zero-copy-alias, which breaks downstream
+    # code that mutates the numpy state after constructing a StateJax from it.
     return StateJax(
-        buildings_alive    = jnp.asarray(state.buildings_alive,    dtype=jnp.int8),
-        buildings_owner    = jnp.asarray(state.buildings_owner,    dtype=jnp.int8),
-        buildings_type     = jnp.asarray(state.buildings_type,     dtype=jnp.int8),
-        buildings_garrison = jnp.asarray(state.buildings_garrison, dtype=jnp.int16),
-        buildings_capacity = jnp.asarray(state.buildings_capacity, dtype=jnp.int16),
-        buildings_x        = jnp.asarray(state.buildings_x,        dtype=jnp.int16),
-        buildings_y        = jnp.asarray(state.buildings_y,        dtype=jnp.int16),
-        groups_alive    = jnp.asarray(state.groups_alive,    dtype=jnp.int8),
-        groups_owner    = jnp.asarray(state.groups_owner,    dtype=jnp.int8),
-        groups_src      = jnp.asarray(state.groups_src,      dtype=jnp.int8),
-        groups_tgt      = jnp.asarray(state.groups_tgt,      dtype=jnp.int8),
-        groups_count    = jnp.asarray(state.groups_count,    dtype=jnp.int16),
-        groups_progress = jnp.asarray(state.groups_progress, dtype=jnp.int16),
-        groups_travel   = jnp.asarray(state.groups_travel,   dtype=jnp.int16),
-        travel_matrix   = jnp.asarray(state.travel_matrix,   dtype=jnp.int16),
-        tick            = jnp.asarray(state.tick,  dtype=jnp.int32),
-        phase           = jnp.asarray(state.phase, dtype=jnp.int8),
+        buildings_alive    = jnp.array(state.buildings_alive,    dtype=jnp.int8),
+        buildings_owner    = jnp.array(state.buildings_owner,    dtype=jnp.int8),
+        buildings_type     = jnp.array(state.buildings_type,     dtype=jnp.int8),
+        buildings_garrison = jnp.array(state.buildings_garrison, dtype=jnp.int16),
+        buildings_capacity = jnp.array(state.buildings_capacity, dtype=jnp.int16),
+        buildings_x        = jnp.array(state.buildings_x,        dtype=jnp.int16),
+        buildings_y        = jnp.array(state.buildings_y,        dtype=jnp.int16),
+        groups_alive    = jnp.array(state.groups_alive,    dtype=jnp.int8),
+        groups_owner    = jnp.array(state.groups_owner,    dtype=jnp.int8),
+        groups_src      = jnp.array(state.groups_src,      dtype=jnp.int8),
+        groups_tgt      = jnp.array(state.groups_tgt,      dtype=jnp.int8),
+        groups_count    = jnp.array(state.groups_count,    dtype=jnp.int16),
+        groups_progress = jnp.array(state.groups_progress, dtype=jnp.int16),
+        groups_travel   = jnp.array(state.groups_travel,   dtype=jnp.int16),
+        travel_matrix   = jnp.array(state.travel_matrix,   dtype=jnp.int16),
+        tick            = jnp.array(state.tick,  dtype=jnp.int32),
+        phase           = jnp.array(state.phase, dtype=jnp.int8),
         rng_key         = rng_key,
     )
 
