@@ -23,12 +23,14 @@ Scope notes:
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import socket
 import sys
 import time
 import traceback
+import urllib.request
 from dataclasses import asdict
 from pathlib import Path
 
@@ -440,6 +442,58 @@ def _download_parent_state(parent: dict) -> dict:
     }
 
 
+def _download_leaderboard_opponents(run_id, top_k: int) -> list[tuple]:
+    """Download top-K Elo runs' weights+obs_norm to a local temp dir.
+
+    Returns [(weights_path, obs_norm_path|None)] suitable for
+    PPOTrainer(leaderboard_paths=...). Excludes the current run, the
+    baseline pseudo-run, and anything without a weights_url.
+
+    Mixed net sizes are fine: opponents.make_neural_opponent infers
+    body_dim from the saved state_dict when the sub-env loads them.
+    """
+    import tempfile
+
+    with connect() as conn:
+        top_ids = _current_top_elo_runs(conn, top_k)
+        top_ids = [rid for rid in top_ids if rid != str(run_id) and rid != BASELINE_RUN_ID]
+        if not top_ids:
+            return []
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, weights_url, obs_norm_url FROM runs WHERE id = ANY(%s)",
+                (top_ids,),
+            )
+            rows = cur.fetchall()
+
+    # Persist once per run; the returned dir lives as long as the trainer
+    # (mkdtemp'd, cleaned up on worker restart, not per-snapshot).
+    out_dir = Path(tempfile.mkdtemp(prefix="mw2-leaderboard-"))
+    results: list[tuple] = []
+    for rid, w_url, n_url in rows:
+        if not w_url:
+            continue
+        w_path = out_dir / f"{rid}-weights.pt"
+        n_path: Path | None = None
+        try:
+            urllib.request.urlretrieve(_public_url(w_url), w_path)
+            if n_url:
+                n_path = out_dir / f"{rid}-obs_norm.pt"
+                urllib.request.urlretrieve(_public_url(n_url), n_path)
+        except Exception as exc:
+            print(f"[worker] leaderboard: skip {rid} — download failed: {exc}")
+            continue
+        results.append((w_path, n_path))
+    return results
+
+
+def _public_url(path: str) -> str:
+    base = os.environ.get("SUPABASE_URL")
+    if not base:
+        raise RuntimeError("SUPABASE_URL not set")
+    return f"{base}/storage/v1/object/public/{path}"
+
+
 # ---------------------------------------------------------------------------
 # Train one run
 # ---------------------------------------------------------------------------
@@ -556,8 +610,22 @@ def run_training(
             print(f"[worker] loaded parent weights "
                   f"(params={sum(p.numel() for p in net.parameters()):,})")
 
+    # Fetch cross-lineage leaderboard opponents if requested. Must happen
+    # before PPOTrainer construction so trainer can mix them into envs.
+    leaderboard_paths: list[tuple] = []
+    if cfg.leaderboard_bias > 0 and cfg.leaderboard_top_k > 0:
+        try:
+            leaderboard_paths = _download_leaderboard_opponents(
+                run_id=job["id"],
+                top_k=cfg.leaderboard_top_k,
+            )
+            print(f"[worker] downloaded {len(leaderboard_paths)} leaderboard opponents "
+                  f"for cross-lineage self-play (bias={cfg.leaderboard_bias:.2f})")
+        except Exception as exc:
+            print(f"[worker] leaderboard download failed, falling back to pure self-play: {exc}")
+
     agent = PPOAgent(net, device=device)
-    trainer = PPOTrainer(agent, cfg, seed=seed_int)
+    trainer = PPOTrainer(agent, cfg, seed=seed_int, leaderboard_paths=leaderboard_paths)
 
     if parent_state is not None:
         if parent_state["optimizer"] is not None:

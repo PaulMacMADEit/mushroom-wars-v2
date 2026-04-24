@@ -60,6 +60,12 @@ class PPOConfig:
     pool_max_size:        int   = 20     # evict oldest beyond this
     latest_bias:          float = 0.8    # P(sample latest snapshot) per env
     initial_opponent:     str   = "random_legal"  # before first snapshot registers
+    # Cross-lineage: include external leaderboard top-K as opponents.
+    # P(env uses leaderboard opp) per snapshot = leaderboard_bias. Remainder
+    # falls through to the self-play pool (latest_bias rules within).
+    # Default 0 (pure self-play) for backward-compat.
+    leaderboard_bias:     float = 0.0
+    leaderboard_top_k:    int   = 10
     # Level
     # Static name (e.g. "crossroads_6") or dynamic "random_<min>_<max>".
     # Dynamic levels regenerate per reset so training sees varied geometry.
@@ -74,6 +80,7 @@ class PPOTrainer:
         seed: int = 0,
         opponent_name: str = "random_legal",
         pool_root: str | None = None,
+        leaderboard_paths: list[tuple] | None = None,
     ):
         self.agent = agent
         self.cfg = config or PPOConfig()
@@ -87,6 +94,11 @@ class PPOTrainer:
         self.pool: OpponentPool | None = None
         if self.cfg.self_play:
             self.pool = OpponentPool(root=pool_root, max_size=self.cfg.pool_max_size)
+
+        # Cross-lineage leaderboard opponents. Each entry: (weights_path, obs_norm_path|None).
+        # Worker downloads top-K Elo snapshots before constructing us; when
+        # leaderboard_bias > 0 we sample from this list for a fraction of envs.
+        self._leaderboard: list[tuple] = list(leaderboard_paths or [])
 
         # Initial opponent: simple name for the very first rollout. After
         # the first snapshot registers (every cfg.snapshot_every updates),
@@ -372,17 +384,29 @@ class PPOTrainer:
         return metrics
 
     def _refresh_opponents(self) -> None:
-        """Snapshot learner + rebuild vec env with fresh per-env opponents."""
+        """Snapshot learner + rebuild vec env with fresh per-env opponents.
+
+        Sampling per env:
+          1. With prob `leaderboard_bias` → pick a leaderboard opponent
+             (cross-lineage: top-K Elo from other training runs).
+          2. Otherwise → self-play pool (latest_bias rules within).
+
+        leaderboard_bias=0 + leaderboard empty → original pure-self-play.
+        """
         assert self.pool is not None
         w, n = self.pool.register(
             self.agent.net, self.obs_norm, tag=f"u{self._update_count:05d}"
         )
-        # Sample one opponent per env (weighted toward latest).
+        lb = self._leaderboard
+        use_lb = self.cfg.leaderboard_bias > 0 and len(lb) > 0
         specs: list[dict] = []
         for _ in range(self.cfg.n_envs):
-            entry = self.pool.sample(self._rng, latest_bias=self.cfg.latest_bias)
-            if entry is None:
-                entry = (w, n)
+            if use_lb and self._rng.random() < self.cfg.leaderboard_bias:
+                entry = lb[int(self._rng.integers(0, len(lb)))]
+            else:
+                entry = self.pool.sample(self._rng, latest_bias=self.cfg.latest_bias)
+                if entry is None:
+                    entry = (w, n)
             w_path, n_path = entry
             specs.append({
                 "weights_path":  str(w_path),
