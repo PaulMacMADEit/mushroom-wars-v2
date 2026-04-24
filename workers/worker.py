@@ -196,9 +196,11 @@ def mark_done(
 # matches so its Elo emerges without manual intervention.
 # ---------------------------------------------------------------------------
 
-ADMISSION_TOP_K           = 5   # play vs current top-K Elo runs
-ADMISSION_GAMES_PER_MATCH = 10
-ADMISSION_BASELINE_GAMES  = 20  # more games vs random for a tighter absolute rate
+ADMISSION_TOP_K           = 10  # play vs current top-K Elo runs
+ADMISSION_GAMES_PER_MATCH = 30  # ±8.4% SE on 30% win-rate; enough to see 3-5% moves
+# Baseline auto-admission dropped 2026-04-24: trained models saturate vs
+# random_legal (85-100%), so the match was signal-free. Random pseudo-run
+# stays in the DB for historical queries; nothing new gets queued against it.
 BASELINE_RUN_ID = "00000000-0000-0000-0000-000000000001"
 ADMISSION_LEVEL = "random_8_12"
 
@@ -236,7 +238,11 @@ def _current_top_elo_runs(conn, k: int) -> list[str]:
 
 
 def _queue_admission_matches(conn, new_run_id, level_name: str = ADMISSION_LEVEL):
-    """Insert matches: new_run vs {top-K Elo} + new_run vs baseline."""
+    """Insert matches: new_run vs current top-K Elo runs, N games each.
+
+    Baseline (random_legal) matches were dropped because all trained models
+    now saturate vs random; the match was pure compute with no signal.
+    """
     top = _current_top_elo_runs(conn, ADMISSION_TOP_K)
     # Don't self-match; if the new run is already in top-K (possible after
     # chain continuation), skip itself.
@@ -253,21 +259,9 @@ def _queue_admission_matches(conn, new_run_id, level_name: str = ADMISSION_LEVEL
             """, (PROJECT, new_run_id, opp_id, new_run_id,
                   ADMISSION_GAMES_PER_MATCH,
                   json.dumps({"level_name": level_name})))
-        # Baseline: vs random_legal. Only queue if the baseline row exists.
-        cur.execute("SELECT 1 FROM runs WHERE id = %s", (BASELINE_RUN_ID,))
-        if cur.fetchone() is not None:
-            cur.execute("""
-                INSERT INTO matches (project, description, model_a_run_id, model_b_run_id,
-                                     simulator_id, games_planned, status, summary)
-                VALUES (%s, 'auto-admission-baseline', %s, %s,
-                        (SELECT simulator_id FROM runs WHERE id = %s),
-                        %s, 'queued', %s::jsonb)
-            """, (PROJECT, new_run_id, BASELINE_RUN_ID, new_run_id,
-                  ADMISSION_BASELINE_GAMES,
-                  json.dumps({"level_name": level_name})))
     conn.commit()
-    print(f"[worker] auto-admission: queued {len(top)} top-K matches "
-          f"+ 1 baseline match for run {new_run_id}")
+    print(f"[worker] auto-admission: queued {len(top)} top-{ADMISSION_TOP_K} matches "
+          f"× {ADMISSION_GAMES_PER_MATCH} games for run {new_run_id}")
 
 
 # ---------------------------------------------------------------------------
