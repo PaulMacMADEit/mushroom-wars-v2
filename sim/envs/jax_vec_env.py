@@ -24,7 +24,7 @@ behind the same `make_vec_env` factory used for AsyncVectorEnv.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 import jax
 import jax.numpy as jnp
@@ -72,6 +72,39 @@ _step_batched = jax.jit(jax.vmap(step_tick_single, in_axes=(0, 0, 0)))
 # JaxVecEnv
 # ---------------------------------------------------------------------------
 
+class _LazyInfos:
+    """Defers per-env info dict construction until the caller actually
+    indexes into the list. Materialising all N infos forces N device-to-host
+    syncs which is the whole `vmap` win back through the drain — trainer code
+    that ignores `infos` pays nothing."""
+
+    __slots__ = ("_state", "_n", "_materialised")
+
+    def __init__(self, state, n_envs: int):
+        self._state = state
+        self._n = n_envs
+        self._materialised: list[dict] | None = None
+
+    def _materialise(self) -> list[dict]:
+        if self._materialised is None:
+            phase = np.asarray(self._state.phase)
+            tick  = np.asarray(self._state.tick)
+            self._materialised = [
+                {"phase": int(phase[i]), "tick": int(tick[i])}
+                for i in range(self._n)
+            ]
+        return self._materialised
+
+    def __len__(self) -> int:
+        return self._n
+
+    def __getitem__(self, i):
+        return self._materialise()[i]
+
+    def __iter__(self):
+        return iter(self._materialise())
+
+
 @dataclass
 class JaxVecStepResult:
     """Mirror of gymnasium's (obs, reward, terminated, truncated, info) — but
@@ -83,7 +116,7 @@ class JaxVecStepResult:
     rewards_p2: np.ndarray     # (n_envs,) float32 — P2 rewards
     terminated: np.ndarray     # (n_envs,) bool
     truncated:  np.ndarray     # (n_envs,) bool — always False (no time limit beyond done)
-    infos:      list[dict]     # (n_envs,) dict — per-env phase/tick
+    infos:      Any            # list-like of per-env {phase, tick} — lazily materialised
 
 
 class JaxVecEnv:
@@ -136,7 +169,8 @@ class JaxVecEnv:
 
         self.state, r1, r2, done = _step_batched(self.state, a1, a2)
 
-        # Bring reward/done to host for the trainer boundary.
+        # Bring reward/done to host for the trainer boundary. One sync per
+        # call each — bulk copies, not per-env scalar pulls.
         r1_np   = np.asarray(r1)
         r2_np   = np.asarray(r2)
         done_np = np.asarray(done)
@@ -145,17 +179,16 @@ class JaxVecEnv:
         if done_np.any():
             self._auto_reset(done_np)
 
-        infos = [
-            {"phase": int(self.state.phase[i]), "tick": int(self.state.tick[i])}
-            for i in range(self.n_envs)
-        ]
-
+        # Defer the per-env info dicts: each `int(self.state.phase[i])` forces
+        # a device-to-host sync, which at n_envs=1024 burns the whole benefit
+        # of vmap. Build the list lazily so callers that don't read `infos`
+        # (our bench, PPO rollout) pay nothing.
         return JaxVecStepResult(
             rewards    = r1_np.astype(np.float32),
             rewards_p2 = r2_np.astype(np.float32),
             terminated = done_np,
             truncated  = np.zeros(self.n_envs, dtype=bool),
-            infos      = infos,
+            infos      = _LazyInfos(self.state, self.n_envs),
         )
 
     def close(self) -> None:
