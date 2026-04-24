@@ -167,6 +167,49 @@ def test_symmetric_winrate_on_jax_backend():
     )
 
 
+def test_compute_mask_batched_matches_per_env_loop():
+    """`compute_mask_batched` must produce byte-identical output to calling
+    `compute_mask(state, player)` per env in a loop. This is the hot path
+    inside `_JaxVecAdapter._pack_step_inputs_and_obs` — wrong here == broken
+    training under SIM_BACKEND=jax."""
+    from sim.actions import compute_mask, compute_mask_batched
+
+    # Build 20 random states (mix of mid-game-ish shapes) and stack their
+    # fields into batched arrays.
+    states = [reset(level_name="random_6_10", seed=seed) for seed in range(20)]
+
+    # Warm them up by stepping each a few ticks with random actions so their
+    # fields aren't all identical.
+    from sim.engine import step_tick as _sn
+    rngs = [np.random.default_rng(seed) for seed in range(20)]
+    for i, s in enumerate(states):
+        for _ in range(10):
+            m1 = compute_mask(s, C.OWNER_P1)
+            m2 = compute_mask(s, C.OWNER_P2)
+            a1_idx = int(rngs[i].choice(np.where(m1)[0])) if m1.any() else NOOP_INDEX
+            a2_idx = int(rngs[i].choice(np.where(m2)[0])) if m2.any() else NOOP_INDEX
+            _sn(s, decode(a1_idx), decode(a2_idx))
+
+    bulk = {
+        "buildings_alive":    np.stack([s.buildings_alive    for s in states]),
+        "buildings_owner":    np.stack([s.buildings_owner    for s in states]),
+        "buildings_garrison": np.stack([s.buildings_garrison for s in states]),
+        "groups_alive":       np.stack([s.groups_alive       for s in states]),
+    }
+    for player in (C.OWNER_P1, C.OWNER_P2):
+        batched = compute_mask_batched(
+            bulk["buildings_alive"], bulk["buildings_owner"],
+            bulk["buildings_garrison"], bulk["groups_alive"],
+            player,
+        )
+        for i, s in enumerate(states):
+            per_env = compute_mask(s, player)
+            assert np.array_equal(batched[i], per_env), (
+                f"mask mismatch for env {i}, player {player}: "
+                f"differ at action indices {np.where(batched[i] != per_env)[0][:10]}"
+            )
+
+
 def test_jaxpr_is_finite():
     """The jit'd step_tick must trace to a finite jaxpr — no Python branching
     over traced values."""

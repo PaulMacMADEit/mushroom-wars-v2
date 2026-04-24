@@ -44,6 +44,23 @@ def random_legal_opponent(state: State, rng: np.random.Generator) -> int:
     return int(rng.choice(legal))
 
 
+def random_legal_opponent_batched(
+    p2_mask: np.ndarray,               # (N, ACTION_SPACE_SIZE) bool
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Pick a uniform random legal action per env — all envs in one shot.
+
+    Trick: `argmax(uniform_noise * mask)` picks a random index among the
+    True entries in each row. Falls back to NOOP if a row has no legal
+    action (shouldn't happen since NOOP is always legal, but defensive).
+    """
+    N, A = p2_mask.shape
+    # Uniform noise; zero out illegal entries so argmax picks only legal ones.
+    noise = rng.random((N, A), dtype=np.float32)
+    noise = np.where(p2_mask, noise, -1.0)
+    return noise.argmax(axis=1).astype(np.int64)
+
+
 # ---------------------------------------------------------------------------
 # Neural opponent (self-play)
 # ---------------------------------------------------------------------------

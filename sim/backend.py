@@ -295,10 +295,72 @@ class _JaxVecAdapter:
         """
         import numpy as np
         from sim import config as C
-        from sim.state import empty_state
-        from sim.actions import ACTION_SPACE_SIZE, compute_mask
+        from sim.actions import compute_mask_batched
 
         N = self.n_envs
+        p1_mask = compute_mask_batched(
+            host["buildings_alive"], host["buildings_owner"],
+            host["buildings_garrison"], host["groups_alive"],
+            C.OWNER_P1,
+        )
+        return {
+            "buildings_alive":    host["buildings_alive"].astype(np.int8, copy=True),
+            "buildings_owner":    host["buildings_owner"].astype(np.int8, copy=True),
+            "buildings_type":     host["buildings_type"].astype(np.int8, copy=True),
+            "buildings_garrison": host["buildings_garrison"].astype(np.int16, copy=True),
+            "buildings_capacity": host["buildings_capacity"].astype(np.int16, copy=True),
+            "buildings_x":        host["buildings_x"].astype(np.int16, copy=True),
+            "buildings_y":        host["buildings_y"].astype(np.int16, copy=True),
+            "groups_alive":       host["groups_alive"].astype(np.int8, copy=True),
+            "groups_owner":       host["groups_owner"].astype(np.int8, copy=True),
+            "groups_src":         host["groups_src"].astype(np.int8, copy=True),
+            "groups_tgt":         host["groups_tgt"].astype(np.int8, copy=True),
+            "groups_count":       host["groups_count"].astype(np.int16, copy=True),
+            "groups_progress":    host["groups_progress"].astype(np.int16, copy=True),
+            "groups_travel":      host["groups_travel"].astype(np.int16, copy=True),
+            "travel_matrix":      host["travel_matrix"].astype(np.int16, copy=True),
+            "tick":               host["tick"].astype(np.int32, copy=True)
+                                     if host["tick"].ndim else np.full((N,), int(host["tick"]), dtype=np.int32),
+            "action_mask":        p1_mask,
+        }
+
+    def _pack_step_inputs_and_obs(
+        self,
+        host: dict,
+        actions_arr,
+        decode_fn,
+        action_dim: int,
+        kind_noop: int,
+        kind_send: int,
+    ):
+        """Single pass over envs: builds the (n_envs, 2, 4) action batch AND
+        the gym-style obs_batch dict.
+
+        Fast path (simple opponents: random_legal, noop): mask computation
+        and opponent action selection are fully batched numpy — no Python
+        per-env loop. This path is the hot one for non-self-play training.
+
+        Fallback (neural opponent): per-env loop, one scratch State reused,
+        same shape as the original adapter.
+        """
+        import numpy as np
+        from sim import config as C
+        from sim.state import empty_state
+        from sim.actions import (
+            ACTION_SPACE_SIZE, SLOTS_SQ, NOOP_INDEX,
+            compute_mask, compute_mask_batched,
+        )
+        from sim.envs.opponents import random_legal_opponent_batched
+
+        N = self.n_envs
+
+        # Batched P1 mask — hot path needs this regardless.
+        p1_mask = compute_mask_batched(
+            host["buildings_alive"], host["buildings_owner"],
+            host["buildings_garrison"], host["groups_alive"],
+            C.OWNER_P1,
+        )
+
         obs = {
             "buildings_alive":    host["buildings_alive"].astype(np.int8, copy=True),
             "buildings_owner":    host["buildings_owner"].astype(np.int8, copy=True),
@@ -317,8 +379,49 @@ class _JaxVecAdapter:
             "travel_matrix":      host["travel_matrix"].astype(np.int16, copy=True),
             "tick":               host["tick"].astype(np.int32, copy=True)
                                      if host["tick"].ndim else np.full((N,), int(host["tick"]), dtype=np.int32),
-            "action_mask":        np.empty((N, ACTION_SPACE_SIZE), dtype=bool),
+            "action_mask":        p1_mask,
         }
+
+        a_batch = np.zeros((N, 2, action_dim), dtype=np.int32)
+
+        # Pack P1 actions: decode each index to (kind, type_idx, src, tgt).
+        # This is a (n_envs,) Python loop but each iteration is cheap (no
+        # state/mask work) — ~50 µs total at n_envs=64.
+        for i in range(N):
+            a1 = decode_fn(int(actions_arr[i]))
+            if a1.kind == "noop":
+                a_batch[i, 0] = [kind_noop, 0, 0, 0]
+            else:
+                a_batch[i, 0] = [kind_send, a1.type_idx, a1.src, a1.tgt]
+
+        if self._opponent_name in ("random_legal", "noop"):
+            # Batched P2 mask + random-legal pick + decode. No per-env state view.
+            if self._opponent_name == "noop":
+                p2_actions = np.full(N, NOOP_INDEX, dtype=np.int64)
+            else:
+                p2_mask = compute_mask_batched(
+                    host["buildings_alive"], host["buildings_owner"],
+                    host["buildings_garrison"], host["groups_alive"],
+                    C.OWNER_P2,
+                )
+                p2_actions = random_legal_opponent_batched(p2_mask, self._rng)
+
+            # Decode batched: NOOP = NOOP_INDEX; else (type, src, tgt) from the
+            # packing formula.
+            noop_mask = (p2_actions == NOOP_INDEX)
+            type_idx = (p2_actions // SLOTS_SQ).astype(np.int32)
+            rem      = (p2_actions %  SLOTS_SQ).astype(np.int32)
+            src_idx  = (rem // C.MAX_BUILDING_SLOTS).astype(np.int32)
+            tgt_idx  = (rem %  C.MAX_BUILDING_SLOTS).astype(np.int32)
+
+            a_batch[:, 1, 0] = np.where(noop_mask, kind_noop, kind_send)
+            a_batch[:, 1, 1] = np.where(noop_mask, 0, type_idx)
+            a_batch[:, 1, 2] = np.where(noop_mask, 0, src_idx)
+            a_batch[:, 1, 3] = np.where(noop_mask, 0, tgt_idx)
+
+            return a_batch, obs
+
+        # Neural / unknown opponent: slow path via per-env scratch State.
         scratch = empty_state()
         for i in range(N):
             scratch.buildings_alive    = host["buildings_alive"][i]
@@ -339,95 +442,12 @@ class _JaxVecAdapter:
             scratch.tick  = int(host["tick"][i])  if host["tick"].ndim  else int(host["tick"])
             scratch.phase = int(host["phase"][i]) if host["phase"].ndim else int(host["phase"])
             scratch._refresh_proxies()  # type: ignore[attr-defined]
-            obs["action_mask"][i] = compute_mask(scratch, C.OWNER_P1)
-        return obs
 
-    def _pack_step_inputs_and_obs(
-        self,
-        host: dict,
-        actions_arr,
-        decode_fn,
-        action_dim: int,
-        kind_noop: int,
-        kind_send: int,
-    ):
-        """Single pass over envs: builds the (n_envs, 2, 4) action batch AND
-        the gym-style obs_batch dict. Both paths need `compute_mask(state, P1)`
-        and the opponent's view of the state; do them together so we only
-        construct the per-env State view once.
-        """
-        import numpy as np
-        from sim import config as C
-        from sim.state import State, empty_state
-        from sim.actions import ACTION_SPACE_SIZE, compute_mask
-
-        N = self.n_envs
-        MAX_B = C.MAX_BUILDING_SLOTS
-        MAX_G = C.MAX_UNIT_GROUP_SLOTS
-
-        a_batch = np.zeros((N, 2, action_dim), dtype=np.int32)
-        obs = {
-            "buildings_alive":    host["buildings_alive"].astype(np.int8, copy=True),
-            "buildings_owner":    host["buildings_owner"].astype(np.int8, copy=True),
-            "buildings_type":     host["buildings_type"].astype(np.int8, copy=True),
-            "buildings_garrison": host["buildings_garrison"].astype(np.int16, copy=True),
-            "buildings_capacity": host["buildings_capacity"].astype(np.int16, copy=True),
-            "buildings_x":        host["buildings_x"].astype(np.int16, copy=True),
-            "buildings_y":        host["buildings_y"].astype(np.int16, copy=True),
-            "groups_alive":       host["groups_alive"].astype(np.int8, copy=True),
-            "groups_owner":       host["groups_owner"].astype(np.int8, copy=True),
-            "groups_src":         host["groups_src"].astype(np.int8, copy=True),
-            "groups_tgt":         host["groups_tgt"].astype(np.int8, copy=True),
-            "groups_count":       host["groups_count"].astype(np.int16, copy=True),
-            "groups_progress":    host["groups_progress"].astype(np.int16, copy=True),
-            "groups_travel":      host["groups_travel"].astype(np.int16, copy=True),
-            "travel_matrix":      host["travel_matrix"].astype(np.int16, copy=True),
-            "tick":               np.full((N,), int(host["tick"][0]), dtype=np.int32)
-                                     if host["tick"].ndim == 1 else host["tick"].astype(np.int32, copy=True),
-            "action_mask":        np.empty((N, ACTION_SPACE_SIZE), dtype=bool),
-        }
-
-        # Reuse a single State scratch object across envs so we don't allocate
-        # MAX_BUILDING_SLOTS × int arrays for each. Its fields are views into
-        # the per-env slice of `host`; `compute_mask` and the opponent policy
-        # only read.
-        scratch = empty_state()
-        for i in range(N):
-            # Re-point the scratch State's numpy arrays at the per-env slices
-            # so compute_mask / opponent see an ordinary numpy State. Views
-            # are zero-copy — no per-env allocation.
-            scratch.buildings_alive    = host["buildings_alive"][i]
-            scratch.buildings_owner    = host["buildings_owner"][i]
-            scratch.buildings_type     = host["buildings_type"][i]
-            scratch.buildings_garrison = host["buildings_garrison"][i]
-            scratch.buildings_capacity = host["buildings_capacity"][i]
-            scratch.buildings_x        = host["buildings_x"][i]
-            scratch.buildings_y        = host["buildings_y"][i]
-            scratch.groups_alive       = host["groups_alive"][i]
-            scratch.groups_owner       = host["groups_owner"][i]
-            scratch.groups_src         = host["groups_src"][i]
-            scratch.groups_tgt         = host["groups_tgt"][i]
-            scratch.groups_count       = host["groups_count"][i]
-            scratch.groups_progress    = host["groups_progress"][i]
-            scratch.groups_travel      = host["groups_travel"][i]
-            scratch.travel_matrix      = host["travel_matrix"][i]
-            scratch.tick  = int(host["tick"][i]) if host["tick"].ndim else int(host["tick"])
-            scratch.phase = int(host["phase"][i]) if host["phase"].ndim else int(host["phase"])
-            # Re-bind the structured-access proxies to the new field arrays.
-            scratch._refresh_proxies()  # type: ignore[attr-defined]
-
-            obs["action_mask"][i] = compute_mask(scratch, C.OWNER_P1)
-
-            # P1 action from caller.
-            a1 = decode_fn(int(actions_arr[i]))
-            # P2 from opponent policy (reads the scratch state).
             a2_idx = int(self._opponent(scratch, self._rng))
             a2 = decode_fn(a2_idx)
-
-            for k, a in enumerate((a1, a2)):
-                if a.kind == "noop":
-                    a_batch[i, k] = [kind_noop, 0, 0, 0]
-                else:
-                    a_batch[i, k] = [kind_send, a.type_idx, a.src, a.tgt]
+            if a2.kind == "noop":
+                a_batch[i, 1] = [kind_noop, 0, 0, 0]
+            else:
+                a_batch[i, 1] = [kind_send, a2.type_idx, a2.src, a2.tgt]
 
         return a_batch, obs

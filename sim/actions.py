@@ -147,3 +147,55 @@ def compute_mask(state: State, player: int) -> np.ndarray:
         mask[base:base + SLOTS_SQ] = flat
 
     return mask
+
+
+def compute_mask_batched(
+    buildings_alive:    np.ndarray,   # (N, MAX_B) int8
+    buildings_owner:    np.ndarray,   # (N, MAX_B) int8
+    buildings_garrison: np.ndarray,   # (N, MAX_B) int16
+    groups_alive:       np.ndarray,   # (N, MAX_G) int8
+    player: int,
+) -> np.ndarray:
+    """Vectorised `compute_mask` over N envs at once.
+
+    Returns (N, ACTION_SPACE_SIZE) bool. Semantics byte-identical to
+    calling `compute_mask(state, player)` N times.
+
+    This exists because the per-env Python loop dominated the JaxVecAdapter
+    hot path on CUDA — 64 iterations of ~150 µs of numpy + validity work
+    = 10 ms CPU-bound, serialised against the GPU. Batched version stays
+    in numpy-vectorised land and runs in a few hundred µs for n_envs=64.
+    """
+    N, MAX_B = buildings_alive.shape
+    mask = np.zeros((N, ACTION_SPACE_SIZE), dtype=bool)
+    mask[:, NOOP_INDEX] = True
+
+    has_free_group = np.any(groups_alive == 0, axis=1)           # (N,)
+    if not has_free_group.any():
+        return mask
+
+    alive = buildings_alive == 1                                  # (N, MAX_B)
+    owned = alive & (buildings_owner == player)                   # (N, MAX_B)
+    valid_tgt = alive                                             # (N, MAX_B)
+
+    garrison = buildings_garrison.astype(np.int32)
+    # Diagonal-zero template so we don't enable src==tgt actions. Shared
+    # across envs; broadcasts via & in the batched fill below.
+    diag_mask = ~np.eye(MAX_B, dtype=bool)                        # (MAX_B, MAX_B)
+
+    for type_idx, pct in enumerate(C.SEND_PERCENTAGES):
+        max_sendable = np.maximum(0, garrison - C.MIN_GARRISON_AFTER_SEND)
+        real_units = (max_sendable * pct) // (100 * C.SCALE)
+        enough = (real_units * C.SCALE) >= C.MIN_SEND_INTERNAL    # (N, MAX_B)
+        src_ok = owned & enough                                    # (N, MAX_B)
+        # (N, MAX_B, MAX_B)
+        pair_ok = (src_ok[:, :, None] & valid_tgt[:, None, :]) & diag_mask[None, :, :]
+        base = type_idx * SLOTS_SQ
+        mask[:, base:base + SLOTS_SQ] = pair_ok.reshape(N, SLOTS_SQ)
+
+    # Envs with no free group slot: only NOOP valid. Clear send-space.
+    no_free = ~has_free_group                                      # (N,)
+    if no_free.any():
+        mask[no_free, :NOOP_INDEX] = False
+
+    return mask
