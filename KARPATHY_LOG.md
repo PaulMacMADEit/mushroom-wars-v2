@@ -69,3 +69,30 @@ vs baseline. Confirms hypothesis: low exploration needs more time to exploit.
 vs-top-5 coincidentally identical at 16% across all three (all faced same top-5
 chain runs; per-opponent rates differ but sum to 0.8 in each case).
 Overall skill has jumped vs 15-min runs (80–100% vs baseline, was 50–90%).
+
+## Sweep 6 — level_name breadth @ 15 min
+
+Admission evaluation is fixed at `random_8_12`, so this tests
+train-breadth vs eval-narrow.
+
+| run | level | vs baseline (20) | vs top-5 (10 each, avg) |
+|---|---|---|---|
+| kar-lvl-8-12 | random_8_12 (narrow) | **85% (17/20)** | 6% |
+| kar-lvl-8-24 | random_8_24 (medium) | 70% (14/20) | **12%** |
+| kar-lvl-8-32 | random_8_32 (wide) | 65% (13/20) | 4% |
+
+**Finding:** vs-baseline rewards narrow training (specialist wins the
+specialist test) but **vs-top-5 flips — medium (8-24) is the sweet spot**
+(2-3× the others). Strong opponents expose the narrow specialist; wider
+training spreads capacity too thin. Medium is the Goldilocks zone.
+Suggests the main prod config (8-12) is too narrow for generalization.
+
+## Sweep 7 — capacity @ varied budgets (in flight)
+
+Testing Paul's hypothesis that trunk width is the ceiling. Sizes:
+- `v9.0-full`  (BODY=128, ~170k params)      — 30 min budget
+- `v9.0-256`   (BODY=256,  395k params)      — 30 min budget
+- `v9.0-512`   (BODY=512,  915k params)      — 30 min budget
+- `v9.0-1024`  (BODY=1024, 2.3M params)      — **3 hours** (long run)
+
+Mac paused for clean CUDA-only training; unpaused for post-training match drain.

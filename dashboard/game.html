@@ -23,6 +23,7 @@
       display: flex;
       gap: 18px;
       align-items: center;
+      justify-content: center;
       flex-wrap: wrap;
       flex-shrink: 0;
     }
@@ -414,10 +415,12 @@
           </div>
         </div>
         <div class="controls">
+          <button id="prev-game" title="Previous (older) game" disabled>«</button>
           <button id="play" class="primary">Play</button>
           <button id="restart">Restart</button>
           <input type="range" id="scrub" min="0" max="100" step="0.01" value="0">
           <span class="time" id="time">t = 0 / 0</span>
+          <span class="game-pos muted" id="game-pos" style="font-family:var(--mono);font-size:11px;min-width:38px;text-align:center;"></span>
           <select id="speed">
             <option value="0.5">0.5×</option>
             <option value="1">1×</option>
@@ -426,6 +429,7 @@
             <option value="8">8×</option>
           </select>
           <button id="download-log" title="Download a narrated text log">↓</button>
+          <button id="next-game" title="Next (newer) game" disabled>»</button>
         </div>
       </div>
 
@@ -446,6 +450,7 @@
 
   <script type="module">
     import { ReplayPlayer, OWNER_NAME } from "./lib/game_renderer.js";
+    import { sb, publicUrl } from "./lib/supabase.js";
 
     const $canvas   = document.getElementById("canvas");
     const $wrap     = document.getElementById("canvas-wrap");
@@ -458,7 +463,6 @@
     const $time     = document.getElementById("time");
     const $speed    = document.getElementById("speed");
     const $download = document.getElementById("download-log");
-    const $copyUrl  = document.getElementById("copy-url");
     const $tickTable = document.getElementById("tick-table");
     const $mindPanel  = document.getElementById("mind-panel");
     const $mindChart  = document.getElementById("mind-chart");
@@ -467,6 +471,11 @@
     const $rewardPanel = document.getElementById("reward-panel");
     const $rewardChart = document.getElementById("reward-chart");
     const $rewardBreakdown = document.getElementById("reward-breakdown");
+    const $entropyPanel = document.getElementById("entropy-panel");
+    const $entropyChart = document.getElementById("entropy-chart");
+    const $prevGame = document.getElementById("prev-game");
+    const $nextGame = document.getElementById("next-game");
+    const $gamePos  = document.getElementById("game-pos");
 
     let player = null;
     let currentData = null;
@@ -486,6 +495,15 @@
       });
       player.onStateChange(() => {
         $play.textContent = player.playing ? "Pause" : "Play";
+        // Loop: if the game ended naturally (not user-paused mid-game), restart.
+        if (!player.playing && player.t >= player.duration) {
+          setTimeout(() => {
+            if (!player.playing && player.t >= player.duration) {
+              player.seek(0);
+              player.play();
+            }
+          }, 100);
+        }
       });
 
       renderMeta(data);
@@ -493,9 +511,13 @@
       renderMindChart(data);
       renderForceChart(data);
       renderRewardChart(data);
+      renderEntropyChart(data);
       $dropzone.style.display = "none";
       $play.textContent = "Play";
       $time.textContent = `t = 0 / ${player.duration}`;
+
+      // Auto-play on load.
+      player.play();
     }
 
     function renderMeta(d) {
@@ -1170,11 +1192,50 @@
       `;
     }
 
+    function renderEntropyChart(d) {
+      const decisions = d.decisions ?? [];
+      const p1 = decisions.filter(dc => dc.player === 1);
+      const p2 = decisions.filter(dc => dc.player === 2);
+      if (p1.length === 0 && p2.length === 0) {
+        $entropyPanel.style.display = "none";
+        return;
+      }
+      $entropyPanel.style.display = "block";
+
+      const { W, H, PAD_L, PAD_R, PAD_T, PAD_B } = chartLayout(1);
+      const maxT = Math.max(d.duration_ticks, 1);
+      // Theoretical max entropy = ln(32) + ln(5) + ln(32) ≈ 8.6 nats; floor to 4 for tight charts.
+      const all = [...p1, ...p2].map(dc => dc.entropy);
+      const yMax = Math.max(2, ...all) * 1.1;
+
+      const xFor = t => PAD_L + (t / maxT) * (W - PAD_L - PAD_R);
+      const yFor = e => PAD_T + (1 - e / yMax) * (H - PAD_T - PAD_B);
+      const pts = arr => arr.map(dc => `${xFor(dc.t)},${yFor(dc.entropy)}`).join(" ");
+
+      const lineP1 = p1.length ? `<polyline points="${pts(p1)}" fill="none" stroke="#f87171" stroke-width="2"/>` : "";
+      const lineP2 = p2.length ? `<polyline points="${pts(p2)}" fill="none" stroke="#60a5fa" stroke-width="2"/>` : "";
+
+      const yLabelSvg = [0, Math.round(yMax/2), Math.round(yMax)]
+        .map(v => `<text x="${PAD_L-6}" y="${yFor(v)+3}" text-anchor="end" fill="#8a93a6" font-size="10">${v}</text>`)
+        .join("");
+
+      $entropyChart.setAttribute("viewBox", `0 0 ${W} ${H}`);
+      $entropyChart.innerHTML = `
+        <rect x="${PAD_L}" y="${PAD_T}" width="${W-PAD_L-PAD_R}" height="${H-PAD_T-PAD_B}" fill="#0b0d12" stroke="#262a36"/>
+        ${lineP1}${lineP2}
+        <line x1="${PAD_L}" y1="${H-PAD_B}" x2="${W-PAD_R}" y2="${H-PAD_B}" stroke="#3a4155"/>
+        ${xTickSvg(W, H, PAD_L, PAD_R, PAD_B, maxT, xFor)}
+        ${yLabelSvg}
+        <line id="entropy-cursor" x1="${xFor(0)}" y1="${PAD_T}" x2="${xFor(0)}" y2="${H-PAD_B}"
+              stroke="#e6e8ef" stroke-width="1" opacity="0.7"/>
+      `;
+    }
+
     function updateMindCursor(t) {
       if (!mindMeta) return;
       const { W, PAD_L, PAD_R, maxT } = mindMeta;
       const x = PAD_L + (Math.min(t, maxT) / maxT) * (W - PAD_L - PAD_R);
-      for (const id of ["mind-cursor", "force-cursor", "reward-cursor"]) {
+      for (const id of ["mind-cursor", "force-cursor", "reward-cursor", "entropy-cursor"]) {
         const cur = document.getElementById(id);
         if (cur) { cur.setAttribute("x1", x); cur.setAttribute("x2", x); }
       }
@@ -1189,17 +1250,6 @@
       a.download = `mw2-game-${(currentData.game_id ?? "unknown").slice(0, 8)}.log.txt`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    });
-
-    $copyUrl.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(location.href);
-        const orig = $copyUrl.textContent;
-        $copyUrl.textContent = "Copied ✓";
-        setTimeout(() => { $copyUrl.textContent = orig; }, 1200);
-      } catch (err) {
-        prompt("Copy this link:", location.href);
-      }
     });
 
     // --- Drag + drop ------------------------------------------------------
@@ -1229,6 +1279,65 @@
       if (f) onFile(f);
     });
 
+    // --- Recent games navigation (prev/next) ------------------------------
+    // Fetch the N most recent games with replays so the user can flip
+    // through them without leaving this page.
+    const NAV_LIMIT = 10;
+    let recentGames = [];      // [{id, actions_url, created_at}, ...] newest-first
+    let currentGameIdx = -1;   // index in recentGames; -1 = current URL not in list
+
+    async function loadRecentGames() {
+      const { data, error } = await sb.from('games')
+        .select('id, actions_url, matches(created_at)')
+        .not('actions_url', 'is', null)
+        .limit(50);
+      if (error) {
+        console.warn('recent games fetch failed:', error.message);
+        return [];
+      }
+      // Sort newest-first by match created_at.
+      data.sort((a, b) =>
+        (b.matches?.created_at ?? '').localeCompare(a.matches?.created_at ?? ''));
+      return data.slice(0, NAV_LIMIT);
+    }
+
+    function findIdxByUrl(currentUrl) {
+      if (!currentUrl) return -1;
+      return recentGames.findIndex(g => currentUrl.includes(g.actions_url));
+    }
+
+    function updateNavButtons() {
+      const total = recentGames.length;
+      // Newer = lower index. Older = higher index. Disable at the edges.
+      $nextGame.disabled = currentGameIdx <= 0;
+      $prevGame.disabled = currentGameIdx === -1 || currentGameIdx >= total - 1;
+      $gamePos.textContent = currentGameIdx >= 0 ? `${currentGameIdx + 1}/${total}` : "";
+    }
+
+    async function navigateTo(idx) {
+      if (idx < 0 || idx >= recentGames.length) return;
+      const g = recentGames[idx];
+      const url = publicUrl(g.actions_url);
+      try {
+        const data = await fetch(url).then(r => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.json();
+        });
+        loadReplay(data);
+        currentGameIdx = idx;
+        updateNavButtons();
+        // Reflect in the address bar without reload, so refresh keeps you here.
+        const params = new URLSearchParams(location.search);
+        params.set('url', url);
+        history.replaceState({}, '', `${location.pathname}?${params}`);
+      } catch (err) {
+        $status.textContent = `fetch error: ${err.message}`;
+      }
+    }
+
+    $prevGame.addEventListener('click', () => navigateTo(currentGameIdx + 1));
+    $nextGame.addEventListener('click', () => navigateTo(currentGameIdx - 1));
+
     // --- ?url= param ------------------------------------------------------
     const url = new URLSearchParams(location.search).get("url");
     if (url) {
@@ -1237,6 +1346,13 @@
         .then(loadReplay)
         .catch(err => { $status.textContent = `fetch error: ${err.message}`; });
     }
+
+    // Populate the nav list in parallel; doesn't block initial replay load.
+    loadRecentGames().then(list => {
+      recentGames = list;
+      currentGameIdx = findIdxByUrl(url);
+      updateNavButtons();
+    });
   </script>
 </body>
 </html>
