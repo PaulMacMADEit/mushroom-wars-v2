@@ -227,6 +227,48 @@
       margin-right: 4px;
     }
 
+    /* KPI panel — per-team reward breakdown, ranked by |contribution|. */
+    #reward-breakdown { flex-direction: column; gap: 6px; }
+    .kpi-team {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 4px 0;
+    }
+    .kpi-team-head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--fg);
+      padding-bottom: 2px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 2px;
+    }
+    .kpi-team-head .swatch {
+      width: 8px; height: 8px; border-radius: 50%;
+    }
+    .kpi-team-head .kpi-total {
+      margin-left: auto;
+      font-family: var(--mono);
+      font-weight: 600;
+    }
+    .kpi-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto auto;
+      gap: 8px;
+      align-items: baseline;
+      font-size: 11px;
+      padding: 1px 0;
+    }
+    .kpi-row .kpi-name { color: var(--fg); }
+    .kpi-row .kpi-weight { font-family: var(--mono); font-size: 10px; }
+    .kpi-row .kpi-count { color: var(--fg-muted); font-family: var(--mono); font-size: 10px; }
+    .kpi-row .kpi-val { font-family: var(--mono); font-weight: 600; min-width: 48px; text-align: right; }
+    .kpi-pos  { color: #86efac; }
+    .kpi-neg  { color: #fca5a5; }
+    .kpi-zero { color: #4b5366; }
+
     .log-panel .think {
       grid-column: 3;
       margin: 2px 0 6px 0;
@@ -807,11 +849,17 @@
 
       $tickTable.innerHTML = rows.join("") || `<div class="muted" style="padding:12px;">No events.</div>`;
 
-      // Click-to-expand think blocks. One expanded row at a time.
+      // Click a row to seek the player to that tick. Also expand the think
+      // block (or collapse if it was already expanded). Play/pause state is
+      // preserved — a click while playing keeps playing from the new tick.
       $tickTable.addEventListener("click", (ev) => {
         const row = ev.target.closest(".tick-row");
         if (!row || !row.dataset.t) return;
         const t = parseInt(row.dataset.t, 10);
+
+        // Always seek to the clicked tick.
+        if (player) player.seek(t);
+
         // Collapse any existing detail panels.
         $tickTable.querySelectorAll(".tick-details").forEach(el => el.remove());
         $tickTable.querySelectorAll(".tick-row.expanded").forEach(el => el.classList.remove("expanded"));
@@ -1073,26 +1121,36 @@
       `;
     }
 
+    // Mirrors sim/config.py reward constants and sim/engine.py _check_victory.
+    const REWARD_CAPTURE     = 0.1;
+    const REWARD_LOSS        = -0.1;
+    const REWARD_WIN         = 1.0;
+    const REWARD_LOSE        = -1.0;
+    const REWARD_DRAW        = 0.0;
+    const REWARD_SPEED_BONUS = 0.5;
+    const TIMEOUT_TICKS      = 200;
+
     /** Derive per-player reward stream from events.
      * Shaping: +0.1 per capture of a neutral/enemy; −0.1 when a player loses
      *          a previously-owned building to someone else.
      * Terminal: winner = +1.0 + speed_bonus, loser = −1.0 (0 on draw).
      *   speed_bonus = REWARD_SPEED_BONUS * max(0, 1 - end_tick / TIMEOUT_TICKS),
      *   so faster wins earn more. Timeout wins (end_tick == TIMEOUT) get no bonus.
-     * Mirrors sim/config.py reward constants and sim/engine.py _check_victory.
-     * Returns {cum: {1:[…], 2:[…]}, breakdown: {1:{captures,losses,terminal,total},2:{…}}, maxT}. */
+     * Returns {cum: {1:[…], 2:[…]}, bk: {1:{captures,losses,...},2:{...}}, maxT}. */
     function computeRewardSeries(d) {
       const maxT = d.duration_ticks;
-      const REWARD_CAPTURE     = 0.1;
-      const REWARD_LOSS        = -0.1;
-      const REWARD_WIN         = 1.0;
-      const REWARD_LOSE        = -1.0;
-      const REWARD_SPEED_BONUS = 0.5;
-      const TIMEOUT_TICKS      = 200;
 
       const cum = { 1: new Array(maxT + 1).fill(0), 2: new Array(maxT + 1).fill(0) };
-      const bk  = { 1: { captures: 0, losses: 0, terminal: 0 },
-                    2: { captures: 0, losses: 0, terminal: 0 } };
+      // Per-team realized contribution per KPI. Counts let us show "× N" alongside.
+      const blank = () => ({
+        capture: 0, capture_n: 0,
+        loss: 0, loss_n: 0,
+        terminal_win: 0,
+        terminal_lose: 0,
+        terminal_draw: 0,
+        speed_bonus: 0,
+      });
+      const bk = { 1: blank(), 2: blank() };
 
       const byT = {};
       for (const e of d.events) (byT[e.t] = byT[e.t] || []).push(e);
@@ -1111,30 +1169,80 @@
             const attacker = sendOwner[e.group];
             const before = owner[e.dst];
             const after  = e.dst_owner_after;
-            // A capture event = the arriving side is NOT the pre-owner and ends up as owner.
             if (attacker !== undefined && attacker !== before && after === attacker) {
-              // +0.1 to attacker; −0.1 to defender if the defender was a player
-              if (attacker === 1) { r1 += REWARD_CAPTURE; bk[1].captures += REWARD_CAPTURE; }
-              else if (attacker === 2) { r2 += REWARD_CAPTURE; bk[2].captures += REWARD_CAPTURE; }
-              if (before === 1) { r1 += REWARD_LOSS; bk[1].losses += REWARD_LOSS; }
-              else if (before === 2) { r2 += REWARD_LOSS; bk[2].losses += REWARD_LOSS; }
+              if (attacker === 1) { r1 += REWARD_CAPTURE; bk[1].capture += REWARD_CAPTURE; bk[1].capture_n++; }
+              else if (attacker === 2) { r2 += REWARD_CAPTURE; bk[2].capture += REWARD_CAPTURE; bk[2].capture_n++; }
+              if (before === 1) { r1 += REWARD_LOSS; bk[1].loss += REWARD_LOSS; bk[1].loss_n++; }
+              else if (before === 2) { r2 += REWARD_LOSS; bk[2].loss += REWARD_LOSS; bk[2].loss_n++; }
             }
             owner[e.dst] = after;
           } else if (e.kind === "end") {
             const speedBonus = REWARD_SPEED_BONUS * Math.max(0, 1 - e.t / TIMEOUT_TICKS);
-            const winReward  = REWARD_WIN + speedBonus;
-            if (e.winner === 1)      { r1 += winReward;  r2 += REWARD_LOSE;
-                                       bk[1].terminal = winReward; bk[2].terminal = REWARD_LOSE; }
-            else if (e.winner === 2) { r1 += REWARD_LOSE; r2 += winReward;
-                                       bk[1].terminal = REWARD_LOSE; bk[2].terminal = winReward; }
+            if (e.winner === 1) {
+              r1 += REWARD_WIN + speedBonus;  r2 += REWARD_LOSE;
+              bk[1].terminal_win = REWARD_WIN; bk[1].speed_bonus = speedBonus;
+              bk[2].terminal_lose = REWARD_LOSE;
+            } else if (e.winner === 2) {
+              r1 += REWARD_LOSE; r2 += REWARD_WIN + speedBonus;
+              bk[2].terminal_win = REWARD_WIN; bk[2].speed_bonus = speedBonus;
+              bk[1].terminal_lose = REWARD_LOSE;
+            } else {
+              bk[1].terminal_draw = REWARD_DRAW;
+              bk[2].terminal_draw = REWARD_DRAW;
+            }
           }
         }
         cum[1][t] = r1;
         cum[2][t] = r2;
       }
-      bk[1].total = bk[1].captures + bk[1].losses + bk[1].terminal;
-      bk[2].total = bk[2].captures + bk[2].losses + bk[2].terminal;
+      const total = (b) => b.capture + b.loss + b.terminal_win + b.terminal_lose + b.terminal_draw + b.speed_bonus;
+      bk[1].total = total(bk[1]);
+      bk[2].total = total(bk[2]);
       return { cum, bk, maxT };
+    }
+
+    /** Render the KPI panel: every reward component for both teams, ranked
+     * by the magnitude of its realized contribution this game. Each row also
+     * shows the configured weight so unused/zero KPIs are visible. */
+    function renderKpiPanel(bk) {
+      // (key, label, weightStr, realizedValue, count|null) per side.
+      const rowsFor = (b) => [
+        ["capture",       "Capture",        `+${REWARD_CAPTURE}/each`,    b.capture,       b.capture_n],
+        ["loss",          "Loss",           `${REWARD_LOSS}/each`,        b.loss,          b.loss_n],
+        ["terminal_win",  "Win (terminal)", `+${REWARD_WIN}`,             b.terminal_win,  null],
+        ["speed_bonus",   "Speed bonus",    `up to +${REWARD_SPEED_BONUS}`, b.speed_bonus, null],
+        ["terminal_lose", "Lose (terminal)", `${REWARD_LOSE}`,            b.terminal_lose, null],
+        ["terminal_draw", "Draw (terminal)", `${REWARD_DRAW}`,            b.terminal_draw, null],
+      ];
+      const fmt = n => (n >= 0 ? "+" : "") + n.toFixed(2);
+      const renderTeam = (label, color, b) => {
+        const rows = rowsFor(b)
+          .slice()
+          .sort((a, c) => Math.abs(c[3]) - Math.abs(a[3]));
+        const body = rows.map(([key, name, weight, value, count]) => {
+          const cls = value > 0 ? "kpi-pos" : value < 0 ? "kpi-neg" : "kpi-zero";
+          const cnt = count !== null ? `<span class="kpi-count">× ${count}</span>` : "";
+          return (
+            `<div class="kpi-row">` +
+              `<span class="kpi-name">${name}</span>` +
+              `<span class="kpi-weight muted">${weight}</span>` +
+              `${cnt}` +
+              `<span class="kpi-val ${cls}">${fmt(value)}</span>` +
+            `</div>`
+          );
+        }).join("");
+        return (
+          `<div class="kpi-team">` +
+            `<div class="kpi-team-head">` +
+              `<span class="swatch" style="background:${color}"></span>` +
+              `<b>${label}</b>` +
+              `<span class="kpi-total ${b.total >= 0 ? "kpi-pos" : "kpi-neg"}">${fmt(b.total)}</span>` +
+            `</div>` +
+            body +
+          `</div>`
+        );
+      };
+      return renderTeam("P1", "#f87171", bk[1]) + renderTeam("P2", "#60a5fa", bk[2]);
     }
 
     function renderRewardChart(d) {
@@ -1158,25 +1266,8 @@
       const pts = arr => arr.map((v, i) => `${xFor(i)},${yFor(v)}`).join(" ");
       const zeroY = yFor(0), oneY = yFor(1), negOneY = yFor(-1);
 
-      // Breakdown text — the thing Paul wants to eyeball.
-      const fmt = n => (n >= 0 ? "+" : "") + n.toFixed(1);
-      const pct = (num, denom) => {
-        const a = Math.abs(num), b = Math.abs(denom);
-        if (a + b === 0) return "—";
-        return `${Math.round(100 * a / (a + b))}% shaping`;
-      };
-      $rewardBreakdown.innerHTML = `
-        <span><span class="swatch" style="background:#f87171"></span>
-          <b>P1 total ${fmt(bk[1].total)}</b>
-          <span class="muted"> = captures ${fmt(bk[1].captures)}, losses ${fmt(bk[1].losses)}, terminal ${fmt(bk[1].terminal)}
-            · ${pct(bk[1].captures + bk[1].losses, bk[1].terminal)}</span>
-        </span>
-        <span><span class="swatch" style="background:#60a5fa"></span>
-          <b>P2 total ${fmt(bk[2].total)}</b>
-          <span class="muted"> = captures ${fmt(bk[2].captures)}, losses ${fmt(bk[2].losses)}, terminal ${fmt(bk[2].terminal)}
-            · ${pct(bk[2].captures + bk[2].losses, bk[2].terminal)}</span>
-        </span>
-      `;
+      // KPI panel — every reward component, both teams, ranked by |contribution|.
+      $rewardBreakdown.innerHTML = renderKpiPanel(bk);
 
       // Y labels at ±1, 0 if in range.
       const yLabelSvg = [
