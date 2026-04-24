@@ -1,0 +1,10 @@
+host: Pauls-MacBook-Air.local | platform: macOS-26.4-arm64-arm-64bit
+jax devices: ['cpu:0']
+ticks per env: 200  level: random_8_16  seed: 0
+
+  n_envs    wall_s     ticks/sec     games/sec   games
+       1     0.260           770          3.85       1
+      16     0.425         7,537         37.69      16
+      64     0.947        13,517         67.59      64
+     256     3.223        15,885         79.43     256
+    1024    11.419        17,935         89.67    1024

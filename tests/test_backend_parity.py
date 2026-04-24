@@ -120,3 +120,84 @@ def test_jaxpr_is_finite():
     # Sanity: we expect the jaxpr to have real content (lots of operations) and
     # to NOT contain a Python-level branching sentinel.
     assert len(text) > 500, "jaxpr unexpectedly short; tracing may have failed"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: vmap / JaxVecEnv parity — 16 games stepped together match 16 solo
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("n_envs", [4, 16])
+def test_jax_vec_env_parity_with_numpy(n_envs):
+    """Step `n_envs` games through JaxVecEnv and through the numpy engine
+    (one by one) with the same scripted-random actions; state must match
+    byte-for-byte every tick — until the env terminates, after which JaxVecEnv
+    auto-resets and the numpy reference doesn't, so we stop comparing that env.
+    """
+    from sim.envs.jax_vec_env import JaxVecEnv
+    from sim.engine_jax import ACTION_DIM, ACTION_KIND_NOOP, ACTION_KIND_SEND
+
+    base_seed = 100
+    level = "random_6_10"
+
+    np_states = [reset(level_name=level, seed=base_seed + i) for i in range(n_envs)]
+    np_rngs   = [np.random.default_rng(base_seed + i) for i in range(n_envs)]
+    still_active = [True] * n_envs  # once False, stop comparing that env.
+
+    vec = JaxVecEnv(n_envs=n_envs, level_name=level, base_seed=base_seed)
+
+    for t in range(50):
+        a_batch = np.zeros((n_envs, 2, ACTION_DIM), dtype=np.int32)
+        numpy_actions = []
+        for i, s in enumerate(np_states):
+            if not still_active[i]:
+                numpy_actions.append((decode(NOOP_INDEX), decode(NOOP_INDEX)))
+                continue
+            m1 = compute_mask(s, C.OWNER_P1)
+            m2 = compute_mask(s, C.OWNER_P2)
+            a1_idx = int(np_rngs[i].choice(np.where(m1)[0])) if m1.any() else NOOP_INDEX
+            a2_idx = int(np_rngs[i].choice(np.where(m2)[0])) if m2.any() else NOOP_INDEX
+            a1 = decode(a1_idx); a2 = decode(a2_idx)
+            numpy_actions.append((a1, a2))
+            for k, a in enumerate((a1, a2)):
+                if a.kind == "noop":
+                    a_batch[i, k] = [ACTION_KIND_NOOP, 0, 0, 0]
+                else:
+                    a_batch[i, k] = [ACTION_KIND_SEND, a.type_idx, a.src, a.tgt]
+
+        np_dones = []
+        for i, (a1, a2) in enumerate(numpy_actions):
+            if not still_active[i]:
+                np_dones.append(True)
+                continue
+            _r1, _r2, d = step_numpy(np_states[i], a1, a2)
+            np_dones.append(bool(d))
+
+        # Snapshot BEFORE step so we can compare against numpy's post-step state
+        # without the auto-reset mutating what we saw. JaxVecEnv doesn't expose
+        # that, so instead snapshot just after step and compare only for envs
+        # that were still active coming into the tick AND didn't terminate this
+        # tick — matching envs that didn't auto-reset.
+        result = vec.step(a_batch)
+        jax_states = vec.snapshot_numpy_states()
+
+        for i in range(n_envs):
+            if not still_active[i]:
+                continue
+            # Numpy said done this tick? JAX must have said done too (before
+            # auto-reset made it False-ish in the state snapshot).
+            if np_dones[i]:
+                assert bool(result.terminated[i]), (
+                    f"tick {t} env {i}: numpy done but JAX not terminated"
+                )
+                still_active[i] = False
+                continue
+            # Still active in both; state must match.
+            assert not bool(result.terminated[i]), (
+                f"tick {t} env {i}: JAX terminated but numpy did not"
+            )
+            if not states_equal(np_states[i], jax_states[i]):
+                raise AssertionError(
+                    f"state diverged at tick {t} env {i}\n"
+                    f"  np garrison: {np_states[i].buildings_garrison[:6]}\n"
+                    f"  jx garrison: {jax_states[i].buildings_garrison[:6]}"
+                )
