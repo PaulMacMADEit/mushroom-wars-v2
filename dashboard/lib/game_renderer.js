@@ -167,12 +167,19 @@ export class ReplayPlayer {
   }
 
   _activeFlightsAt(t) {
+    // Short hops can finish in < 1 frame at fast playback speeds, making the
+    // squad invisible. We extend the *visual* flight window so every squad
+    // gets at least MIN_VISUAL_TICKS of screen time. Sim/building state is
+    // derived independently from change-points, so correctness is preserved —
+    // the squad sprite just lingers on the path briefly after the sim landed.
+    const MIN_VISUAL_TICKS = 0.4;
     const out = [];
     for (const f of this.flights) {
       if (f.send.t > t) break;
-      if (t < f.send.t || t > f.arrive.t) continue;
-      const span = Math.max(1e-6, f.arrive.t - f.send.t);
-      const p = (t - f.send.t) / span;
+      const visualEnd = Math.max(f.arrive.t, f.send.t + MIN_VISUAL_TICKS);
+      if (t < f.send.t || t > visualEnd) continue;
+      const span = Math.max(1e-6, visualEnd - f.send.t);
+      const p = Math.min(1, (t - f.send.t) / span);
       out.push({ flight: f, p });
     }
     return out;
