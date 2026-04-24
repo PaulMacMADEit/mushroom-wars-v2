@@ -24,6 +24,11 @@
       <div class="card"><div class="stat-label">Loading…</div></div>
     </div>
 
+    <h2>Workers</h2>
+    <div class="card" id="workers">
+      <div class="muted">Loading…</div>
+    </div>
+
     <h2>Recent runs</h2>
     <div class="card" id="recent-runs">
       <div class="muted">Loading…</div>
@@ -34,8 +39,58 @@
     import { sb } from './lib/supabase.js';
     import { fmtTime, fmtDuration, fmtPct, esc, statusPill, tr } from './lib/ui.js';
 
-    const $stats  = document.getElementById('stats');
-    const $recent = document.getElementById('recent-runs');
+    const $stats   = document.getElementById('stats');
+    const $workers = document.getElementById('workers');
+    const $recent  = document.getElementById('recent-runs');
+
+    // Friendly labels for the two known machines. Anything else still shows
+    // with its raw hostname.
+    const MACHINE_LABEL = {
+      'Pauls-MacBook-Air.local': 'Mac',
+      'PaulLinux':               'Linux (PC)',
+    };
+
+    async function loadWorkers() {
+      const { data, error } = await sb
+        .from('worker_state')
+        .select('machine, paused, updated_at')
+        .order('machine');
+      if (error) {
+        $workers.innerHTML = `<div class="error">error: ${esc(error.message)}</div>`;
+        return;
+      }
+      if (!data.length) {
+        $workers.innerHTML = `<div class="muted">no workers seen yet — start one and refresh</div>`;
+        return;
+      }
+      $workers.innerHTML = data.map(w => {
+        const label = MACHINE_LABEL[w.machine] ?? w.machine;
+        const on    = !w.paused;
+        const btn   = on
+          ? `<button data-machine="${esc(w.machine)}" data-action="pause"  class="btn-danger">Turn off</button>`
+          : `<button data-machine="${esc(w.machine)}" data-action="resume" class="btn-primary">Turn on</button>`;
+        return `<div class="worker-row">
+          <span class="worker-dot ${on ? 'on' : 'off'}"></span>
+          <strong>${esc(label)}</strong>
+          <span class="muted mono">${esc(w.machine)}</span>
+          <span class="muted">${on ? 'taking jobs' : 'paused'}</span>
+          ${btn}
+          <span class="muted small">updated ${fmtTime(w.updated_at)}</span>
+        </div>`;
+      }).join('');
+      $workers.querySelectorAll('button[data-machine]').forEach(b => {
+        b.addEventListener('click', async () => {
+          const m = b.getAttribute('data-machine');
+          const paused = b.getAttribute('data-action') === 'pause';
+          b.disabled = true;
+          const { error } = await sb.from('worker_state')
+            .update({ paused, updated_at: new Date().toISOString() })
+            .eq('machine', m);
+          if (error) { alert(error.message); b.disabled = false; return; }
+          loadWorkers();
+        });
+      });
+    }
 
     async function loadStats() {
       const [runs, models, sims, doneRuns] = await Promise.all([
@@ -110,6 +165,7 @@
     }
 
     loadStats().catch(e => $stats.innerHTML  = `<div class="card error">${esc(e.message)}</div>`);
+    loadWorkers().catch(e => $workers.innerHTML = `<div class="error">${esc(e.message)}</div>`);
     loadRecentRuns().catch(e => $recent.innerHTML = `<div class="error">${esc(e.message)}</div>`);
   </script>
 </body>

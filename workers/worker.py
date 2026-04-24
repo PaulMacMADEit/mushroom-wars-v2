@@ -267,6 +267,22 @@ def _queue_admission_matches(conn, new_run_id, level_name: str = ADMISSION_LEVEL
 # Match claim + finalize (eval jobs)
 # ---------------------------------------------------------------------------
 
+def _is_paused(conn, machine: str) -> bool:
+    """Dashboard soft-pause flag. Upserts the row if missing so first-ever
+    run of a new machine isn't a no-op — we want an explicit off switch.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO worker_state (machine, paused) VALUES (%s, false) "
+            "ON CONFLICT (machine) DO NOTHING",
+            (machine,),
+        )
+        cur.execute("SELECT paused FROM worker_state WHERE machine = %s", (machine,))
+        row = cur.fetchone()
+    conn.commit()
+    return bool(row and row[0])
+
+
 def claim_one_match(conn):
     """Atomically claim the oldest queued match row. Returns dict or None."""
     with conn.cursor() as cur:
@@ -678,10 +694,23 @@ def main():
     print(f"[worker] machine={args.machine}  device={device}")
 
     idle_streak = 0
+    last_pause_log = False
     while True:
         claimed = None
         try:
             with connect() as conn:
+                # Soft pause from the dashboard: if this machine's worker_state
+                # row is paused, don't claim anything; just sleep.
+                if _is_paused(conn, args.machine):
+                    if not last_pause_log:
+                        print(f"[worker] paused via worker_state for machine={args.machine}")
+                        last_pause_log = True
+                    time.sleep(args.poll_interval)
+                    continue
+                if last_pause_log:
+                    print(f"[worker] resumed for machine={args.machine}")
+                    last_pause_log = False
+
                 # 1) Try training runs first (longer, higher priority).
                 job = claim_one(conn, args.machine)
                 if job is None:
