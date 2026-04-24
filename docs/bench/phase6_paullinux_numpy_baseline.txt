@@ -1,0 +1,26 @@
+
+=== single-process: 50 games, max 200 ticks each ===
+  wall time:        0.363 s
+  total ticks:      1,544
+  ticks/sec:        4,249
+  games/sec:        137.6
+  game-sec simulated/wall-sec: 4,249   (target ≥10k per §18)
+
+  Per-tick breakdown (avg ns):
+    actions     :    19022 ns  ( 27.1%)
+    production  :    11801 ns  ( 16.8%)
+    movement    :     8926 ns  ( 12.7%)
+    combat      :    14303 ns  ( 20.4%)
+    victory     :    14148 ns  ( 20.2%)
+    total       :    70185 ns  (100.0%)
+
+=== parallel sweep: 16 logical CPUs on this machine ===
+    20 games/worker, max 200 ticks each
+
+     workers       ticks/sec     games/sec     scaling
+           1           4,341         149.9        1.0×
+           2           7,659         235.7        1.8×
+           4          13,603         418.2        3.1×
+           8          18,777         579.1        4.3×
+          16          26,006         801.3        6.0×
+          32          28,375         855.9        6.5×
