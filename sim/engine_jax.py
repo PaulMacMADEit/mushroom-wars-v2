@@ -516,3 +516,34 @@ def _step_tick_impl(
 
 
 step_tick_single = jax.jit(_step_tick_impl)
+
+
+# ---------------------------------------------------------------------------
+# Multi-tick fused step — pack T ticks into one XLA dispatch
+# ---------------------------------------------------------------------------
+#
+# `step_tick_single` is small. On CUDA the ~microsecond kernel plus its
+# per-launch overhead caps throughput at a few thousand ticks/sec
+# irrespective of batch size (GPU sits at ~5% util). Fusing T ticks inside
+# a jit'd `jax.lax.scan` collapses T launches into one, which is what we
+# need for the ≥10× / ≥40% SM gate.
+#
+# Caller shape: actions_p1, actions_p2 both (T, 4) int32; or batched
+# (T, n_envs, 4) when vmapped per-env. Returns (final_state, rewards_p1,
+# rewards_p2, dones) of shape (T,).
+
+def _scan_body(state, actions):
+    a1, a2 = actions
+    state, r1, r2, done = _step_tick_impl(state, a1, a2)
+    return state, (r1, r2, done)
+
+
+def _step_many_impl(state, actions_p1, actions_p2):
+    """Run T ticks over a single game. `actions_p1`/`p2`: (T, 4) int32."""
+    final, (r1s, r2s, dones) = jax.lax.scan(
+        _scan_body, state, (actions_p1, actions_p2),
+    )
+    return final, r1s, r2s, dones
+
+
+step_many_single = jax.jit(_step_many_impl)

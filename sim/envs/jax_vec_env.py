@@ -35,6 +35,7 @@ from sim.engine_jax import (
     ACTION_DIM,
     ACTION_KIND_NOOP,
     ACTION_KIND_SEND,
+    step_many_single,
     step_tick_single,
 )
 from sim.levels import reset as level_reset
@@ -66,6 +67,14 @@ def _gen_state_batch(
 
 # vmap over the first axis for every StateJax leaf + the actions.
 _step_batched = jax.jit(jax.vmap(step_tick_single, in_axes=(0, 0, 0)))
+
+# Multi-tick fused step over N envs. Actions come in as (T, n_envs, 4); scan
+# lives inside the jit, so T ticks resolve in ONE XLA dispatch — collapses
+# the per-launch overhead that caps single-step throughput at ~2k tick/s on
+# CUDA. vmap axis for actions is 1 (the per-env axis); scan walks axis 0 (T).
+_step_many_batched = jax.jit(
+    jax.vmap(step_many_single, in_axes=(0, 1, 1))
+)
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +199,43 @@ class JaxVecEnv:
             truncated  = np.zeros(self.n_envs, dtype=bool),
             infos      = _LazyInfos(self.state, self.n_envs),
         )
+
+    def step_many(self, actions: np.ndarray) -> dict:
+        """Run T ticks in one fused XLA dispatch (scan inside the jit).
+
+        `actions` shape: (T, n_envs, 2, ACTION_DIM) int32. Skips auto-reset
+        entirely — the caller is responsible for resetting after the batch.
+        Use when you want maximum throughput (bench / synthetic rollouts);
+        for the trainer's PPO rollout with per-tick decisions, keep using
+        `.step()`.
+
+        Returns {"rewards": (T, n_envs), "rewards_p2": (T, n_envs),
+                 "dones": (T, n_envs)} as numpy arrays. Final state replaces
+        `self.state`.
+        """
+        if actions.ndim != 4 or actions.shape[1] != self.n_envs or actions.shape[2] != 2 or actions.shape[3] != ACTION_DIM:
+            raise ValueError(
+                f"step_many actions must be (T, {self.n_envs}, 2, {ACTION_DIM}); got {actions.shape}"
+            )
+        T = actions.shape[0]
+
+        actions_jx = jnp.asarray(actions, dtype=jnp.int32)
+        a1 = actions_jx[:, :, 0, :]   # (T, n_envs, 4)
+        a2 = actions_jx[:, :, 1, :]
+
+        self.state, r1s, r2s, dones = _step_many_batched(self.state, a1, a2)
+        # vmap(..., in_axes=(0, 1, 1)) pushes the batch axis to the OUTPUT
+        # front by default → r1s has shape (n_envs, T). Transpose so caller
+        # sees (T, n_envs) like .step() would.
+        r1_np   = np.asarray(r1s).T
+        r2_np   = np.asarray(r2s).T
+        done_np = np.asarray(dones).T
+        return {
+            "rewards":    r1_np.astype(np.float32),
+            "rewards_p2": r2_np.astype(np.float32),
+            "dones":      done_np,
+            "ticks":      T,
+        }
 
     def close(self) -> None:
         """No subprocess resources to release; here for gym parity."""
