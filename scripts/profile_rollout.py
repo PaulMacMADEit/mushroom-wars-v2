@@ -74,9 +74,9 @@ def main():
     breakdown = trainer.sim_phase_breakdown()
     print(f"\n[profile] {args.updates} updates in {wall:.2f}s "
           f"({args.updates/wall:.2f} upd/s)")
-    print("\nPhase breakdown (ms, % of update_total):")
-    ms = breakdown["ms"]
-    pct = breakdown["pct"]
+    print("\nPhase breakdown (ms cumulative, % of update_total):")
+    ms = breakdown["ms_cumulative"]
+    pct = breakdown["pct_of_update"]
     for k in ("rollout_ns", "act_batch_ns", "env_step_ns", "learn_ns", "update_total_ns"):
         short = k.replace("_ns", "")
         print(f"  {short:20s} {ms.get(k, 0):>10.1f} ms   {pct.get(k, 0):>5.1f}%")
