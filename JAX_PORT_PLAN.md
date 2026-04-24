@@ -500,3 +500,82 @@ Copy this into a scratch todo file as you execute.
 - Chex (simpler alternative): https://github.com/google-deepmind/chex.
 
 Ship carefully. The port is worth the care; a half-ported sim is worse than either extreme.
+
+---
+
+## 13. Post-port training protocol (applies once sim-v1.2 is the default)
+
+These are methodology changes Paul requested on 2026-04-24 alongside the JAX port. They are **not** part of the port itself — don't bundle them into Phases 0–6. They are the first set of changes to make in a new PR **after** the port has landed and proven stable.
+
+### 13.1 Training level must cycle through all level variants
+
+**Rule:** during a single training run, each env draws its level from the full level catalog with uniform probability per episode. No run trains on just one level.
+
+Current behaviour: `cfg.level_name = "random_8_24"` pins every env to the same level shape for the whole run.
+
+Target behaviour: `cfg.level_name = "mixed:all"` (or a new `cfg.level_cycle` list) draws per-episode from the catalog:
+- `crossroads_6` (static)
+- `random_6_10`, `random_8_12`, `random_8_16`, `random_8_24`, `random_8_32` (symmetric)
+- `asym_8_12`, `asym_8_16`, `asym_8_24`, `asym_8_32` (asymmetric)
+
+Exact catalog to be confirmed at implementation time — read `sim/levels.py` and pick every registered variant that has a generator. The policy needs to learn a general prior over board shapes, not a specialist one per run.
+
+Implementation hint: `sim/envs/mushroom_env.py`'s `reset()` currently passes `cfg.level_name` straight to `sim.levels.apply()`. Introduce a resolver: if `level_name` starts with `mixed:`, each `reset()` draws a concrete level name from the catalog using the env's RNG. Episode-level mixing; don't swap levels mid-game.
+
+### 13.2 Admission evaluation must cycle over the same catalog
+
+**Rule:** admission matches evaluate each run over the same mix of levels it trained on. Every opponent plays every level.
+
+Current behaviour: `ADMISSION_LEVEL = "random_8_12"` in `workers/worker.py` — all admission matches use one level. This created the train/eval mismatch that confused round 1 under sim-v1.1.
+
+Target behaviour: admission queues matches across every level in the catalog. Match count per opponent may drop per-level to stay inside the 3–5 min drain budget — e.g. 12 games × 10 opponents × 10 levels = 1,200 games ÷ 10 = 120 games/opponent. Needs tuning; start with **3 games per (opponent, level)** so total drain stays around the current ceiling.
+
+Aggregation: compute a per-level win rate *and* a cross-level mean. Dashboard/run page should show both so regressions on one level can't hide in the average.
+
+### 13.3 Train sim and eval sim must be identical
+
+**Rule:** any run's admission matches must be played under the same `simulator_id` the run was trained on. No cross-sim admission.
+
+Current behaviour: admission inherits the new run's `simulator_id` via `(SELECT simulator_id FROM runs WHERE id = %s)` in `workers/worker.py`. Good — this is already correct for the new run's side, but the **opponent** was trained on a potentially different sim. Matches mix sim-v1.0-trained and sim-v1.1-trained policies under the newer sim.
+
+Target behaviour: admission only queues matches against opponents trained on the *same* simulator_id. Runs under sim-v1.2 evaluate against sim-v1.2 opponents only. Pool membership is sim-scoped.
+
+Consequence: when sim-v1.2 lands, the initial pool is empty and new runs have nobody to play against. Two options for bootstrapping:
+1. Run the rebench pass first (§13.4) so the pool is populated with sim-v1.2-native ratings of old checkpoints.
+2. Seed the pool with `random_legal` + 2–3 fresh fast training runs under sim-v1.2 to establish a baseline before heavier experiments begin.
+
+Pick option 1 — it's more principled and avoids a cold-start week.
+
+### 13.4 Re-bench all existing model checkpoints under sim-v1.2
+
+**Rule:** before the first experimental run under sim-v1.2, pull every existing run's weights (no retraining), have them play a round-robin against each other **under sim-v1.2**, and record the results as a fresh leaderboard.
+
+**Scope:**
+1. Identify every `runs.id` in Supabase with `status='done'` and a non-null `weights_url`. Current count: 64 done runs.
+2. Build a new table `rebench_matches` (or re-use `matches` with a `rebench` description tag).
+3. Queue matches pairwise across them on sim-v1.2, across the full level catalog from §13.1.
+4. Recompute Elo from scratch from the rebench results only. Old Elo numbers from sim-v1.0 / v1.1 matches are archived but no longer ranked.
+5. This is compute-heavy. 64 × 64 / 2 = 2,016 pairs × 10 levels × 3 games = 60,480 games. On sim-v1.2 with JAX at ~10,000 games/sec this is ≈6 seconds of pure sim plus policy-inference overhead. Estimate more carefully at implementation time; may need to cap opponent count to top-20-by-prior-Elo if total bloats.
+
+**Why:** Paul is fine discarding old rankings but not old checkpoints. Retraining 64 runs would cost weeks; re-benching costs hours and gives us a clean, same-sim leaderboard.
+
+**Gating:** §13.1, §13.2, §13.3 must land before §13.4 runs (rebench is the first thing that exercises them at scale).
+
+### 13.5 Config hygiene — all runs compared must share settings
+
+**Rule:** when two runs are being compared (A/B experiments, ablations), every hyperparam except the one under test must be identical. Record the full hyperparam dict in Supabase (already done via `runs.hyperparams`), and *print the diff* at comparison time on the dashboard.
+
+Implementation: a small `dashboard/lib/hyperparam_diff.js` helper that takes two `runs.hyperparams` JSON blobs and renders a "↓ same: X. Δ: ent 0.003 vs 0.01, level mixed:all vs random_8_12" strip. No configuration drift between compared runs without it being obvious.
+
+### 13.6 Sequencing
+
+In order, after sim-v1.2 is merged and default-flipped:
+1. Implement §13.1 (training-level cycling) — new commit.
+2. Implement §13.2 (admission-level cycling) — new commit.
+3. Implement §13.3 (sim-scoped admission pool) — new commit.
+4. Implement §13.5 (dashboard hyperparam diff) — new commit.
+5. Run the §13.4 rebench pass. Commit the rebench script + the Elo rebuild results.
+6. Resume the Karpathy loop on sim-v1.2 — clean sim, clean leaderboard, cycling levels, sim-scoped pool. This is the regime where round-2 experiments should actually be queued.
+
+Each item is its own commit with tests + doc-sync per `CODING_GUIDE.md`. No bundling.
+
