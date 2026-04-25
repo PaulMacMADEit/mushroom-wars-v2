@@ -362,6 +362,11 @@ class PPOTrainer:
                 "last_obs_dev":        None,
                 "last_p1_mask":        None,
                 "last_p2_mask":        None,
+                # Pre-loaded neural opponent callable (from the adapter), used
+                # by the fused-rollout collector when opponent_name=='neural'.
+                "opponent_fn":         getattr(self.vec, "_opponent", None)
+                                          if self._initial_opponent_name not in ("random_legal", "noop")
+                                          else None,
             }
         self._fused_bookkeeping["completed_episodes"] = self._completed_episodes
 

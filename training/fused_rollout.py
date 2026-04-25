@@ -85,11 +85,25 @@ def collect_rollout_fused(
       {obs, mask, src, type, tgt, logprob, value, reward, done, advantage, return}
       each (T*N, …) flat where T = cfg.rollout_steps, N = cfg.n_envs.
     """
+    # Resolve the P2 opponent. Fast path (random_legal / noop) uses fully
+    # batched numpy; "neural" or any other callable falls into a slow per-env
+    # loop that consumes the host-side state. The adapter (_JaxVecAdapter)
+    # already loaded the opponent if opponent_name == "neural", so we can
+    # reach in and grab the callable.
+    opponent_fn = None  # set when we need the per-env path
     if opponent_name not in ("random_legal", "noop"):
-        raise NotImplementedError(
-            f"fused rollout supports random_legal/noop opponents only; "
-            f"got {opponent_name!r}"
-        )
+        # Reach into the adapter to pull the cached neural opponent callable.
+        # Caller (PPOTrainer._collect_rollout_fused) already passed
+        # vec_env=self.vec._inner (the JaxVecEnv), but the *adapter* (self.vec)
+        # holds the loaded opponent. We need to find that adapter — unfortunately
+        # the inner JaxVecEnv doesn't link back. Convention: the trainer stuffs
+        # the resolved opponent into bookkeeping["opponent_fn"] before calling.
+        opponent_fn = bookkeeping.get("opponent_fn")
+        if opponent_fn is None:
+            raise NotImplementedError(
+                f"fused rollout opponent_name={opponent_name!r} requires "
+                f"bookkeeping['opponent_fn'] to be set by the trainer."
+            )
 
     T = cfg.rollout_steps
     N = cfg.n_envs
@@ -156,9 +170,14 @@ def collect_rollout_fused(
 
         # P2 mask is still on host (compute_mask_batched is numpy).
         # Pack action batch on host.
-        a_batch = _pack_action_batch_with_p2_mask(
-            actions, p2_mask_h, opponent_name, rng, N,
-        )
+        if opponent_fn is None:
+            a_batch = _pack_action_batch_with_p2_mask(
+                actions, p2_mask_h, opponent_name, rng, N,
+            )
+        else:
+            a_batch = _pack_action_batch_neural(
+                actions, opponent_fn, vec_env, rng, N,
+            )
 
         # Run K env ticks fused.
         result = vec_env.step_chunk(a_batch, K=K)
@@ -321,6 +340,38 @@ def _pack_action_batch_with_p2_mask(
 
     p2_actions = random_legal_opponent_batched(p2_mask, rng)  # (N,) int64
     _decode_into_slot(p2_actions, a_batch[:, 1, :])
+    return a_batch
+
+
+def _pack_action_batch_neural(
+    p1_actions_flat: np.ndarray,   # (N,) int64
+    opponent_fn,                    # Callable[[State, rng], int]
+    vec_env,                        # JaxVecEnv (for snapshot)
+    rng: np.random.Generator,
+    n_envs: int,
+) -> np.ndarray:
+    """Slow per-env path: snapshot states, call opponent on each. Used when
+    the opponent is a neural callable that can't be batch-vectorised cheaply.
+
+    Cost: one device->host state snapshot + N opponent forward calls per
+    chunk. At n_envs=1024 with K=4 this is ~30-100ms/chunk depending on
+    whether the opponent's net runs on CPU or GPU. Net wins because chunks
+    span K env ticks.
+    """
+    a_batch = np.zeros((n_envs, 2, ACTION_DIM), dtype=np.int32)
+    _decode_into_slot(p1_actions_flat, a_batch[:, 0, :])
+
+    states = vec_env.snapshot_numpy_states()
+    for i, s in enumerate(states):
+        idx = int(opponent_fn(s, rng))
+        if idx == NOOP_INDEX:
+            a_batch[i, 1] = [ACTION_KIND_NOOP, 0, 0, 0]
+        else:
+            type_i = idx // SLOTS_SQ
+            rem    = idx %  SLOTS_SQ
+            src_i  = rem // C.MAX_BUILDING_SLOTS
+            tgt_i  = rem %  C.MAX_BUILDING_SLOTS
+            a_batch[i, 1] = [ACTION_KIND_SEND, type_i, src_i, tgt_i]
     return a_batch
 
 
