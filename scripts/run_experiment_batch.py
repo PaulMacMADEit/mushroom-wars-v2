@@ -82,16 +82,24 @@ def _run_one(spec: dict) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     cfg = PPOConfig(**cfg_kwargs)
+    opponent_name   = spec.get("opponent_name", "random_legal")
+    opponent_kwargs = spec.get("opponent_kwargs") or None
 
     device = _resolve_device()
     print(f"\n=== {run_id} === device={device} budget={minutes}min seed={seed}", flush=True)
     print(f"  config: n_envs={cfg.n_envs} rollout={cfg.rollout_steps} "
           f"K={cfg.action_repeat} fused={cfg.fused_rollout} level={cfg.level_name} lr={cfg.lr}",
           flush=True)
+    if opponent_name != "random_legal":
+        print(f"  opponent: {opponent_name}  kwargs={opponent_kwargs}", flush=True)
 
     net = ActorCritic()
     agent = PPOAgent(net, device=device)
-    trainer = PPOTrainer(agent, cfg, seed=seed)
+    trainer = PPOTrainer(
+        agent, cfg, seed=seed,
+        opponent_name=opponent_name,
+        opponent_kwargs=opponent_kwargs,
+    )
 
     metrics_history: list[dict] = []
     total_eps = 0

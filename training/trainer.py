@@ -84,6 +84,7 @@ class PPOTrainer:
         config: PPOConfig | None = None,
         seed: int = 0,
         opponent_name: str = "random_legal",
+        opponent_kwargs: dict | None = None,
         pool_root: str | None = None,
         leaderboard_paths: list[tuple] | None = None,
     ):
@@ -122,6 +123,9 @@ class PPOTrainer:
         self._initial_opponent_name = (
             opponent_name if not self.cfg.self_play else self.cfg.initial_opponent
         )
+        # `opponent_kwargs` is only consumed when opponent_name == "neural"
+        # (single fixed opponent across all envs — not the self-play pool path).
+        self._initial_opponent_kwargs = dict(opponent_kwargs or {})
 
         self.obs_norm = RunningNorm(OBS_DIM) if self.cfg.normalize_obs else None
         self._build_vec(opponent_specs=None)
@@ -176,6 +180,7 @@ class PPOTrainer:
                 seed=self.seed,
                 level_name=self.cfg.level_name,
                 opponent_name=self._initial_opponent_name,
+                opponent_kwargs=self._initial_opponent_kwargs or None,
             )
         else:
             factories = []
