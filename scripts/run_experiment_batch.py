@@ -53,6 +53,8 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.40")
 os.environ.setdefault("SIM_BACKEND", "jax")
 
+import torch  # noqa: E402  — env vars must be set before torch imports CUDA
+
 EXPERIMENTS_DIR = ROOT / "experiments"
 
 
@@ -67,7 +69,6 @@ def _resolve_device():
 
 def _run_one(spec: dict) -> dict:
     """Run a single experiment per spec. Returns the result dict."""
-    import torch
     from training.agent import PPOAgent
     from training.net import ActorCritic
     from training.trainer import PPOConfig, PPOTrainer
@@ -163,6 +164,20 @@ def _run_one(spec: dict) -> dict:
 
     wall = time.time() - start
     win_rate_final = metrics_history[-1].get("win_rate") if metrics_history else None
+
+    # Save final weights + obs_norm so other runs can use this checkpoint as
+    # an opponent. Wrapped in try/except so a save failure doesn't crash the
+    # whole batch.
+    weights_path = out_dir / "weights.pt"
+    obs_norm_path = out_dir / "obs_norm.pt"
+    try:
+        torch.save(trainer.agent.net.state_dict(), weights_path)
+        if trainer.obs_norm is not None:
+            trainer.obs_norm.save(obs_norm_path)
+        print(f"  saved weights → {weights_path}", flush=True)
+    except Exception as exc:
+        print(f"  weight save failed: {type(exc).__name__}: {exc}", flush=True)
+
     result = {
         "id":            run_id,
         "config":        cfg_kwargs,
@@ -176,6 +191,8 @@ def _run_one(spec: dict) -> dict:
         "ticks_per_sec": round(total_env_ticks / wall, 0) if wall else 0,
         "eps_per_sec":   round(total_eps / wall, 2) if wall else 0,
         "notes":         spec.get("notes", ""),
+        "weights_path":  str(weights_path) if weights_path.exists() else None,
+        "obs_norm_path": str(obs_norm_path) if obs_norm_path.exists() else None,
         "metrics":       metrics_history,
     }
     with (out_dir / "metrics.json").open("w") as f:
