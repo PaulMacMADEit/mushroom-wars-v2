@@ -453,6 +453,69 @@ def _download_parent_state(parent: dict) -> dict:
     }
 
 
+def _resolve_opponent_kwargs(kw: dict) -> dict:
+    """Translate cloud-friendly opponent specs into local file paths.
+
+    Accepts (in order of preference):
+      1. {"opponent_run_id": "<uuid>"}  — looks up runs.weights_url/obs_norm_url
+         and downloads them.
+      2. {"weights_url": ..., "obs_norm_url": ...}  — Storage relative paths
+         (the same shape stored in `runs.weights_url`).
+      3. {"weights_path": ..., "obs_norm_path": ...}  — already-local paths;
+         used as-is.
+
+    Always returns a dict with `weights_path` (and optionally `obs_norm_path`)
+    pointing at local filesystem paths suitable for `make_neural_opponent`.
+    Other keys (e.g. "device") pass through unchanged.
+    """
+    import tempfile
+
+    out = {k: v for k, v in kw.items() if k not in (
+        "opponent_run_id", "weights_url", "obs_norm_url",
+        "weights_path", "obs_norm_path",
+    )}
+
+    # Path 1: by run id.
+    if "opponent_run_id" in kw:
+        opp_id = str(kw["opponent_run_id"])
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT weights_url, obs_norm_url FROM runs WHERE id = %s",
+                    (opp_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise RuntimeError(f"opponent_run_id={opp_id} not found in runs")
+        w_url, n_url = row
+        if not w_url:
+            raise RuntimeError(f"opponent_run_id={opp_id} has no weights_url")
+        kw = {**kw, "weights_url": w_url, "obs_norm_url": n_url}
+
+    # Path 2: by storage URL → download to a temp file.
+    if "weights_url" in kw and kw["weights_url"]:
+        out_dir = Path(tempfile.mkdtemp(prefix="mw2-opp-"))
+        w_path = out_dir / "weights.pt"
+        urllib.request.urlretrieve(_public_url(kw["weights_url"]), w_path)
+        out["weights_path"] = str(w_path)
+        if kw.get("obs_norm_url"):
+            n_path = out_dir / "obs_norm.pt"
+            urllib.request.urlretrieve(_public_url(kw["obs_norm_url"]), n_path)
+            out["obs_norm_path"] = str(n_path)
+        return out
+
+    # Path 3: already-local paths — pass through.
+    if "weights_path" in kw:
+        out["weights_path"] = kw["weights_path"]
+        if "obs_norm_path" in kw:
+            out["obs_norm_path"] = kw["obs_norm_path"]
+        return out
+
+    raise RuntimeError(
+        "opponent_kwargs needs one of: opponent_run_id, weights_url, weights_path"
+    )
+
+
 def _download_leaderboard_opponents(run_id, top_k: int) -> list[tuple]:
     """Download top-K Elo runs' weights+obs_norm to a local temp dir.
 
@@ -613,6 +676,25 @@ def run_training(
     cfg_kwargs = {k: v for k, v in hp.items() if k in PPOConfig.__dataclass_fields__}
     cfg = PPOConfig(**cfg_kwargs)
 
+    # Optional per-run opponent override. `hyperparams.opponent_name` (str) +
+    # `hyperparams.opponent_kwargs` (dict) get passed to PPOTrainer's
+    # constructor — used for non-self-play training against a fixed neural
+    # opponent (e.g. an earlier checkpoint).
+    #
+    # `opponent_kwargs` may carry storage paths instead of local paths:
+    #   {"opponent_run_id": "<uuid>"}                   — resolve via runs table
+    #   {"weights_url": "models/<id>/weights.pt", ...}   — direct Storage path
+    #   {"weights_path": "/abs/local/path", ...}         — already local
+    # We normalise to local paths via _resolve_opponent_kwargs so the trainer
+    # never has to know about Storage.
+    opponent_name = hp.get("opponent_name", "random_legal")
+    opponent_kwargs_raw = hp.get("opponent_kwargs") or None
+    opponent_kwargs = (
+        _resolve_opponent_kwargs(opponent_kwargs_raw)
+        if opponent_kwargs_raw is not None
+        else None
+    )
+
     # Build agent + trainer. Trainer owns its own vec env.
     net = build_net_for_model(job["model_id"], model_meta["obs_size"], model_meta["num_actions"])
 
@@ -642,7 +724,12 @@ def run_training(
             print(f"[worker] leaderboard download failed, falling back to pure self-play: {exc}")
 
     agent = PPOAgent(net, device=device)
-    trainer = PPOTrainer(agent, cfg, seed=seed_int, leaderboard_paths=leaderboard_paths)
+    trainer = PPOTrainer(
+        agent, cfg, seed=seed_int,
+        opponent_name=opponent_name,
+        opponent_kwargs=opponent_kwargs,
+        leaderboard_paths=leaderboard_paths,
+    )
 
     if parent_state is not None:
         if parent_state["optimizer"] is not None:

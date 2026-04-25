@@ -16,6 +16,10 @@ RestartSec=15
 StandardOutput=append:{{LOG_DIR}}/worker.out.log
 StandardError=append:{{LOG_DIR}}/worker.err.log
 Environment=PYTHONUNBUFFERED=1
+# Cap JAX device memory so PyTorch + JAX share the RTX 3070's 8 GiB
+# without OOM (JAX_PORT_PLAN §3.6). Worker.py also defaults this via
+# os.environ.setdefault, but setting it here makes the cap explicit.
+Environment=XLA_PYTHON_CLIENT_MEM_FRACTION=0.40
 
 [Install]
 WantedBy=default.target
