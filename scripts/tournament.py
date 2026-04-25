@@ -47,26 +47,80 @@ from training.net import ActorCritic, infer_body_dim
 from training.obs_norm import RunningNorm
 
 
+def _resolve_supabase_run(run_id: str, device: torch.device):
+    """Download weights+obs_norm for a Supabase run id; return local paths."""
+    import tempfile
+    import urllib.request
+    from cli.db import connect
+    from workers.worker import _public_url  # type: ignore
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT weights_url, obs_norm_url FROM runs WHERE id = %s",
+                (run_id,),
+            )
+            row = cur.fetchone()
+    if row is None:
+        raise RuntimeError(f"run {run_id} not found in Supabase")
+    w_url, n_url = row
+    if not w_url:
+        raise RuntimeError(f"run {run_id} has no weights_url (status not done?)")
+
+    out_dir = Path(tempfile.mkdtemp(prefix=f"mw2-tour-{run_id[:8]}-"))
+    w_path = out_dir / "weights.pt"
+    urllib.request.urlretrieve(_public_url(w_url), w_path)
+    n_path = None
+    if n_url:
+        n_path = out_dir / "obs_norm.pt"
+        urllib.request.urlretrieve(_public_url(n_url), n_path)
+    return w_path, n_path
+
+
 def _load_policy(path: str | Path, device: torch.device):
     """Returns ('neural', agent, obs_norm) or ('random_legal', None, None) or
     ('noop', None, None). For neural, agent is a PPOAgent; obs_norm is a
-    RunningNorm (or None)."""
+    RunningNorm (or None).
+
+    `path` accepts:
+      - 'random_legal' or 'noop' (literal opponent names)
+      - a Supabase run id (UUID or short prefix matching one row)
+      - an experiment dir path (containing weights.pt + obs_norm.pt)
+    """
     if path == "random_legal":
         return ("random_legal", None, None)
     if path == "noop":
         return ("noop", None, None)
-    p = Path(path)
-    weights = p / "weights.pt"
-    obs_norm_p = p / "obs_norm.pt"
-    if not weights.exists():
-        raise FileNotFoundError(f"weights.pt not found at {weights}")
-    state_dict = torch.load(str(weights), map_location=device, weights_only=True)
+
+    # If it looks like a UUID or short hex prefix, try Supabase first.
+    is_uuid_like = (
+        len(str(path)) >= 8 and
+        all(c in "0123456789abcdefABCDEF-" for c in str(path))
+    )
+    weights_path = None
+    obs_norm_p = None
+    if is_uuid_like:
+        try:
+            weights_path, obs_norm_p = _resolve_supabase_run(str(path), device)
+        except Exception as exc:
+            print(f"[tournament] Supabase lookup failed for {path}: {exc}; trying local path")
+            weights_path = None
+
+    if weights_path is None:
+        p = Path(path)
+        weights_path = p / "weights.pt"
+        if (p / "obs_norm.pt").exists():
+            obs_norm_p = p / "obs_norm.pt"
+
+    if not Path(weights_path).exists():
+        raise FileNotFoundError(f"weights.pt not found at {weights_path}")
+    state_dict = torch.load(str(weights_path), map_location=device, weights_only=True)
     body_dim = infer_body_dim(state_dict)
     net = ActorCritic(body_dim=body_dim)
     net.load_state_dict(state_dict)
     agent = PPOAgent(net, device=device)
     obs_norm = None
-    if obs_norm_p.exists():
+    if obs_norm_p and Path(obs_norm_p).exists():
         obs_norm = RunningNorm(OBS_DIM)
         obs_norm.load(str(obs_norm_p))
     return ("neural", agent, obs_norm)
