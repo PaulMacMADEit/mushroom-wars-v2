@@ -1,0 +1,17 @@
+[Unit]
+Description=Fire mushroom-cron.service every 3 hours
+Requires=mushroom-cron.service
+
+[Timer]
+# OnCalendar = every day at 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00.
+# Picked off-the-hour minute (07) so we don't pile up at :00 with every other
+# fleet's hourly cron.
+OnCalendar=*-*-* 00,03,06,09,12,15,18,21:07:00
+# Fire immediately at boot if the next OnCalendar is far away (e.g. machine
+# was off through 03:07 → fire on boot, then resume the schedule).
+Persistent=true
+# Random delay up to 60s so concurrent timers don't all fire at exactly :07:00.
+RandomizedDelaySec=60s
+
+[Install]
+WantedBy=timers.target

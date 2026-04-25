@@ -1,0 +1,13 @@
+[Unit]
+Description=Mushroom Wars v2 cron-agent pulse — review last batch, queue next batch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{REPO}}
+# `-u` forces unbuffered stdout/stderr so log tails stream in real time.
+ExecStart={{VENV_PYTHON}} -u {{REPO}}/scripts/cron_agent_pulse.py
+StandardOutput=append:{{LOG_DIR}}/cron.out.log
+StandardError=append:{{LOG_DIR}}/cron.err.log
+Environment=PYTHONUNBUFFERED=1

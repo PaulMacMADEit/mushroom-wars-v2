@@ -5,10 +5,14 @@
 # Linux → systemd user unit in ~/.config/systemd/user
 #
 # Usage (from repo root):
-#   ./workers/install_service.sh            # install + start
-#   ./workers/install_service.sh uninstall  # stop + remove
-#   ./workers/install_service.sh status     # show service state
-#   ./workers/install_service.sh logs       # tail logs
+#   ./workers/install_service.sh                  # install + start the worker
+#   ./workers/install_service.sh uninstall        # stop + remove the worker
+#   ./workers/install_service.sh status           # show worker state
+#   ./workers/install_service.sh logs             # tail worker logs
+#   ./workers/install_service.sh install-cron     # install + start the 3h cron
+#   ./workers/install_service.sh uninstall-cron   # stop + remove the cron
+#   ./workers/install_service.sh status-cron      # show cron timer state
+#   ./workers/install_service.sh logs-cron        # tail cron logs
 #
 # The .venv directory must already exist at repo root with the worker's deps
 # installed.
@@ -106,6 +110,36 @@ elif [[ "$os" == "Linux" ]]; then
       ;;
     logs)
       journalctl --user -u "$UNIT" -n 40 -f
+      ;;
+    install-cron)
+      CRON_SVC="mushroom-cron.service"
+      CRON_TIMER="mushroom-cron.timer"
+      CRON_SVC_SRC="$REPO/workers/systemd/mushroom-cron.service.template"
+      CRON_TIMER_SRC="$REPO/workers/systemd/mushroom-cron.timer.template"
+      mkdir -p "$LOG_DIR" "$UNIT_DIR"
+      sed -e "s|{{REPO}}|$REPO|g" \
+          -e "s|{{VENV_PYTHON}}|$VENV_PYTHON|g" \
+          -e "s|{{LOG_DIR}}|$LOG_DIR|g" \
+          "$CRON_SVC_SRC" > "$UNIT_DIR/$CRON_SVC"
+      cp "$CRON_TIMER_SRC" "$UNIT_DIR/$CRON_TIMER"
+      systemctl --user daemon-reload
+      systemctl --user enable --now "$CRON_TIMER"
+      loginctl enable-linger "$(whoami)" 2>/dev/null || true
+      echo "installed $CRON_TIMER (systemd --user, fires every 3h at :07)"
+      systemctl --user list-timers "$CRON_TIMER" --no-pager
+      ;;
+    uninstall-cron)
+      systemctl --user disable --now "mushroom-cron.timer" 2>/dev/null || true
+      rm -f "$UNIT_DIR/mushroom-cron.timer" "$UNIT_DIR/mushroom-cron.service"
+      systemctl --user daemon-reload
+      echo "uninstalled mushroom-cron.timer"
+      ;;
+    status-cron)
+      systemctl --user status mushroom-cron.timer --no-pager || true
+      systemctl --user list-timers mushroom-cron.timer --no-pager 2>/dev/null || true
+      ;;
+    logs-cron)
+      journalctl --user -u mushroom-cron.service -n 40 -f
       ;;
     *)
       echo "unknown command: $cmd" >&2
