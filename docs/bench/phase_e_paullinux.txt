@@ -1,0 +1,41 @@
+Phase E — DLPack zero-copy JAX <-> torch in fused rollout. PaulLinux RTX 3070.
+
+K-sweep (n_envs=1024, rollout_steps=64, 2 measured updates each):
+  per-tick    348.6 us/tick   (1.00x)
+  fused K=1   200.5 us/tick   (1.74x)
+  fused K=4    57.6 us/tick   (6.05x)
+  fused K=8    43.5 us/tick   (8.02x)
+  fused K=16   36.8 us/tick   (9.48x)
+
+Numbers are within noise of Phase D (DLPack didn't visibly help wall time
+at this scale — confirmed, see attribution below).
+
+GPU SM during 4-update fused K=8 run (100s wall, 100 samples):
+  SM mean=2.8%  max=26%  >=30%: 0/100
+  MEM mean=0.1%
+
+Per-rollout-step phase attribution (n_envs=1024, K=8, 32 steps):
+  step_chunk     216.65 ms/step   87.4%   ← JAX vmap kernel + host/device transfers
+  pack_actions    19.60 ms/step    7.9%   ← _decode + np scatter + np where for opp
+  encode_mask      8.01 ms/step    3.2%   ← encode_obs_batched + mask_batched on host
+  act_batch        3.55 ms/step    1.4%   ← torch forward + DLPack hop
+
+Why GPU SM is still low:
+  step_chunk is the dominant phase (87%), but during step_chunk the GPU SM
+  reads ~3% in nvidia-smi dmon. Memory util reads ~0%. The kernel is small
+  enough that it completes in <30ms wall, then there's blocking-Python time
+  in JAX dispatch/lax.scan setup before the next launch. We are kernel-
+  launch-bound for very small batches/short kernels, not memory- or
+  compute-bound. The remaining lever is one of:
+
+    (a) Increase n_envs further so each kernel launch does more work
+        (bigger batch amortises launch overhead).
+    (b) Make K larger so each chunk is a longer kernel.
+    (c) Persistent JAX async dispatch — let the next kernel queue while
+        Python prepares the action pack.
+    (d) Make `_pack_action_batch_with_p2_mask` execute concurrently with
+        `step_chunk` (overlap CPU pack with GPU step).
+
+None of these are Phase E scope. They're Phase F+ work or algorithmic.
+Phase E correctness is solid — DLPack round-trips work, all 192 tests
+green on PaulLinux, training continues to learn cleanly under fused.
