@@ -1,28 +1,37 @@
-"""Phase G1: compute_mask_batched (numpy) vs compute_mask_batched_jax parity.
+"""Phase G1+G2: parity tests for sim/actions_jax.
 
-Builds 50 random states across a mix of opening/mid/late shapes, masks via
-both paths for both players, asserts byte-identical bool masks. Plus a
-hand-built "no free group slot" edge case to confirm the early-return
-semantic of the numpy oracle is preserved by the JAX vectorised path.
+G1: compute_mask_batched_jax — byte-identical bool masks vs numpy oracle.
+G2: decode_to_slot_jax — byte-identical action decoder vs numpy oracle.
+G2: random_legal_opponent_jax — distribution parity (KL) + mask compliance.
+G2: pack_action_batch_jax — full action-pack parity vs numpy.
 """
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from sim import config as C
 from sim.actions import (
+    ACTION_SPACE_SIZE,
     NOOP_INDEX,
     compute_mask,
     compute_mask_batched,
     decode,
 )
-from sim.actions_jax import compute_mask_batched_jax
+from sim.actions_jax import (
+    compute_mask_batched_jax,
+    decode_to_slot_jax,
+    pack_action_batch_jax,
+    random_legal_opponent_jax,
+)
 from sim.engine import step_tick
+from sim.engine_jax import ACTION_DIM, ACTION_KIND_NOOP
 from sim.levels import reset
 from sim.state_jax import StateJax, from_numpy_state
+from training.fused_rollout import _pack_action_batch_with_p2_mask
 
 
 def _warmup(state, n_ticks: int, rng: np.random.Generator) -> None:
@@ -137,3 +146,161 @@ def test_mask_parity_per_env_against_compute_mask():
         per_env = np.stack([compute_mask(s, player) for s in states], axis=0)
         batched = np.asarray(compute_mask_batched_jax(_stack_states(states), player))
         np.testing.assert_array_equal(per_env, batched)
+
+
+# ---------------------------------------------------------------------------
+# G2: decoder parity
+# ---------------------------------------------------------------------------
+
+def _np_decode_into_slot(flat: np.ndarray) -> np.ndarray:
+    """Reference decoder — same logic as training/fused_rollout._decode_into_slot."""
+    from sim.actions import SLOTS_SQ
+    from sim.engine_jax import ACTION_KIND_SEND
+    flat = np.asarray(flat, dtype=np.int64)
+    is_noop = flat == NOOP_INDEX
+    type_idx = (flat // SLOTS_SQ).astype(np.int32)
+    rem      = (flat %  SLOTS_SQ).astype(np.int32)
+    src_idx  = (rem // C.MAX_BUILDING_SLOTS).astype(np.int32)
+    tgt_idx  = (rem %  C.MAX_BUILDING_SLOTS).astype(np.int32)
+    out = np.zeros((flat.shape[0], 4), dtype=np.int32)
+    out[:, 0] = np.where(is_noop, ACTION_KIND_NOOP, ACTION_KIND_SEND)
+    out[:, 1] = np.where(is_noop, 0, type_idx)
+    out[:, 2] = np.where(is_noop, 0, src_idx)
+    out[:, 3] = np.where(is_noop, 0, tgt_idx)
+    return out
+
+
+def test_decode_to_slot_jax_parity():
+    """JAX decoder == numpy decoder, byte-identical."""
+    rng = np.random.default_rng(0)
+    flat = rng.integers(0, ACTION_SPACE_SIZE, size=2048, dtype=np.int64)
+    flat[::13] = NOOP_INDEX
+
+    np_out = _np_decode_into_slot(flat)
+    jx_out = np.asarray(decode_to_slot_jax(jnp.asarray(flat)))
+
+    np.testing.assert_array_equal(np_out, jx_out)
+
+
+# ---------------------------------------------------------------------------
+# G2: random_legal_opponent_jax — mask compliance + distribution parity
+# ---------------------------------------------------------------------------
+
+def _build_random_masks(n_envs: int, seed: int) -> np.ndarray:
+    """Build a mix of varied-density legality masks (NOOP always legal)."""
+    rng = np.random.default_rng(seed)
+    densities = rng.uniform(0.01, 0.5, size=n_envs)
+    mask = np.zeros((n_envs, ACTION_SPACE_SIZE), dtype=bool)
+    for i in range(n_envs):
+        mask[i] = rng.random(ACTION_SPACE_SIZE) < densities[i]
+    mask[:, NOOP_INDEX] = True
+    return mask
+
+
+def test_random_legal_jax_mask_compliance():
+    """Every sampled action must be a legal action (mask[idx]==True)."""
+    mask = _build_random_masks(n_envs=512, seed=7)
+    key = jax.random.PRNGKey(123)
+    sampled = np.asarray(random_legal_opponent_jax(jnp.asarray(mask), key))
+
+    assert sampled.shape == (512,)
+    assert np.all(mask[np.arange(512), sampled]), "JAX random_legal sampled an illegal action"
+
+
+def _build_fixed_density_masks(legal_counts: list[int], seed: int) -> np.ndarray:
+    """One mask per entry in legal_counts, each with that many random True
+    positions (NOOP always one of them). Lets us test small-k distributions
+    cleanly without sparse-bin noise."""
+    rng = np.random.default_rng(seed)
+    n_masks = len(legal_counts)
+    mask = np.zeros((n_masks, ACTION_SPACE_SIZE), dtype=bool)
+    for i, k in enumerate(legal_counts):
+        assert 1 <= k <= ACTION_SPACE_SIZE
+        idx = rng.choice(ACTION_SPACE_SIZE - 1, size=k - 1, replace=False)
+        mask[i, idx] = True
+        mask[i, NOOP_INDEX] = True
+    return mask
+
+
+def test_random_legal_jax_uniform_over_legal():
+    """JAX sampler must be uniform over the legal entries of each mask.
+
+    Chi-squared goodness-of-fit against the uniform-over-legal hypothesis:
+    chi-sq < critical value at p=0.001. Tests across a range of legality
+    densities so we hit both the small-k and larger-k regimes.
+    """
+    legal_counts = [4, 8, 16, 32, 64, 128]
+    masks = _build_fixed_density_masks(legal_counts, seed=21)
+    n_samples = 20000
+
+    key = jax.random.PRNGKey(2025)
+    counts = np.zeros((len(legal_counts), ACTION_SPACE_SIZE), dtype=np.int64)
+    for _ in range(n_samples):
+        key, sub = jax.random.split(key)
+        idx = np.asarray(random_legal_opponent_jax(jnp.asarray(masks), sub))
+        for i in range(len(legal_counts)):
+            counts[i, idx[i]] += 1
+
+    # Critical chi-sq values at p=0.001 for df = k-1, computed from
+    # scipy.stats.chi2.ppf(0.999, k-1) and rounded up to give margin.
+    crit = {3: 16.3, 7: 24.3, 15: 37.7, 31: 61.1, 63: 103.4, 127: 178.0}
+
+    for i, k in enumerate(legal_counts):
+        legal = np.where(masks[i])[0]
+        assert legal.size == k
+        observed = counts[i, legal]
+        expected = n_samples / k
+        chi_sq = float(((observed - expected) ** 2 / expected).sum())
+        assert chi_sq < crit[k - 1], (
+            f"random_legal not uniform over legal for k={k}: chi-sq={chi_sq:.2f} "
+            f"vs critical {crit[k-1]} at p=0.001"
+        )
+
+
+
+
+# ---------------------------------------------------------------------------
+# G2: pack_action_batch_jax — full pack parity vs numpy
+# ---------------------------------------------------------------------------
+
+def test_pack_action_batch_jax_noop_parity():
+    """For opponent_name='noop', JAX pack must be byte-identical to numpy pack."""
+    rng = np.random.default_rng(0)
+    p1 = rng.integers(0, ACTION_SPACE_SIZE, size=64, dtype=np.int64)
+    p1[::7] = NOOP_INDEX
+    p2_mask = _build_random_masks(n_envs=64, seed=11)
+
+    np_pack = _pack_action_batch_with_p2_mask(p1, p2_mask, "noop", rng, 64)
+
+    key = jax.random.PRNGKey(0)
+    jx_pack = np.asarray(pack_action_batch_jax(jnp.asarray(p1), jnp.asarray(p2_mask), key, "noop"))
+
+    np.testing.assert_array_equal(np_pack, jx_pack)
+
+
+def test_pack_action_batch_jax_random_legal_compliance():
+    """For random_legal opponent, JAX pack must (a) match P1 row byte-identically,
+    (b) emit only legal P2 actions per p2_mask."""
+    rng = np.random.default_rng(0)
+    p1 = rng.integers(0, ACTION_SPACE_SIZE, size=128, dtype=np.int64)
+    p2_mask = _build_random_masks(n_envs=128, seed=42)
+
+    np_pack = _pack_action_batch_with_p2_mask(p1, p2_mask, "random_legal", rng, 128)
+
+    key = jax.random.PRNGKey(7)
+    jx_pack = np.asarray(pack_action_batch_jax(jnp.asarray(p1), jnp.asarray(p2_mask), key, "random_legal"))
+
+    np.testing.assert_array_equal(np_pack[:, 0, :], jx_pack[:, 0, :])
+
+    for i in range(128):
+        kind, type_, src, tgt = jx_pack[i, 1, :]
+        if kind == ACTION_KIND_NOOP:
+            assert p2_mask[i, NOOP_INDEX], f"env {i}: jax picked NOOP but NOOP not legal"
+        else:
+            slots = C.MAX_BUILDING_SLOTS
+            from sim.actions import SLOTS_SQ
+            flat = int(type_) * SLOTS_SQ + int(src) * slots + int(tgt)
+            assert p2_mask[i, flat], (
+                f"env {i}: jax picked illegal action flat={flat} "
+                f"(type={type_}, src={src}, tgt={tgt})"
+            )

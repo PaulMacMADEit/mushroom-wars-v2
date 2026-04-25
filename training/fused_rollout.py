@@ -26,13 +26,15 @@ import jax.numpy as jnp
 import numpy as np
 import torch
 
+import jax
+
 from sim import config as C
 from sim.actions import (
     ACTION_SPACE_SIZE,
     NOOP_INDEX,
     SLOTS_SQ,
 )
-from sim.actions_jax import compute_mask_batched_jax
+from sim.actions_jax import compute_mask_batched_jax, pack_action_batch_jax
 from sim.engine_jax import (
     ACTION_DIM,
     ACTION_KIND_NOOP,
@@ -146,6 +148,11 @@ def collect_rollout_fused(
     ep_length = bookkeeping["ep_length"]
     completed = bookkeeping["completed_episodes"]
 
+    # G2: derive a JAX PRNGKey for on-device opponent sampling. We seed from
+    # the existing numpy rng so reproducibility under cfg.seed is preserved
+    # — the trainer already feeds this rng deterministically.
+    jax_key = jax.random.PRNGKey(int(rng.integers(0, 2**31 - 1)))
+
     # We still need ONE host obs copy per rollout to feed RunningNorm.update.
     # Take a sample at the start (cheap; one per rollout) so stats keep moving.
     # The numpy buffer for the rollout-return obs is filled in batched at the
@@ -169,15 +176,15 @@ def collect_rollout_fused(
             obs_normed_dev, mask_dev,
         )
 
-        # G2 will keep P2 mask on device through pack. For G1 we materialise
-        # at the boundary so the existing numpy pack functions still consume
-        # what they expect.
-        p2_mask_h = np.asarray(p2_mask_dev)
+        # G2: pack action batch on-device for non-neural opponents. JAX key
+        # is split per step so each rollout step gets fresh randomness.
         if opponent_fn is None:
-            a_batch = _pack_action_batch_with_p2_mask(
-                actions, p2_mask_h, opponent_name, rng, N,
+            jax_key, sub = jax.random.split(jax_key)
+            a_batch = pack_action_batch_jax(
+                jnp.asarray(actions), p2_mask_dev, sub, opponent_name,
             )
         else:
+            # Neural opponent path stays on host; G4 lifts it on-device.
             a_batch = _pack_action_batch_neural(
                 actions, opponent_fn, vec_env, rng, N,
             )
