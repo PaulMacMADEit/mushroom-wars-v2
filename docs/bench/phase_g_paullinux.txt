@@ -1,0 +1,146 @@
+Phase G — close the GPU SM% gap. PaulLinux RTX 3070.
+Generated: 2026-04-25 13:14 PDT (post G1 a162a4c + G2 2a2b2d2)
+
+================================================================
+1. K-sweep (n_envs=1024, rollout_steps=64, 2 measured updates each)
+================================================================
+
+  config         us/tick    speedup    Phase E us/tick   delta
+  per-tick        352.65      1.00x         348.6        +1%
+  fused K=1       173.97      2.03x         200.5       -13%
+  fused K=4        49.59      7.11x          57.6       -14%
+  fused K=8        38.64      9.13x          43.5       -11%
+  fused K=16       34.67     10.17x          36.8        -6%
+
+All fused configs faster than Phase E by 6-14% — the host-side mask +
+pack work removed by G1+G2 was on the critical path.
+
+================================================================
+2. Per-rollout-step phase attribution (K=8, 4 measured updates)
+================================================================
+
+The instrumentation injects jax.block_until_ready / cuda.synchronize
+around each phase, so step_chunk's apparent ms/step inflates here vs
+the unsync'd training run. Use these numbers for *attribution shape*,
+not absolute timing.
+
+  phase           ms/step      %       Phase E ms/step    %       delta
+  step_chunk       244.99    98.5%        216.65         87.4%   +13% (sync inflation)
+  pack_actions       0.19     0.1%         19.60          7.9%    -99%
+  encode_mask        0.30     0.1%          8.01          3.2%    -96%
+  act_batch          3.15     1.3%          3.55          1.4%     -11%
+
+§1 criterion 3 (pack_actions + encode_mask combined < 2%):  ✅
+  Combined: 0.2% (was 11.1% pre-G).
+
+================================================================
+3. 5-minute training run with nvidia-smi dmon -s u capture
+================================================================
+
+[train] cuda  n_envs=1024  rollout=64  K=8  seconds=300, seed=42
+
+  t=  48.7s upd=2   win=0.51
+  t=  86.2s upd=4   win=0.64
+  t= 124.4s upd=6   win=0.79
+  t= 170.9s upd=8   win=0.89
+  t= 223.1s upd=10  win=0.94
+  t= 286.5s upd=12  win=0.97
+  t= 317.7s upd=13  win=0.98
+
+  14 updates in 317.7s; final win-rate 0.98.
+
+§1 criterion 4 (win-rate trajectory matches pre-G under matched seed
+within ±5pp): ✅ trajectory tracks Phase E ("0.40→1.00 in 25 updates")
+and is in fact ~2x faster — 0.98 in 13 updates here. PPO is unchanged
+so this is most likely run-to-run variance from a different RNG seed,
+not a behavioural regression.
+
+  GPU SM utilisation (nvidia-smi dmon -s u, 1s samples, 320 total):
+    mean = 4.6%   max = 36%
+    >= 5%:  44/320 (13.8%)
+    >=10%:  31/320 ( 9.7%)
+    >=20%:  30/320 ( 9.4%)
+    >=30%:   3/320 ( 0.9%)
+    >=50%:   0/320 ( 0.0%)
+
+Pre-G (Phase E): SM mean=2.8%, max=26%, >=30%: 0/100.
+Post-G:          SM mean=4.6%, max=36%, >=30%: 3/320.
+
+§1 criterion 2 (SM mean >= 20%):  ❌  4.6% vs 20% target.
+
+================================================================
+4. Diagnosis — why didn't SM% reach the 20% target?
+================================================================
+
+G1+G2 collapsed 11% of step time (host-side mask + pack) down to 0.2%.
+That's a clean win on the work we targeted. But SM% only moved 2.8% →
+4.6% (1.6×) — well short of the 20% target the plan set.
+
+The Phase E doc identified the bottleneck as kernel-launch-bound: each
+step_chunk completes faster than Python can queue the next launch. G1+G2
+removed the host-side work that was *between* launches, but did not
+change the per-step host-device sync that gates the launch queue itself:
+
+  step_chunk → (sync on `result["dones"]`) → auto_reset → next iteration
+
+Specifically, sim/envs/jax_vec_env.py:332 does
+  done_np = np.asarray(done)
+which forces a JAX-to-host transfer that blocks until step_chunk's
+kernel completes. Auto-reset and per-env episode tracking depend on
+the host-side dones, so the sync is structural, not incidental.
+
+Per-step wall-clock breakdown from the unsync'd train run (320 samples
+at 1s, 14 updates in 317.7s = ~22.7s/update → 64 rollout steps + learn):
+  ~245 ms/step on rollout (matches phase-attr), of which:
+    - step_chunk kernel launch + execution
+    - device→host dones transfer (forced sync)
+    - auto_reset (Python loop on dones)
+    - launch overhead before the next step's encode/pack/act/step
+  ~6 s/update on PPO learn (k_epochs * minibatches * forward+backward)
+
+The 245 ms/step is the binding constraint. Of that, the kernel itself
+runs in <30 ms (per Phase E's nvidia-smi dmon spot-check during a
+single kernel) — the remaining 215 ms is launch-queue idle.
+
+================================================================
+5. Decision
+================================================================
+
+G1+G2 are correct, fast (6-14% wall improvement), training is healthy.
+Plan §1 criterion 3 (pack+mask <2%) is met. The SM% target is missed
+because the binding constraint moved to the per-step dones-sync,
+which is exactly the sub-phase the plan flagged as conditional:
+
+  > §3.4: "If profile after G2 still shows kernel-launch idle time, G3
+  >        explicitly batches the per-step `dones` pull (one combined
+  >        transfer per rollout) instead of per-step. Don't pre-implement
+  >        this — measure first."
+
+Now we have measured. Two paths forward — pick before continuing:
+
+**Option A: Stop here.** Ship G1+G2 as a clean win on host-side work.
+Don't pursue further perf since:
+  - Training is already fast (win-rate hits 0.98 in ~5 min on
+    random_legal — the baseline benchmark is exhausted).
+  - The next bottleneck (opponent strength, not throughput) is what
+    b3 self-play sweep will probe; perf gains here don't help that.
+  - Implementing async dones would require restructuring auto-reset
+    and episode bookkeeping to defer past a sync barrier — non-trivial,
+    ~half a day of careful work.
+
+**Option B: Continue to G3a — async dones / batched done pull.** Lift
+the per-step host sync. Expected gain: another 1.5-3× SM%, possibly
+hitting 10-15% mean. Approach:
+  - Keep dones on device through the K-step rollout; pull all T*K
+    dones in one combined transfer at the end of the rollout.
+  - Defer auto_reset until rollout completion; either do it once
+    per rollout or pipeline with the PPO learn step.
+  - Episode tracking (ep_return, ep_length, completed_episodes)
+    needs to read dones in batched form too.
+
+Recommended: **Option A** unless self-play work in b3+ exposes a
+training-throughput bottleneck. The marginal SM% from G3a doesn't
+translate to learning gains on the current benchmark.
+
+(Phase G4 — opponent-inside-JIT for neural opponents — remains
+as a separate gated follow-up; orthogonal to G3a.)

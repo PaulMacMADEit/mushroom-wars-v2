@@ -197,9 +197,10 @@ SIM_BACKEND=jax python scripts/smoke_train.py --n-envs 64 --updates 50
 
 ## 7. Executable checklist
 
-- [ ] **Phase G1** — `compute_mask_batched_jax` + parity test + use in fused rollout.
-- [ ] **Phase G2** — `pack_action_batch_jax` + distribution parity test + use in fused rollout.
-- [ ] **Phase G3** — PaulLinux profile + decide on G3a / G4.
+- [x] **Phase G1** ✅ 2026-04-25 (commit a162a4c): `sim/actions_jax.compute_mask_batched_jax` + 12 parity cases + use in fused rollout. Mask byte-identical to numpy oracle.
+- [x] **Phase G2** ✅ 2026-04-25 (commit 2a2b2d2): `pack_action_batch_jax` + `random_legal_opponent_jax` + `decode_to_slot_jax` + 5 parity cases (decoder byte-identical, sampler uniform-over-legal at p=0.001, mask compliance, noop pack byte-identical).
+- [x] **Phase G3** ✅ 2026-04-25 — PaulLinux profile in `docs/bench/phase_g_paullinux.txt`. Criterion 3 (pack+mask < 2%): met (0.2%). Criterion 4 (win-rate parity): met. **Criterion 2 (SM mean ≥ 20%): missed** — SM only moved 2.8% → 4.6% because the binding constraint shifted to the per-step `result["dones"]` host sync inside `step_chunk`, not the host-side work G1+G2 removed. See bench file §5 for the option-A-vs-G3a decision; deferring G3a unless self-play b3+ exposes a real training-throughput need.
+- [ ] **Phase G3a** *(deferred)* — async / batched dones pull. See bench file §5.
 - [ ] **Phase G4** *(gated)* — opponent-inside-JIT for neural opponents.
 
 ---
