@@ -27,6 +27,47 @@ from training.net import ActorCritic, NUM_SRC, NUM_TGT, NUM_TYPES, NUM_TYPE_CHOI
 MASK_FILL = -1e9
 
 
+def _to_torch(x, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    """Coerce numpy / jax / torch input to a torch tensor on `device`.
+
+    Zero-copy via DLPack when the input is a JAX array (cuda) or already a
+    torch tensor on the right device. Numpy inputs go through the standard
+    host->device path.
+    """
+    # Already a torch tensor.
+    if isinstance(x, torch.Tensor):
+        if x.device != device:
+            x = x.to(device)
+        if x.dtype != dtype:
+            x = x.to(dtype)
+        return x
+
+    # JAX array: use DLPack to stay on device when both jax and torch share
+    # the same CUDA stream/allocator.
+    try:
+        import jax  # noqa: F401
+        from jax import Array as JaxArray  # type: ignore
+        is_jax = isinstance(x, JaxArray)
+    except Exception:
+        is_jax = False
+
+    if is_jax:
+        try:
+            t = torch.from_dlpack(x)
+            if t.device != device:
+                t = t.to(device)
+            if t.dtype != dtype:
+                t = t.to(dtype)
+            return t
+        except Exception:
+            # DLPack failed (driver / allocator mismatch). Fall through to numpy
+            # round-trip — slower but always works.
+            x = np.asarray(x)
+
+    # Numpy fallback.
+    return torch.as_tensor(x, dtype=dtype, device=device)
+
+
 def _decompose_masks(
     full_mask: torch.Tensor,
     src: torch.Tensor | None = None,
@@ -95,8 +136,8 @@ class PPOAgent:
     @torch.no_grad()
     def act_batch(
         self,
-        obs: np.ndarray,
-        mask: np.ndarray,
+        obs,
+        mask,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Factored sampling. Returns six numpy arrays:
           action (N,)   — flat env action index
@@ -105,9 +146,14 @@ class PPOAgent:
           tgt    (N,)   — sampled target slot (0..31)
           logp   (N,)   — summed log-prob of (src, type, tgt)
           value  (N,)   — V(obs)
+
+        `obs` and `mask` accept numpy arrays (host), JAX device arrays
+        (zero-copy via DLPack on the same CUDA device), or torch tensors.
+        The last two paths skip a host roundtrip when called from the
+        fused rollout under SIM_BACKEND=jax on CUDA.
         """
-        obs_t = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
-        mask_t = torch.as_tensor(mask, dtype=torch.bool, device=self.device)
+        obs_t  = _to_torch(obs,  torch.float32, self.device)
+        mask_t = _to_torch(mask, torch.bool,    self.device)
 
         body = self.net.forward_body(obs_t)
         value = self.net.value(body)

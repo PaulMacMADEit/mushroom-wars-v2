@@ -101,6 +101,42 @@ def test_fused_rollout_action_repeat_4_runs_clean():
     assert np.isfinite(out["return"]).all()
 
 
+def test_dlpack_or_fallback_to_torch():
+    """Phase E: agent._to_torch must accept numpy / jax / torch and produce
+    a torch tensor on the right device with the requested dtype."""
+    import jax.numpy as jnp
+    from training.agent import _to_torch
+
+    device = torch.device("cpu")  # Mac path; CUDA path validated on PaulLinux.
+
+    # numpy
+    arr_np = np.random.randn(4, 8).astype(np.float32)
+    t = _to_torch(arr_np, torch.float32, device)
+    assert isinstance(t, torch.Tensor) and t.shape == (4, 8) and t.dtype == torch.float32
+    assert torch.allclose(t, torch.from_numpy(arr_np))
+
+    # jax
+    arr_jax = jnp.asarray(arr_np)
+    t = _to_torch(arr_jax, torch.float32, device)
+    assert isinstance(t, torch.Tensor) and t.shape == (4, 8) and t.dtype == torch.float32
+    assert torch.allclose(t, torch.from_numpy(arr_np))
+
+    # torch (passthrough)
+    t_in = torch.from_numpy(arr_np)
+    t = _to_torch(t_in, torch.float32, device)
+    assert isinstance(t, torch.Tensor)
+    assert torch.allclose(t, t_in)
+
+    # bool path
+    mask_np = np.random.rand(4, 8) > 0.5
+    t = _to_torch(mask_np, torch.bool, device)
+    assert t.dtype == torch.bool
+
+    mask_jax = jnp.asarray(mask_np)
+    t = _to_torch(mask_jax, torch.bool, device)
+    assert t.dtype == torch.bool
+
+
 def test_fused_rollout_full_update_loop():
     """End-to-end: a couple of `trainer.update()` calls under fused.
     Smoke test that the PPO update consumes the fused rollout dict cleanly

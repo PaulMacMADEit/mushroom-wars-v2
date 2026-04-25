@@ -116,43 +116,59 @@ def collect_rollout_fused(
     if obs_dev is None:
         obs_dev, p1_mask_h, p2_mask_h = _encode_and_masks(vec_env)
 
-    obs_host  = np.array(obs_dev, dtype=np.float32)  # (N, OBS_DIM) — copy
-    mask_host = p1_mask_h
+    # If RunningNorm is active, lift its (mean, std) to device once per
+    # rollout. This trades a tiny lag (stats update at rollout boundaries
+    # rather than per-tick) for keeping obs on device through the whole
+    # rollout — necessary to actually saturate the GPU.
+    norm_mean_dev, norm_std_dev = _norm_stats_to_device(obs_norm) if obs_norm is not None else (None, None)
 
-    if obs_norm is not None:
-        obs_norm.update(obs_host)
-        obs_normed = obs_norm.normalize(obs_host, clip=obs_clip)
-    else:
-        obs_normed = obs_host
+    # On-device normalize. obs_dev stays on JAX device; agent.act_batch
+    # consumes it via DLPack with no host roundtrip.
+    obs_normed_dev = _normalize_on_device(obs_dev, norm_mean_dev, norm_std_dev, obs_clip)
+    mask_dev = jnp.asarray(p1_mask_h)
 
     ep_return = bookkeeping["ep_return"]
     ep_length = bookkeeping["ep_length"]
     completed = bookkeeping["completed_episodes"]
 
+    # We still need ONE host obs copy per rollout to feed RunningNorm.update.
+    # Take a sample at the start (cheap; one per rollout) so stats keep moving.
+    # The numpy buffer for the rollout-return obs is filled in batched at the
+    # end so the inner loop has zero numpy-side obs allocs.
+    obs_first_host = np.array(obs_normed_dev, dtype=np.float32)
+    obs_buf[0] = obs_first_host
+    if obs_norm is not None:
+        obs_norm.update(np.array(obs_dev, dtype=np.float32))
+
+    # Cache device-side obs/mask per rollout step so we can dump them to the
+    # numpy rollout buffers in one go at the end (avoids per-tick host roundtrip
+    # for the buffer write).
+    obs_dev_per_t  = [None] * T
+    mask_dev_per_t = [None] * T
+    obs_dev_per_t[0]  = obs_normed_dev
+    mask_dev_per_t[0] = mask_dev
+
     for t in range(T):
-        # Agent picks one action per env (P1 only — the trainer's perspective).
+        # Agent picks one action per env. Inputs stay on device via DLPack.
         actions, srcs, types, tgts, logps, values = agent.act_batch(
-            obs_normed, mask_host,
+            obs_normed_dev, mask_dev,
         )
 
-        # Pack (n_envs, 2, 4) action tensor: P1 = caller's action; P2 from
-        # batched opponent (uses the P2 mask we computed alongside P1).
+        # P2 mask is still on host (compute_mask_batched is numpy).
+        # Pack action batch on host.
         a_batch = _pack_action_batch_with_p2_mask(
             actions, p2_mask_h, opponent_name, rng, N,
         )
 
         # Run K env ticks fused.
         result = vec_env.step_chunk(a_batch, K=K)
-        rewards    = result["rewards"]    # (N,) float32 — summed over K ticks
-        terminated = result["dones"]      # (N,) bool
+        rewards    = result["rewards"]
+        terminated = result["dones"]
 
-        # Encode + masks for the post-chunk state (input to the NEXT chunk).
+        # Encode + masks for the post-chunk state.
         next_obs_dev, next_p1_mask, next_p2_mask = _encode_and_masks(vec_env)
-        next_obs_host  = np.array(next_obs_dev, dtype=np.float32)
 
-        # Buffers store the obs/mask the agent acted on (this step's input).
-        obs_buf[t]  = obs_normed
-        mask_buf[t] = mask_host
+        # Per-step buffers (host-side mostly; obs/mask deferred).
         src_buf[t]  = srcs
         type_buf[t] = types
         tgt_buf[t]  = tgts
@@ -175,18 +191,27 @@ def collect_rollout_fused(
         obs_dev   = next_obs_dev
         p1_mask_h = next_p1_mask
         p2_mask_h = next_p2_mask
-        obs_host  = next_obs_host
-        mask_host = p1_mask_h
+        mask_dev  = jnp.asarray(p1_mask_h)
+        obs_normed_dev = _normalize_on_device(obs_dev, norm_mean_dev, norm_std_dev, obs_clip)
 
-        if obs_norm is not None:
-            obs_norm.update(obs_host)
-            obs_normed = obs_norm.normalize(obs_host, clip=obs_clip)
-        else:
-            obs_normed = obs_host
+        if t + 1 < T:
+            obs_dev_per_t[t + 1]  = obs_normed_dev
+            mask_dev_per_t[t + 1] = mask_dev
 
-    # Bootstrap value for GAE on the truncated rollout.
+    # Dump per-step device-side obs/masks to the host buffers in batched form
+    # (one device->host transfer for each instead of T per-step transfers).
+    # Skip t=0 since obs_buf[0] was filled above before the loop.
+    for t in range(1, T):
+        if obs_dev_per_t[t] is not None:
+            obs_buf[t] = np.array(obs_dev_per_t[t], dtype=np.float32)
+        if mask_dev_per_t[t] is not None:
+            mask_buf[t] = np.array(mask_dev_per_t[t], dtype=bool)
+    # mask_buf[0] still needs filling.
+    mask_buf[0] = np.array(mask_dev_per_t[0], dtype=bool)
+
+    # Bootstrap value for GAE on the truncated rollout — keep obs on device.
+    obs_t  = _torch_from_jax(obs_normed_dev, agent.device, torch.float32)
     with torch.no_grad():
-        obs_t = torch.as_tensor(obs_normed, dtype=torch.float32, device=agent.device)
         body_t = agent.net.forward_body(obs_t)
         bootstrap = agent.net.value(body_t).cpu().numpy()
 
@@ -219,6 +244,43 @@ def collect_rollout_fused(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _norm_stats_to_device(obs_norm) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Lift RunningNorm's mean/std to device (Phase E zero-copy path).
+
+    Done once per rollout — stats lag by T*K env ticks but at typical
+    n_envs * T this is a tiny fraction of the running average's window.
+    """
+    mean = jnp.asarray(obs_norm.mean.astype(np.float32))
+    std  = jnp.asarray(obs_norm.std.astype(np.float32))
+    return mean, std
+
+
+def _normalize_on_device(
+    obs_dev: jnp.ndarray,
+    mean: jnp.ndarray | None,
+    std:  jnp.ndarray | None,
+    clip: float,
+) -> jnp.ndarray:
+    """(obs - mean) / std clipped, all on device. No-op when mean is None."""
+    if mean is None:
+        return obs_dev
+    out = (obs_dev - mean) / std
+    return jnp.clip(out, -clip, clip)
+
+
+def _torch_from_jax(arr: jnp.ndarray, device, dtype):
+    """JAX -> torch via DLPack with a numpy fallback."""
+    try:
+        t = torch.from_dlpack(arr)
+        if t.device != device:
+            t = t.to(device)
+        if t.dtype != dtype:
+            t = t.to(dtype)
+        return t
+    except Exception:
+        return torch.as_tensor(np.asarray(arr), dtype=dtype, device=device)
+
 
 def _encode_and_masks(vec_env) -> tuple[jnp.ndarray, np.ndarray, np.ndarray]:
     """Encode current state + compute P1 and P2 masks in one bulk pull.
