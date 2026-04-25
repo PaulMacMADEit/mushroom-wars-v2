@@ -113,8 +113,13 @@ def _read_recent_runs(conn, since: datetime) -> list[dict]:
 
 
 def _cancel_queued_backlog(conn, dry_run: bool) -> int:
-    """Mark all currently queued runs as cancelled. Running runs are
-    untouched. Returns the number of rows affected."""
+    """Mark all currently queued runs as discarded. Running runs are
+    untouched. Returns the number of rows affected.
+
+    Uses 'discarded' status (per the runs_status_check constraint —
+    'cancelled' is not in the allowed set). Semantically the same: a run
+    that we'll never execute, distinct from 'failed' (which means it ran
+    and errored)."""
     with conn.cursor() as cur:
         if dry_run:
             cur.execute(
@@ -122,12 +127,12 @@ def _cancel_queued_backlog(conn, dry_run: bool) -> int:
                 (PROJECT,),
             )
             n = cur.fetchone()[0]
-            print(f"[dry-run] would cancel {n} queued runs")
+            print(f"[dry-run] would discard {n} queued runs")
             return n
         cur.execute(
             """
             UPDATE runs
-               SET status = 'cancelled',
+               SET status = 'discarded',
                    finished_at = NOW()
              WHERE status = 'queued'
                AND project = %s
@@ -137,7 +142,7 @@ def _cancel_queued_backlog(conn, dry_run: bool) -> int:
         )
         ids = cur.fetchall()
     conn.commit()
-    print(f"  cancelled {len(ids)} queued runs from previous batch")
+    print(f"  discarded {len(ids)} queued runs from previous batch")
     return len(ids)
 
 
