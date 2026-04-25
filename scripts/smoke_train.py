@@ -42,6 +42,11 @@ def main():
     ap.add_argument("--envs", type=int, default=32,
                     help="parallel envs (1 = single-env path; GPU wins at ≥32)")
     ap.add_argument("--vec-mode", default="async", choices=["async", "sync"])
+    ap.add_argument("--fused-rollout", action="store_true",
+                    help="use the fused (chunked) rollout collector "
+                         "(requires SIM_BACKEND=jax)")
+    ap.add_argument("--action-repeat", type=int, default=1,
+                    help="K: env ticks per agent decision under --fused-rollout")
     args = ap.parse_args()
 
     device = _device()
@@ -53,6 +58,8 @@ def main():
         n_envs=args.envs,
         vec_mode=args.vec_mode,
         rollout_steps=args.rollout,
+        fused_rollout=args.fused_rollout,
+        action_repeat=args.action_repeat,
     )
     trainer = PPOTrainer(agent, cfg, seed=args.seed)
 

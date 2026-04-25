@@ -70,6 +70,11 @@ class PPOConfig:
     # Static name (e.g. "crossroads_6") or dynamic "random_<min>_<max>".
     # Dynamic levels regenerate per reset so training sees varied geometry.
     level_name:           str   = "crossroads_6"
+    # Fused rollout (FUSED_ROLLOUT_PLAN). Off by default; opt in when
+    # SIM_BACKEND=jax and not self_play. With action_repeat=1 it's
+    # byte-identical to the per-tick path under the same seed.
+    fused_rollout:        bool  = False
+    action_repeat:        int   = 1     # K: env ticks per agent decision under fused
 
 
 class PPOTrainer:
@@ -238,6 +243,8 @@ class PPOTrainer:
     # ------------------------------------------------------------------
 
     def collect_rollout(self) -> dict:
+        if self.cfg.fused_rollout:
+            return self._collect_rollout_fused()
         T, N = self.cfg.rollout_steps, self.cfg.n_envs
         A = ACTION_SPACE_SIZE
 
@@ -322,6 +329,55 @@ class PPOTrainer:
             "advantage": adv.reshape(flat),
             "return":    ret.reshape(flat),
         }
+
+    def _collect_rollout_fused(self) -> dict:
+        """Rollout via `training/fused_rollout.py`. Requires SIM_BACKEND=jax
+        and a `_JaxVecAdapter` wrapping a `JaxVecEnv` underneath."""
+        from sim.backend import get_backend_name
+        if get_backend_name() != "jax":
+            raise RuntimeError("cfg.fused_rollout=True requires SIM_BACKEND=jax")
+        if self.cfg.self_play:
+            raise NotImplementedError(
+                "fused rollout doesn't support self_play yet; "
+                "set cfg.fused_rollout=False or self_play=False"
+            )
+        if not hasattr(self.vec, "_inner"):
+            raise RuntimeError(
+                "fused rollout expected _JaxVecAdapter; got "
+                f"{type(self.vec).__name__}. Check SIM_BACKEND."
+            )
+
+        # Lazy-init the device-side carry; per-call re-bind the trainer's
+        # current `_completed_episodes` list since `update()` resets it
+        # to `[]` between rollouts (so we can't stash a stale reference).
+        if not hasattr(self, "_fused_bookkeeping"):
+            self._fused_bookkeeping = {
+                "ep_return":           self._ep_return,
+                "ep_length":           self._ep_length,
+                "last_obs_dev":        None,
+                "last_p1_mask":        None,
+                "last_p2_mask":        None,
+            }
+        self._fused_bookkeeping["completed_episodes"] = self._completed_episodes
+
+        from training.fused_rollout import collect_rollout_fused
+        import time as _time
+        _t_rollout = _time.perf_counter_ns()
+        out = collect_rollout_fused(
+            agent=self.agent,
+            vec_env=self.vec._inner,
+            cfg=self.cfg,
+            obs_norm=self.obs_norm,
+            obs_clip=self.cfg.obs_clip,
+            bookkeeping=self._fused_bookkeeping,
+            rng=self._rng,
+            opponent_name=self._initial_opponent_name,
+        )
+        self._phase_ns["rollout_ns"] += _time.perf_counter_ns() - _t_rollout
+        # The phase_breakdown's act_batch / env_step splits aren't tracked
+        # at sub-rollout granularity here; mark them zero so the dashboard
+        # still gets a row.
+        return out
 
     def _compute_gae(
         self,
