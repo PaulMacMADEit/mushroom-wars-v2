@@ -78,6 +78,62 @@ _step_many_batched = jax.jit(
 
 
 # ---------------------------------------------------------------------------
+# Chunked step (action-repetition) — Phase B of FUSED_ROLLOUT_PLAN
+# ---------------------------------------------------------------------------
+#
+# `_step_chunk_impl` takes a SINGLE per-env action pair (a1, a2) and runs K
+# env ticks: tick 0 uses the real actions; ticks 1..K-1 use NOOP for both.
+# Returns the post-K state, summed P1/P2 rewards, OR-folded done flag.
+# K is a Python int (static argument — bakes into the JIT cache key).
+
+def _step_chunk_single(state, action_p1, action_p2, K: int):
+    """Run K env ticks for one game with action-repetition.
+
+    Tick 0: (action_p1, action_p2). Ticks 1..K-1: (NOOP, NOOP).
+    Returns (final_state, reward_p1_total, reward_p2_total, done_any).
+    """
+    # Build the (K, 4) action stack with real action at index 0 and NOOP fill
+    # for the rest. Use scatter-on-init via where-against-arange so the whole
+    # thing stays inside the trace.
+    noop = jnp.zeros((4,), dtype=jnp.int32)  # ACTION_KIND_NOOP=0, rest don't care
+    idx = jnp.arange(K)
+    # tick_mask: (K,) — True at tick 0, False elsewhere.
+    tick_mask = (idx == 0)[:, None]
+    a1_stack = jnp.where(tick_mask, action_p1[None, :], noop[None, :])  # (K, 4)
+    a2_stack = jnp.where(tick_mask, action_p2[None, :], noop[None, :])  # (K, 4)
+
+    final, r1s, r2s, dones = step_many_single(state, a1_stack, a2_stack)
+    return final, r1s.sum(), r2s.sum(), dones.any()
+
+
+def _make_step_chunk_batched(K: int):
+    """Build a (state, a1, a2) -> (state, r1, r2, done) function for a fixed K.
+
+    `K` is captured in the closure so jax.jit treats different K's as
+    distinct compiled functions — same convention as `step_many_batched` but
+    keyed on the chunk size.
+    """
+    def _chunk(state, a1, a2):
+        return _step_chunk_single(state, a1, a2, K)
+
+    return jax.jit(jax.vmap(_chunk, in_axes=(0, 0, 0)))
+
+
+# Cache compiled chunk functions by K so the trainer can swap K without
+# recompiling on every call.
+_step_chunk_cache: dict[int, "jax.tree_util.Partial"] = {}
+
+
+def _step_chunk_batched(state, action_p1, action_p2, K: int):
+    """Vmap'd, JIT'd chunked step. K caches across calls."""
+    fn = _step_chunk_cache.get(K)
+    if fn is None:
+        fn = _make_step_chunk_batched(K)
+        _step_chunk_cache[K] = fn
+    return fn(state, action_p1, action_p2)
+
+
+# ---------------------------------------------------------------------------
 # JaxVecEnv
 # ---------------------------------------------------------------------------
 
@@ -235,6 +291,55 @@ class JaxVecEnv:
             "rewards_p2": r2_np.astype(np.float32),
             "dones":      done_np,
             "ticks":      T,
+        }
+
+    def step_chunk(self, actions: np.ndarray, K: int) -> dict:
+        """Run K env ticks per env in one fused XLA dispatch with action-
+        repetition. Returns chunk-summed rewards + OR-folded done.
+
+        `actions` shape: (n_envs, 2, ACTION_DIM) int32 — one P1+P2 action
+        pair per env. Tick 0 of the chunk uses these; ticks 1..K-1 use NOOP.
+        After the chunk, done envs auto-reset (CPU level-gen + splice).
+
+        Designed for the fused-rollout PPO collector: one agent decision
+        per K env ticks, summed reward per chunk per env. K is a Python int
+        (static — JIT cache key); reusing K across calls hits the cache.
+
+        Returns:
+          {
+            "rewards":    (n_envs,) float32 — sum of P1 reward over K ticks,
+            "rewards_p2": (n_envs,) float32 — same for P2,
+            "dones":      (n_envs,) bool    — any tick of the chunk hit done,
+            "K":          K,
+          }
+        """
+        if actions.shape != (self.n_envs, 2, ACTION_DIM):
+            raise ValueError(
+                f"step_chunk actions must be ({self.n_envs}, 2, {ACTION_DIM}); "
+                f"got {actions.shape}"
+            )
+        if K < 1:
+            raise ValueError(f"K must be >= 1; got {K}")
+
+        a1 = jnp.asarray(actions[:, 0, :], dtype=jnp.int32)
+        a2 = jnp.asarray(actions[:, 1, :], dtype=jnp.int32)
+
+        self.state, r1, r2, done = _step_chunk_batched(
+            self.state, a1, a2, K,
+        )
+        r1_np   = np.asarray(r1)
+        r2_np   = np.asarray(r2)
+        done_np = np.asarray(done)
+
+        # Auto-reset on done (same path as `.step()`).
+        if done_np.any():
+            self._auto_reset(done_np)
+
+        return {
+            "rewards":    r1_np.astype(np.float32),
+            "rewards_p2": r2_np.astype(np.float32),
+            "dones":      done_np,
+            "K":          K,
         }
 
     def close(self) -> None:
