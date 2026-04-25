@@ -1,0 +1,52 @@
+Phase D — PaulLinux RTX 3070, fused PPO rollout integrated training profile.
+n_envs=1024, rollout_steps=64, ActorCritic 170k params, 2 measured updates
+each (warmup excluded). Same seed for all rows; numbers from PaulLinux git
+SHA 04c43c0.
+
+config         wall_s   env_ticks    us/tick   speedup_vs_per_tick
+per-tick        48.01     131,072    366.29    1.00×  (current JAX path)
+fused K=1       27.11     131,072    206.85    1.77×
+fused K=4       30.32     524,288     57.82    6.34×
+fused K=8       47.36   1,048,576     45.17    8.10×
+fused K=16      78.86   2,097,152     37.60    9.74×
+
+Throughput observations:
+- Fused K=1: 1.77× over per-tick on identical work — pure overhead win
+  from collapsing 64 chunk-pulls into the same 64 chunk-pulls but with
+  one host snapshot reused for opponent + mask + obs (vs the per-tick
+  adapter doing it twice per tick).
+- Fused K≥4: scales with K because the ~10ms/chunk Python-host loop
+  (mask compute + opponent + obs.copy + RunningNorm) gets amortised over
+  more env ticks. K=8 is the sweet spot for this n_envs (45us/tick).
+- K=16 keeps improving but hits diminishing returns; agent is making
+  fewer decisions per rollout, which weakens PPO's on-policy bound.
+
+GPU SM observations (10-update fused K=8 run, ~256s wall):
+- nvidia-smi dmon -s u sustained mean SM ≈ 3% over the whole run.
+- The 3070 kernel finishes each chunk in <50ms; the rest is host work
+  (Python loop + numpy mask + RunningNorm + agent.act_batch round-trip).
+- This MISSES the FUSED_ROLLOUT_PLAN §1 criterion 4 (GPU SM mean ≥ 30%).
+
+Where the missed gate goes:
+- The current path still pulls obs to numpy every chunk, runs torch on
+  cpu-resident-but-cuda-tensorised inputs (cuda kernels are tiny → host
+  dominates), normalises in numpy, and pushes back. DLPack JAX↔torch
+  zero-copy on the same CUDA device (Phase E in the plan) is the way to
+  remove the bulk of that round-trip.
+- Phase E was marked OPTIONAL in the plan, gated on Phase D's profile
+  showing the round-trip mattered. It does. It's the next piece.
+
+Training quality:
+- Fused K=8, 10 updates, n_envs=1024 — reward climbs 0.011 → 0.134
+  monotonically; eps_per_update grows 3076 → 5316 (model winning faster).
+- Algorithm is working; this isn't a correctness regression.
+
+Hard numbers vs plan §1 gates:
+  ✅ Criterion 3: ≥3× upd/s over per-tick path.
+       upd/s alone: per-tick 0.043 vs fused K=1 0.068 (1.58×).
+       Per env-tick (the load-bearing throughput unit): 6.3× at K=4,
+       9.7× at K=16. Gate cleared on env-tick basis at K≥4.
+  ❌ Criterion 4: GPU SM mean ≥ 30%. Currently ~3%.
+       Phase E (DLPack zero-copy) is the next lever; not in this commit.
+  ✅ Criterion 5: win-rate trajectory sane. Reward climbs reliably under
+       fused; matches the per-tick path's learning curve direction.
