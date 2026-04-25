@@ -37,3 +37,4 @@ logs/
 # Local-only artifacts
 /tmp/
 .cache/
+experiments/
