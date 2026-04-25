@@ -31,8 +31,8 @@ from sim.actions import (
     ACTION_SPACE_SIZE,
     NOOP_INDEX,
     SLOTS_SQ,
-    compute_mask_batched,
 )
+from sim.actions_jax import compute_mask_batched_jax
 from sim.engine_jax import (
     ACTION_DIM,
     ACTION_KIND_NOOP,
@@ -76,7 +76,8 @@ def collect_rollout_fused(
                         completed_episodes: list[(return, length, won_proxy)]
                         last_obs_dev: jnp.ndarray (n_envs, OBS_DIM) — encoded
                                        obs from end of previous rollout, or None.
-                        last_mask_dev: jnp.ndarray (n_envs, ACTION_SPACE_SIZE).
+                        last_p1_mask: jnp.ndarray (n_envs, ACTION_SPACE_SIZE) bool, or None.
+                        last_p2_mask: jnp.ndarray (n_envs, ACTION_SPACE_SIZE) bool, or None.
       rng          — numpy RNG for the opponent. Threaded across rollouts so
                      opponent randomness is deterministic under cfg.seed.
       opponent_name — "random_legal" or "noop". Neural opponents NotImplemented.
@@ -124,11 +125,11 @@ def collect_rollout_fused(
     # rebuilt below). We keep p1+p2 masks together because the rollout
     # needs P1 mask for the agent and P2 mask for the opponent on the
     # SAME state.
-    obs_dev    = bookkeeping["last_obs_dev"]
-    p1_mask_h  = bookkeeping["last_p1_mask"]   # numpy (N, A) bool or None
-    p2_mask_h  = bookkeeping["last_p2_mask"]   # numpy (N, A) bool or None
+    obs_dev      = bookkeeping["last_obs_dev"]
+    p1_mask_dev  = bookkeeping["last_p1_mask"]   # jnp (N, A) bool or None
+    p2_mask_dev  = bookkeeping["last_p2_mask"]   # jnp (N, A) bool or None
     if obs_dev is None:
-        obs_dev, p1_mask_h, p2_mask_h = _encode_and_masks(vec_env)
+        obs_dev, p1_mask_dev, p2_mask_dev = _encode_and_masks(vec_env)
 
     # If RunningNorm is active, lift its (mean, std) to device once per
     # rollout. This trades a tiny lag (stats update at rollout boundaries
@@ -139,7 +140,7 @@ def collect_rollout_fused(
     # On-device normalize. obs_dev stays on JAX device; agent.act_batch
     # consumes it via DLPack with no host roundtrip.
     obs_normed_dev = _normalize_on_device(obs_dev, norm_mean_dev, norm_std_dev, obs_clip)
-    mask_dev = jnp.asarray(p1_mask_h)
+    mask_dev = p1_mask_dev
 
     ep_return = bookkeeping["ep_return"]
     ep_length = bookkeeping["ep_length"]
@@ -168,8 +169,10 @@ def collect_rollout_fused(
             obs_normed_dev, mask_dev,
         )
 
-        # P2 mask is still on host (compute_mask_batched is numpy).
-        # Pack action batch on host.
+        # G2 will keep P2 mask on device through pack. For G1 we materialise
+        # at the boundary so the existing numpy pack functions still consume
+        # what they expect.
+        p2_mask_h = np.asarray(p2_mask_dev)
         if opponent_fn is None:
             a_batch = _pack_action_batch_with_p2_mask(
                 actions, p2_mask_h, opponent_name, rng, N,
@@ -184,8 +187,8 @@ def collect_rollout_fused(
         rewards    = result["rewards"]
         terminated = result["dones"]
 
-        # Encode + masks for the post-chunk state.
-        next_obs_dev, next_p1_mask, next_p2_mask = _encode_and_masks(vec_env)
+        # Encode + masks for the post-chunk state (all on device).
+        next_obs_dev, next_p1_mask_dev, next_p2_mask_dev = _encode_and_masks(vec_env)
 
         # Per-step buffers (host-side mostly; obs/mask deferred).
         src_buf[t]  = srcs
@@ -207,10 +210,10 @@ def collect_rollout_fused(
                 ep_length[i] = 0
 
         # Roll forward.
-        obs_dev   = next_obs_dev
-        p1_mask_h = next_p1_mask
-        p2_mask_h = next_p2_mask
-        mask_dev  = jnp.asarray(p1_mask_h)
+        obs_dev      = next_obs_dev
+        p1_mask_dev  = next_p1_mask_dev
+        p2_mask_dev  = next_p2_mask_dev
+        mask_dev     = p1_mask_dev
         obs_normed_dev = _normalize_on_device(obs_dev, norm_mean_dev, norm_std_dev, obs_clip)
 
         if t + 1 < T:
@@ -241,8 +244,8 @@ def collect_rollout_fused(
     # Stash post-rollout obs + masks so the next call picks up where we
     # left off.
     bookkeeping["last_obs_dev"]  = obs_dev
-    bookkeeping["last_p1_mask"]  = p1_mask_h
-    bookkeeping["last_p2_mask"]  = p2_mask_h
+    bookkeeping["last_p1_mask"]  = p1_mask_dev
+    bookkeeping["last_p2_mask"]  = p2_mask_dev
 
     flat = T * N
     return {
@@ -301,24 +304,18 @@ def _torch_from_jax(arr: jnp.ndarray, device, dtype):
         return torch.as_tensor(np.asarray(arr), dtype=dtype, device=device)
 
 
-def _encode_and_masks(vec_env) -> tuple[jnp.ndarray, np.ndarray, np.ndarray]:
-    """Encode current state + compute P1 and P2 masks in one bulk pull.
+def _encode_and_masks(vec_env) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Encode current state + compute P1 and P2 masks, all on device.
 
-    Returns (encoded_obs_jnp, p1_mask_np, p2_mask_np). Encoded obs stays on
-    device for the agent's next forward; masks are numpy because the agent
-    converts to torch host-side anyway and the opponent reads numpy.
+    Returns (encoded_obs_jnp, p1_mask_jnp, p2_mask_jnp). Phase G1 keeps both
+    masks on device; the per-rollout-step host pull of buildings_alive /
+    buildings_owner / buildings_garrison / groups_alive is gone.
     """
     state = vec_env.state
     obs_dev = encode_obs_batched_jit(state)
-
-    # Mask uses 4 fields; pull them once.
-    b_alive    = np.asarray(state.buildings_alive)
-    b_owner    = np.asarray(state.buildings_owner)
-    b_garrison = np.asarray(state.buildings_garrison)
-    g_alive    = np.asarray(state.groups_alive)
-    p1_mask = compute_mask_batched(b_alive, b_owner, b_garrison, g_alive, C.OWNER_P1)
-    p2_mask = compute_mask_batched(b_alive, b_owner, b_garrison, g_alive, C.OWNER_P2)
-    return obs_dev, p1_mask, p2_mask
+    p1_mask_dev = compute_mask_batched_jax(state, C.OWNER_P1)
+    p2_mask_dev = compute_mask_batched_jax(state, C.OWNER_P2)
+    return obs_dev, p1_mask_dev, p2_mask_dev
 
 
 def _pack_action_batch_with_p2_mask(
