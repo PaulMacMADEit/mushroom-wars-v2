@@ -360,10 +360,13 @@ class PPOTrainer:
             }
         self._fused_bookkeeping["completed_episodes"] = self._completed_episodes
 
+        # `update()` already wraps `collect_rollout()` with rollout_ns
+        # timing, so we don't add another counter here. act_batch_ns and
+        # env_step_ns aren't broken out under fused (would need to plumb
+        # them through `collect_rollout_fused`); they show as 0 in the
+        # phase breakdown for fused runs.
         from training.fused_rollout import collect_rollout_fused
-        import time as _time
-        _t_rollout = _time.perf_counter_ns()
-        out = collect_rollout_fused(
+        return collect_rollout_fused(
             agent=self.agent,
             vec_env=self.vec._inner,
             cfg=self.cfg,
@@ -373,11 +376,6 @@ class PPOTrainer:
             rng=self._rng,
             opponent_name=self._initial_opponent_name,
         )
-        self._phase_ns["rollout_ns"] += _time.perf_counter_ns() - _t_rollout
-        # The phase_breakdown's act_batch / env_step splits aren't tracked
-        # at sub-rollout granularity here; mark them zero so the dashboard
-        # still gets a row.
-        return out
 
     def _compute_gae(
         self,
