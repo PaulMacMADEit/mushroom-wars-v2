@@ -201,7 +201,7 @@ def main():
 
         runs = _build_batch(opp_id)
         total_min = sum(r["minutes"] for r in runs)
-        print(f"b3 batch: {len(runs)} runs, total budget = {total_min} min ({total_min/60:.1f}h)")
+        print(f"b4 batch: {len(runs)} runs, total budget = {total_min} min ({total_min/60:.1f}h)")
 
         ids = _push(conn, runs, args.dry_run)
     if args.dry_run:
