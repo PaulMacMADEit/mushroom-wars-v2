@@ -41,13 +41,24 @@ def features_blob() -> dict:
         "game_timeout_ticks":       C.GAME_TIMEOUT_TICKS,
         "send_percentages":         list(C.SEND_PERCENTAGES),
         "def_bonus":                [C.DEF_BONUS_NUM, C.DEF_BONUS_DEN],
-        "levels":                   ["crossroads_6"],
-        "reward": {
-            "capture": C.REWARD_CAPTURE,
-            "loss":    C.REWARD_LOSS,
-            "win":     C.REWARD_WIN,
-            "lose":    C.REWARD_LOSE,
-            "draw":    C.REWARD_DRAW,
+        "levels":                   ["crossroads_6", "random_4_8", "random_6_10",
+                                     "random_8_16", "random_16_24",
+                                     "random_close_4_6", "random_close_6_10"],
+        "reward_v12": {
+            "capture":     C.REWARD_CAPTURE_BY_VERSION[0],
+            "loss":        C.REWARD_LOSS_BY_VERSION[0],
+            "win":         C.REWARD_WIN_BY_VERSION[0],
+            "lose":        C.REWARD_LOSE_BY_VERSION[0],
+            "draw":        C.REWARD_DRAW_BY_VERSION[0],
+            "speed_bonus": C.REWARD_SPEED_BONUS_BY_VERSION[0],
+        },
+        "reward_v13": {
+            "capture":     C.REWARD_CAPTURE_BY_VERSION[1],
+            "loss":        C.REWARD_LOSS_BY_VERSION[1],
+            "win":         C.REWARD_WIN_BY_VERSION[1],
+            "lose":        C.REWARD_LOSE_BY_VERSION[1],
+            "draw":        C.REWARD_DRAW_BY_VERSION[1],
+            "speed_bonus": C.REWARD_SPEED_BONUS_BY_VERSION[1],
         },
     }
 
