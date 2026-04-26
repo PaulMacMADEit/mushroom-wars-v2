@@ -75,10 +75,12 @@ Now do it.'
   echo "[$(date '+%Y-%m-%d %H:%M:%S %Z')] scheduler fire"
   echo "============================================================"
 
-  # Activate the venv so claude inherits it. claude itself is on PATH.
+  # Activate the venv so claude inherits it. Use absolute path to claude
+  # since systemd user services don't always inherit ~/.local/bin in PATH.
   source .venv/bin/activate
+  CLAUDE_BIN="$HOME/.local/bin/claude"
 
-  claude --dangerously-skip-permissions --print "$PROMPT"
+  "$CLAUDE_BIN" --dangerously-skip-permissions --print "$PROMPT"
   RC=$?
 
   echo
