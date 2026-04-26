@@ -46,21 +46,34 @@ LEVELS: dict[str, list] = {
 # Dynamic random level generator
 # ---------------------------------------------------------------------------
 
-_RANDOM_RE = re.compile(r"^random_(\d+)_(\d+)$")
-_ASYM_RE   = re.compile(r"^asym_(\d+)_(\d+)$")
+_RANDOM_RE       = re.compile(r"^random_(\d+)_(\d+)$")
+_RANDOM_CLOSE_RE = re.compile(r"^random_close_(\d+)_(\d+)$")
+_ASYM_RE         = re.compile(r"^asym_(\d+)_(\d+)$")
 
 # Placement constraints.
 _MAP_SIZE       = 700
+_CLOSE_MAP_SIZE = 350       # close maps: half the size → ~half travel time
 _BORDER         = 80
 _MIN_SEP        = 80       # min distance between any two buildings
 _CENTER_EXCLUSION = 50      # neutrals mustn't sit on the symmetry axis (too close to center)
+_CLOSE_BORDER   = 40       # tighter border on close maps so the playable area still fits
+_CLOSE_MIN_SEP  = 50       # close maps allow tighter packing
+_CLOSE_CENTER_EXCLUSION = 30
 
 
-def generate_random_level(n_buildings: int, rng: np.random.Generator) -> list:
-    """Build a 180°-symmetric level with `n_buildings` total (2 bases + rest neutral).
+def _generate_symmetric_level(
+    n_buildings: int,
+    rng: np.random.Generator,
+    map_size: int,
+    border: int,
+    min_sep: int,
+    center_exclusion: int,
+) -> list:
+    """Build a 180°-symmetric level on a `map_size × map_size` board.
 
     Returns the same list-of-tuples shape that LEVELS uses, so `apply()` can
-    consume it directly.
+    consume it directly. Internal helper — `generate_random_level` and
+    `generate_random_close_level` are the two public flavours.
     """
     if n_buildings < 2:
         raise ValueError("need at least 2 buildings (one base per player)")
@@ -72,11 +85,13 @@ def generate_random_level(n_buildings: int, rng: np.random.Generator) -> list:
 
     # Bases: slot 0 = P1, slot 1 = P2, mirror of each other. Keep them well
     # inside the corners so neutrals have room to land between.
-    bx = int(rng.integers(_BORDER, _MAP_SIZE // 2 - 100))
-    by = int(rng.integers(_BORDER, _MAP_SIZE // 2 - 100))
+    half = map_size // 2
+    base_inset = max(20, half - border - 20)
+    bx = int(rng.integers(border, half - base_inset // 5))
+    by = int(rng.integers(border, half - base_inset // 5))
     level.append((C.OWNER_P1, bx, by, 10, C.TYPE_BASIC))
-    level.append((C.OWNER_P2, _MAP_SIZE - bx, _MAP_SIZE - by, 10, C.TYPE_BASIC))
-    placed.extend([(bx, by), (_MAP_SIZE - bx, _MAP_SIZE - by)])
+    level.append((C.OWNER_P2, map_size - bx, map_size - by, 10, C.TYPE_BASIC))
+    placed.extend([(bx, by), (map_size - bx, map_size - by)])
 
     # Neutrals: place in mirror pairs. If N-2 is odd, add one center-ish neutral.
     n_neutrals = n_buildings - 2
@@ -86,16 +101,16 @@ def generate_random_level(n_buildings: int, rng: np.random.Generator) -> list:
     for _ in range(pairs):
         nx = ny = None
         for _attempt in range(50):
-            cx = int(rng.integers(_BORDER, _MAP_SIZE - _BORDER))
-            cy = int(rng.integers(_BORDER, _MAP_SIZE - _BORDER))
+            cx = int(rng.integers(border, map_size - border))
+            cy = int(rng.integers(border, map_size - border))
             # Keep off the symmetry axis so the mirror is a genuinely different slot.
-            if (cx - _MAP_SIZE // 2) ** 2 + (cy - _MAP_SIZE // 2) ** 2 < _CENTER_EXCLUSION ** 2:
+            if (cx - half) ** 2 + (cy - half) ** 2 < center_exclusion ** 2:
                 continue
-            mx, my = _MAP_SIZE - cx, _MAP_SIZE - cy
+            mx, my = map_size - cx, map_size - cy
             # Minimum separation to every existing building AND its mirror.
-            if not all((cx - px) ** 2 + (cy - py) ** 2 >= _MIN_SEP ** 2 for px, py in placed):
+            if not all((cx - px) ** 2 + (cy - py) ** 2 >= min_sep ** 2 for px, py in placed):
                 continue
-            if not all((mx - px) ** 2 + (my - py) ** 2 >= _MIN_SEP ** 2 for px, py in placed):
+            if not all((mx - px) ** 2 + (my - py) ** 2 >= min_sep ** 2 for px, py in placed):
                 continue
             nx, ny = cx, cy
             break
@@ -105,14 +120,39 @@ def generate_random_level(n_buildings: int, rng: np.random.Generator) -> list:
             break
         garrison = int(rng.integers(1, 6))
         level.append((C.OWNER_NEUTRAL, nx, ny, garrison, C.TYPE_BASIC))
-        level.append((C.OWNER_NEUTRAL, _MAP_SIZE - nx, _MAP_SIZE - ny, garrison, C.TYPE_BASIC))
-        placed.extend([(nx, ny), (_MAP_SIZE - nx, _MAP_SIZE - ny)])
+        level.append((C.OWNER_NEUTRAL, map_size - nx, map_size - ny, garrison, C.TYPE_BASIC))
+        placed.extend([(nx, ny), (map_size - nx, map_size - ny)])
 
     if has_center:
         garrison = int(rng.integers(2, 6))
-        level.append((C.OWNER_NEUTRAL, _MAP_SIZE // 2, _MAP_SIZE // 2, garrison, C.TYPE_BASIC))
+        level.append((C.OWNER_NEUTRAL, half, half, garrison, C.TYPE_BASIC))
 
     return level
+
+
+def generate_random_level(n_buildings: int, rng: np.random.Generator) -> list:
+    """Standard symmetric random level on the 700-unit map."""
+    return _generate_symmetric_level(
+        n_buildings, rng,
+        map_size=_MAP_SIZE, border=_BORDER,
+        min_sep=_MIN_SEP, center_exclusion=_CENTER_EXCLUSION,
+    )
+
+
+def generate_random_close_level(
+    n_buildings: int,
+    rng: np.random.Generator,
+    map_size: int = _CLOSE_MAP_SIZE,
+) -> list:
+    """Close-map symmetric random level. Smaller map = faster travel = shorter
+    games, so phase-1 training sees more episodes per unit wall time. Same
+    rules as `generate_random_level` otherwise (180° symmetric, same building
+    types). Used by curriculum phase 1 (`random_close_<min>_<max>`)."""
+    return _generate_symmetric_level(
+        n_buildings, rng,
+        map_size=map_size, border=_CLOSE_BORDER,
+        min_sep=_CLOSE_MIN_SEP, center_exclusion=_CLOSE_CENTER_EXCLUSION,
+    )
 
 
 def generate_asymmetric_level(n_buildings: int, rng: np.random.Generator) -> list:
@@ -162,6 +202,15 @@ def _resolve_level(level_name: str, seed: int | None) -> list:
     """Look up a static name or generate a random level. Returns the level list."""
     if level_name in LEVELS:
         return LEVELS[level_name]
+    # Match `random_close_*` BEFORE `random_*` since the latter would partial-match.
+    m = _RANDOM_CLOSE_RE.match(level_name)
+    if m:
+        n_min, n_max = int(m.group(1)), int(m.group(2))
+        if not (2 <= n_min <= n_max <= C.MAX_BUILDING_SLOTS):
+            raise ValueError(f"random_close level bounds out of range: {level_name!r}")
+        rng = np.random.default_rng(seed)
+        n = int(rng.integers(n_min, n_max + 1))
+        return generate_random_close_level(n, rng)
     m = _RANDOM_RE.match(level_name)
     if m:
         n_min, n_max = int(m.group(1)), int(m.group(2))

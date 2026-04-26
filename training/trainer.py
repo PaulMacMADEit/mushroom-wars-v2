@@ -75,6 +75,11 @@ class PPOConfig:
     # byte-identical to the per-tick path under the same seed.
     fused_rollout:        bool  = False
     action_repeat:        int   = 1     # K: env ticks per agent decision under fused
+    # Reward scheme (CURRICULUM_PLAN.md §3.1). False (default) = sim-v1.2 rewards
+    # (back-compat). True = v1.3 rebalance (5x WIN/LOSE, halved capture, draw
+    # -0.5, 4x speed bonus). Set the per-state reward_version flag at env
+    # construction; engine indexes into REWARD_*_BY_VERSION accordingly.
+    reward_v13:           bool  = False
 
 
 class PPOTrainer:
@@ -165,6 +170,7 @@ class PPOTrainer:
         N = self.cfg.n_envs
         backend = get_backend_name()
 
+        rv = 1 if self.cfg.reward_v13 else 0
         if backend == "jax":
             # JaxVecEnv is a single-process, one-opponent env. Per-env neural
             # opponent specs (self-play pool) aren't supported on this path
@@ -181,6 +187,7 @@ class PPOTrainer:
                 level_name=self.cfg.level_name,
                 opponent_name=self._initial_opponent_name,
                 opponent_kwargs=self._initial_opponent_kwargs or None,
+                reward_version=rv,
             )
         else:
             factories = []
@@ -190,6 +197,7 @@ class PPOTrainer:
                         seed=self.seed + i,
                         level_name=self.cfg.level_name,
                         opponent_name=self._initial_opponent_name,
+                        reward_version=rv,
                     ))
                 else:
                     factories.append(make_env(
@@ -197,6 +205,7 @@ class PPOTrainer:
                         level_name=self.cfg.level_name,
                         opponent_name="neural",
                         opponent_kwargs=opponent_specs[i],
+                        reward_version=rv,
                     ))
 
             if self.cfg.vec_mode == "async":

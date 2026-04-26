@@ -47,6 +47,12 @@ def main():
                          "(requires SIM_BACKEND=jax)")
     ap.add_argument("--action-repeat", type=int, default=1,
                     help="K: env ticks per agent decision under --fused-rollout")
+    ap.add_argument("--reward-v13", action="store_true",
+                    help="use sim-v1.3 reward scheme (CURRICULUM_PLAN.md §3.1)")
+    ap.add_argument("--level", default=None,
+                    help="override default level (e.g. random_close_4_6)")
+    ap.add_argument("--gamma", type=float, default=None,
+                    help="override default gamma (default: 0.99)")
     args = ap.parse_args()
 
     device = _device()
@@ -54,13 +60,19 @@ def main():
 
     net = ActorCritic()
     agent = PPOAgent(net, device=device)
-    cfg = PPOConfig(
+    cfg_kwargs = dict(
         n_envs=args.envs,
         vec_mode=args.vec_mode,
         rollout_steps=args.rollout,
         fused_rollout=args.fused_rollout,
         action_repeat=args.action_repeat,
+        reward_v13=args.reward_v13,
     )
+    if args.level is not None:
+        cfg_kwargs["level_name"] = args.level
+    if args.gamma is not None:
+        cfg_kwargs["gamma"] = args.gamma
+    cfg = PPOConfig(**cfg_kwargs)
     trainer = PPOTrainer(agent, cfg, seed=args.seed)
 
     start = time.time()
