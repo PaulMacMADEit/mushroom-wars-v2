@@ -42,6 +42,7 @@ class MushroomEnv(gym.Env):
         decision_interval: Optional[int] = None,
         seed: Optional[int] = None,
         recorder: Optional[Any] = None,
+        reward_version: int = C.REWARD_VERSION_V12,
     ):
         super().__init__()
         self._level_name = level_name
@@ -50,13 +51,14 @@ class MushroomEnv(gym.Env):
             decision_interval if decision_interval is not None else C.DECISION_INTERVAL_TICKS
         )
         self._rng = np.random.default_rng(seed)
+        self._reward_version = int(reward_version)
         # Optional replay recorder. When set, the env feeds engine events into
         # its buffer per step_tick and calls absorb_tick so post-tick state
         # reads are correct. See sim/envs/replay.py.
         self._recorder = recorder
 
         # State is created on first reset(); declared for type-checkers.
-        self.state: State = level_reset(self._level_name)
+        self.state: State = level_reset(self._level_name, reward_version=self._reward_version)
 
         N = C.MAX_BUILDING_SLOTS
         M = C.MAX_UNIT_GROUP_SLOTS
@@ -102,7 +104,7 @@ class MushroomEnv(gym.Env):
         # `random_8_32`. Static names ignore it. Pulled from the env's own
         # rng so determinism-under-seed is preserved.
         level_seed = int(self._rng.integers(0, 2**31))
-        self.state = level_reset(level, seed=level_seed)
+        self.state = level_reset(level, seed=level_seed, reward_version=self._reward_version)
         if self._recorder is not None:
             self._recorder.capture_map(self.state)
         return self._make_obs(C.OWNER_P1), self._make_info()

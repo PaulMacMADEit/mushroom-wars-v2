@@ -101,6 +101,7 @@ def test_encoder_parity_single_states(level, n_warmup):
         travel_matrix   = jnp.asarray(batched.travel_matrix),
         tick            = jnp.asarray(batched.tick),
         phase           = jnp.asarray(batched.phase),
+        reward_version  = jnp.asarray(batched.reward_version),
         rng_key         = jnp.asarray(batched.rng_key),
     )
     jx_out = np.asarray(encode_obs_batched_jit(batched_jax))
@@ -138,9 +139,10 @@ def test_encoder_parity_through_env_step():
                 "groups_count", "groups_progress", "groups_travel",
                 "travel_matrix",
             )},
-            tick    = jnp.asarray(sj.tick)[None],
-            phase   = jnp.asarray(sj.phase)[None],
-            rng_key = jnp.asarray(sj.rng_key),
+            tick           = jnp.asarray(sj.tick)[None],
+            phase          = jnp.asarray(sj.phase)[None],
+            reward_version = jnp.asarray(sj.reward_version)[None],
+            rng_key        = jnp.asarray(sj.rng_key),
         )
         jx_vec = np.asarray(encode_obs_batched_jit(sj_b))[0]
 

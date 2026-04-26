@@ -82,7 +82,7 @@ def _stack_states_to_jax(states):
         "buildings_garrison", "buildings_capacity", "buildings_x", "buildings_y",
         "groups_alive", "groups_owner", "groups_src", "groups_tgt",
         "groups_count", "groups_progress", "groups_travel",
-        "travel_matrix", "tick", "phase",
+        "travel_matrix", "tick", "phase", "reward_version",
     ]
     stacked = {f: jnp.stack([getattr(le, f) for le in leaves], axis=0) for f in fields}
     stacked["rng_key"] = leaves[0].rng_key

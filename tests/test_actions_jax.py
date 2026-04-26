@@ -68,6 +68,7 @@ def _stack_states(states) -> StateJax:
         travel_matrix   = jnp.asarray(batched.travel_matrix),
         tick            = jnp.asarray(batched.tick),
         phase           = jnp.asarray(batched.phase),
+        reward_version  = jnp.asarray(batched.reward_version),
         rng_key         = jnp.asarray(batched.rng_key),
     )
 

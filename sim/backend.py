@@ -54,11 +54,14 @@ def make_vec_env(
     opponent_kwargs: Optional[dict] = None,
     vec_mode: str = "async",
     context: Optional[str] = None,
+    reward_version: int = 0,
 ):
     """Return a gym-style vector env on the active backend.
 
     `vec_mode` and `context` only apply to the numpy backend; JAX ignores
-    them (one-process by design).
+    them (one-process by design). `reward_version` selects the reward scheme
+    (0=v1.2, 1=v1.3) — only honoured by the JAX backend at the moment;
+    numpy ignores it (random_legal training only).
     """
     backend = get_backend_name()
     if backend == "numpy":
@@ -70,6 +73,7 @@ def make_vec_env(
     return _build_jax_vec_env(
         n_envs=n_envs, seed=seed, level_name=level_name,
         opponent_name=opponent_name, opponent_kwargs=opponent_kwargs,
+        reward_version=reward_version,
     )
 
 
@@ -135,13 +139,17 @@ def _build_jax_vec_env(
     level_name: str,
     opponent_name: str,
     opponent_kwargs: Optional[dict],
+    reward_version: int = 0,
 ):
     # Lazy-import: don't pay the JAX startup tax when the numpy backend is active.
     from sim.envs.jax_vec_env import JaxVecEnv
     return _JaxVecAdapter(
         n_envs=n_envs, seed=seed, level_name=level_name,
         opponent_name=opponent_name, opponent_kwargs=opponent_kwargs,
-        inner_factory=lambda: JaxVecEnv(n_envs=n_envs, level_name=level_name, base_seed=seed),
+        inner_factory=lambda: JaxVecEnv(
+            n_envs=n_envs, level_name=level_name, base_seed=seed,
+            reward_version=reward_version,
+        ),
     )
 
 

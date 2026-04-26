@@ -60,9 +60,13 @@ def _stack_states(states: list[State]) -> StateJax:
 def _gen_state_batch(
     level_name: str,
     seeds: np.ndarray,
+    reward_version: int = C.REWARD_VERSION_V12,
 ) -> list[State]:
     """Regenerate numpy States for a batch of seeds. CPU-only."""
-    return [level_reset(level_name, seed=int(s)) for s in seeds]
+    return [
+        level_reset(level_name, seed=int(s), reward_version=reward_version)
+        for s in seeds
+    ]
 
 
 # vmap over the first axis for every StateJax leaf + the actions.
@@ -192,16 +196,18 @@ class JaxVecEnv:
         n_envs: int,
         level_name: str = "crossroads_6",
         base_seed: int = 0,
+        reward_version: int = C.REWARD_VERSION_V12,
     ):
         self.n_envs = int(n_envs)
         self.level_name = str(level_name)
+        self.reward_version = int(reward_version)
         self._rng = np.random.default_rng(base_seed)
         self._next_reset_seed = int(base_seed)
 
         # Build the first batch.
         initial_seeds = np.arange(self.n_envs, dtype=np.int64) + int(base_seed)
         self.state: StateJax = _stack_states(
-            _gen_state_batch(self.level_name, initial_seeds)
+            _gen_state_batch(self.level_name, initial_seeds, self.reward_version)
         )
         self._next_reset_seed += self.n_envs
 
@@ -218,7 +224,9 @@ class JaxVecEnv:
             arr = np.asarray(list(seeds), dtype=np.int64)
             if arr.shape != (self.n_envs,):
                 raise ValueError(f"seeds must have length {self.n_envs}, got {arr.shape}")
-        self.state = _stack_states(_gen_state_batch(self.level_name, arr))
+        self.state = _stack_states(
+            _gen_state_batch(self.level_name, arr, self.reward_version)
+        )
 
     def step(self, actions: np.ndarray) -> JaxVecStepResult:
         """Step every env by one tick. `actions` shape (n_envs, 2, 4) int32:
@@ -371,6 +379,7 @@ class JaxVecEnv:
             s.travel_matrix[:]   = host.travel_matrix[i]
             s.tick  = int(host.tick[i])
             s.phase = int(host.phase[i])
+            s.reward_version = int(host.reward_version[i])
             out.append(s)
         return out
 
@@ -389,7 +398,9 @@ class JaxVecEnv:
 
         seeds = np.arange(n, dtype=np.int64) + self._next_reset_seed
         self._next_reset_seed += n
-        fresh = _stack_states(_gen_state_batch(self.level_name, seeds))  # (n, …)
+        fresh = _stack_states(
+            _gen_state_batch(self.level_name, seeds, self.reward_version)
+        )  # (n, …)
 
         # Build a (n_envs,) bool mask + scatter each field.
         mask = jnp.asarray(done_mask)  # (n_envs,)

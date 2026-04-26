@@ -181,11 +181,19 @@ def _resolve_level(level_name: str, seed: int | None) -> list:
     raise ValueError(f"Unknown level: {level_name}")
 
 
-def apply(state: State, level_name: str = "crossroads_6", seed: int | None = None) -> None:
+def apply(
+    state: State,
+    level_name: str = "crossroads_6",
+    seed: int | None = None,
+    reward_version: int = C.REWARD_VERSION_V12,
+) -> None:
     """Populate `state.buildings` from a level definition. Runs precompute_distances().
 
     For dynamic level names like `random_8_32`, the optional `seed` drives the
     per-episode PRNG. Passing None picks fresh entropy each call.
+
+    `reward_version` (0=v1.2, 1=v1.3) is written onto the state so the engine
+    indexes into the correct reward lookups during step_tick.
     """
     level = _resolve_level(level_name, seed)
     if len(level) > C.MAX_BUILDING_SLOTS:
@@ -221,15 +229,22 @@ def apply(state: State, level_name: str = "crossroads_6", seed: int | None = Non
     # Slots len(level)..MAX are left as alive=0 (empty).
     state.tick = 0
     state.phase = C.PHASE_PLAYING
+    state.reward_version = int(reward_version)
     for key in state.perf:
         state.perf[key] = 0
     precompute_distances(state)
 
 
-def reset(level_name: str = "crossroads_6", seed: int | None = 0) -> State:
+def reset(
+    level_name: str = "crossroads_6",
+    seed: int | None = 0,
+    reward_version: int = C.REWARD_VERSION_V12,
+) -> State:
     """Fresh state ready to step. `seed` drives dynamic level generation for
-    names like `random_N_M`; for static names it's ignored."""
+    names like `random_N_M`; for static names it's ignored.
+
+    `reward_version` (0=v1.2, 1=v1.3) selects the reward scheme."""
     from sim.state import empty_state
     state = empty_state()
-    apply(state, level_name, seed=seed)
+    apply(state, level_name, seed=seed, reward_version=reward_version)
     return state

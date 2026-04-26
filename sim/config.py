@@ -93,12 +93,30 @@ PHASE_DRAW            = 3
 # ---------------------------------------------------------------------------
 # Rewards (training-time only; sim emits these on step)
 # ---------------------------------------------------------------------------
-REWARD_CAPTURE        = 0.1           # capturing any building
-REWARD_LOSS           = -0.1          # losing a building
-REWARD_WIN            = 1.0
-REWARD_LOSE           = -1.0
-REWARD_DRAW           = 0.0
+# Two reward schemes are supported; State carries an int8 `reward_version`
+# (0 = v1.2 default, 1 = v1.3) and the engine indexes into the lookup arrays
+# below. v1.3 rebalances toward winning quickly: WIN/LOSE 5×, halved capture/
+# loss, mildly-bad draw, and a 4× speed bonus. See CURRICULUM_PLAN.md §3.1.
+REWARD_VERSION_V12 = 0
+REWARD_VERSION_V13 = 1
+
+# Per-version reward tables. Index with REWARD_VERSION_V*.
+REWARD_CAPTURE_BY_VERSION     = (0.1,   0.05)
+REWARD_LOSS_BY_VERSION        = (-0.1,  -0.05)
+REWARD_WIN_BY_VERSION         = (1.0,   5.0)
+REWARD_LOSE_BY_VERSION        = (-1.0,  -5.0)
+REWARD_DRAW_BY_VERSION        = (0.0,   -0.5)
 # Bonus added to the winner that scales linearly with how quickly they won.
 # Final terminal reward (winner) = REWARD_WIN + REWARD_SPEED_BONUS * (1 - tick / GAME_TIMEOUT_TICKS)
 # At tick=0 the bonus is REWARD_SPEED_BONUS; at timeout it is 0.
-REWARD_SPEED_BONUS    = 0.5
+REWARD_SPEED_BONUS_BY_VERSION = (0.5,   2.0)
+
+# Module-level scalar constants (= v1.2). Kept for backward-compat reads from
+# any code path that doesn't yet thread `reward_version` through; new code
+# should index into the *_BY_VERSION tuples above.
+REWARD_CAPTURE        = REWARD_CAPTURE_BY_VERSION[REWARD_VERSION_V12]
+REWARD_LOSS           = REWARD_LOSS_BY_VERSION[REWARD_VERSION_V12]
+REWARD_WIN            = REWARD_WIN_BY_VERSION[REWARD_VERSION_V12]
+REWARD_LOSE           = REWARD_LOSE_BY_VERSION[REWARD_VERSION_V12]
+REWARD_DRAW           = REWARD_DRAW_BY_VERSION[REWARD_VERSION_V12]
+REWARD_SPEED_BONUS    = REWARD_SPEED_BONUS_BY_VERSION[REWARD_VERSION_V12]

@@ -36,6 +36,21 @@ from sim.state_jax import StateJax
 
 
 # ---------------------------------------------------------------------------
+# Reward lookups (version-indexed)
+# ---------------------------------------------------------------------------
+# Sim-v1.3 introduced per-State `reward_version`. The engine indexes into
+# these constant device-resident lookup arrays via state.reward_version, so
+# both v1.2 and v1.3 reward schemes can run in the same JIT'd graph without
+# retracing.
+_REWARD_CAPTURE_VEC     = jnp.asarray(C.REWARD_CAPTURE_BY_VERSION,     dtype=jnp.float32)
+_REWARD_LOSS_VEC        = jnp.asarray(C.REWARD_LOSS_BY_VERSION,        dtype=jnp.float32)
+_REWARD_WIN_VEC         = jnp.asarray(C.REWARD_WIN_BY_VERSION,         dtype=jnp.float32)
+_REWARD_LOSE_VEC        = jnp.asarray(C.REWARD_LOSE_BY_VERSION,        dtype=jnp.float32)
+_REWARD_DRAW_VEC        = jnp.asarray(C.REWARD_DRAW_BY_VERSION,        dtype=jnp.float32)
+_REWARD_SPEED_BONUS_VEC = jnp.asarray(C.REWARD_SPEED_BONUS_BY_VERSION, dtype=jnp.float32)
+
+
+# ---------------------------------------------------------------------------
 # Action encoding
 # ---------------------------------------------------------------------------
 
@@ -253,6 +268,7 @@ def _resolve_one_target(
     garrison: jnp.ndarray,     # int16 scalar
     capacity: jnp.ndarray,     # int16 scalar
     incoming: jnp.ndarray,     # (3,) int64 — counts by owner
+    reward_version: jnp.ndarray,  # int8 scalar (0=v1.2, 1=v1.3)
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Resolve one target slot. Returns (new_garrison, new_owner, r1_delta, r2_delta).
 
@@ -340,11 +356,14 @@ def _resolve_one_target(
 
     # Rewards: emitted only if ownership changed AND the target was alive.
     changed = alive_mask & (new_owner_i32 != owner_i32)
-    # REWARD_* are floats; stay in f32.
-    r_capture_p1 = jnp.where(changed & (new_owner_i32 == C.OWNER_P1), jnp.float32(C.REWARD_CAPTURE), jnp.float32(0.0))
-    r_capture_p2 = jnp.where(changed & (new_owner_i32 == C.OWNER_P2), jnp.float32(C.REWARD_CAPTURE), jnp.float32(0.0))
-    r_loss_p1    = jnp.where(changed & (owner_i32     == C.OWNER_P1), jnp.float32(C.REWARD_LOSS),    jnp.float32(0.0))
-    r_loss_p2    = jnp.where(changed & (owner_i32     == C.OWNER_P2), jnp.float32(C.REWARD_LOSS),    jnp.float32(0.0))
+    # Version-indexed reward lookups (per-state reward_version).
+    rv = reward_version.astype(jnp.int32)
+    r_capture_v = _REWARD_CAPTURE_VEC[rv]
+    r_loss_v    = _REWARD_LOSS_VEC[rv]
+    r_capture_p1 = jnp.where(changed & (new_owner_i32 == C.OWNER_P1), r_capture_v, jnp.float32(0.0))
+    r_capture_p2 = jnp.where(changed & (new_owner_i32 == C.OWNER_P2), r_capture_v, jnp.float32(0.0))
+    r_loss_p1    = jnp.where(changed & (owner_i32     == C.OWNER_P1), r_loss_v,    jnp.float32(0.0))
+    r_loss_p2    = jnp.where(changed & (owner_i32     == C.OWNER_P2), r_loss_v,    jnp.float32(0.0))
     r1_delta = r_capture_p1 + r_loss_p1
     r2_delta = r_capture_p2 + r_loss_p2
 
@@ -356,13 +375,14 @@ def _resolve_arrivals(state: StateJax, incoming: jnp.ndarray) -> tuple[StateJax,
     (new_state, reward_p1, reward_p2).
     """
     new_garrison, new_owner, r1_per_tgt, r2_per_tgt = jax.vmap(
-        _resolve_one_target, in_axes=(0, 0, 0, 0, 0)
+        _resolve_one_target, in_axes=(0, 0, 0, 0, 0, None)
     )(
         state.buildings_alive,
         state.buildings_owner,
         state.buildings_garrison,
         state.buildings_capacity,
         incoming,
+        state.reward_version,
     )
     new_state = state.replace(
         buildings_garrison=new_garrison,
@@ -393,12 +413,19 @@ def _check_victory(state: StateJax) -> tuple[StateJax, jnp.ndarray, jnp.ndarray,
     p1_alive_player = (p1_bldgs > 0) | p1_inflight
     p2_alive_player = (p2_bldgs > 0) | p2_inflight
 
+    # Version-indexed reward lookups.
+    rv = state.reward_version.astype(jnp.int32)
+    r_win   = _REWARD_WIN_VEC[rv]
+    r_lose  = _REWARD_LOSE_VEC[rv]
+    r_draw  = _REWARD_DRAW_VEC[rv]
+    r_speed = _REWARD_SPEED_BONUS_VEC[rv]
+
     # Speed bonus (matches numpy).
-    speed_bonus = C.REWARD_SPEED_BONUS * jnp.maximum(
+    speed_bonus = r_speed * jnp.maximum(
         jnp.float32(0.0),
         jnp.float32(1.0) - state.tick.astype(jnp.float32) / jnp.float32(C.GAME_TIMEOUT_TICKS),
     )
-    win_reward = jnp.float32(C.REWARD_WIN) + speed_bonus
+    win_reward = r_win + speed_bonus
 
     both_dead = (~p1_alive_player) & (~p2_alive_player)
     p1_dead   = (~p1_alive_player) & p2_alive_player
@@ -443,21 +470,21 @@ def _check_victory(state: StateJax) -> tuple[StateJax, jnp.ndarray, jnp.ndarray,
     #   timeout_draw                           : DRAW both
     #   not done                               : 0, 0
     r1_delta = jnp.where(
-        both_dead,        jnp.float32(C.REWARD_DRAW),
-        jnp.where(p1_dead, jnp.float32(C.REWARD_LOSE),
+        both_dead,        r_draw,
+        jnp.where(p1_dead, r_lose,
         jnp.where(p2_dead, win_reward,
-        jnp.where(timeout_p1_wins, jnp.float32(C.REWARD_WIN),
-        jnp.where(timeout_p2_wins, jnp.float32(C.REWARD_LOSE),
-        jnp.where(timeout_draw,    jnp.float32(C.REWARD_DRAW),
+        jnp.where(timeout_p1_wins, r_win,
+        jnp.where(timeout_p2_wins, r_lose,
+        jnp.where(timeout_draw,    r_draw,
                                    jnp.float32(0.0)))))),
     )
     r2_delta = jnp.where(
-        both_dead,        jnp.float32(C.REWARD_DRAW),
+        both_dead,        r_draw,
         jnp.where(p1_dead, win_reward,
-        jnp.where(p2_dead, jnp.float32(C.REWARD_LOSE),
-        jnp.where(timeout_p1_wins, jnp.float32(C.REWARD_LOSE),
-        jnp.where(timeout_p2_wins, jnp.float32(C.REWARD_WIN),
-        jnp.where(timeout_draw,    jnp.float32(C.REWARD_DRAW),
+        jnp.where(p2_dead, r_lose,
+        jnp.where(timeout_p1_wins, r_lose,
+        jnp.where(timeout_p2_wins, r_win,
+        jnp.where(timeout_draw,    r_draw,
                                    jnp.float32(0.0)))))),
     )
 

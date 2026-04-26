@@ -270,14 +270,17 @@ def _resolve_arrivals(
                     "owner_after": int(new_owner),
                     "garrison_after": int(new_garrison),
                 })
+            rv = int(state.reward_version)
+            r_capture = C.REWARD_CAPTURE_BY_VERSION[rv]
+            r_loss    = C.REWARD_LOSS_BY_VERSION[rv]
             if new_owner == C.OWNER_P1:
-                r1 += C.REWARD_CAPTURE
+                r1 += r_capture
             elif new_owner == C.OWNER_P2:
-                r2 += C.REWARD_CAPTURE
+                r2 += r_capture
             if owner_before == C.OWNER_P1:
-                r1 += C.REWARD_LOSS
+                r1 += r_loss
             elif owner_before == C.OWNER_P2:
-                r2 += C.REWARD_LOSS
+                r2 += r_loss
 
     return r1, r2
 
@@ -358,36 +361,42 @@ def _check_victory(state: State) -> tuple[float, float, bool]:
     p1_alive = p1_bldgs > 0 or has_in_flight(state, C.OWNER_P1)
     p2_alive = p2_bldgs > 0 or has_in_flight(state, C.OWNER_P2)
 
-    speed_bonus = C.REWARD_SPEED_BONUS * max(0.0, 1.0 - state.tick / C.GAME_TIMEOUT_TICKS)
-    win_reward = C.REWARD_WIN + speed_bonus
+    rv = int(state.reward_version)
+    r_win   = C.REWARD_WIN_BY_VERSION[rv]
+    r_lose  = C.REWARD_LOSE_BY_VERSION[rv]
+    r_draw  = C.REWARD_DRAW_BY_VERSION[rv]
+    r_speed = C.REWARD_SPEED_BONUS_BY_VERSION[rv]
+
+    speed_bonus = r_speed * max(0.0, 1.0 - state.tick / C.GAME_TIMEOUT_TICKS)
+    win_reward = r_win + speed_bonus
 
     if not p1_alive and not p2_alive:
         state.phase = C.PHASE_DRAW
-        return C.REWARD_DRAW, C.REWARD_DRAW, True
+        return r_draw, r_draw, True
     if not p1_alive:
         state.phase = C.PHASE_P2_WINS
-        return C.REWARD_LOSE, win_reward, True
+        return r_lose, win_reward, True
     if not p2_alive:
         state.phase = C.PHASE_P1_WINS
-        return win_reward, C.REWARD_LOSE, True
+        return win_reward, r_lose, True
 
     if state.tick >= C.GAME_TIMEOUT_TICKS:
         if p1_bldgs > p2_bldgs:
             state.phase = C.PHASE_P1_WINS
-            return C.REWARD_WIN, C.REWARD_LOSE, True
+            return r_win, r_lose, True
         if p2_bldgs > p1_bldgs:
             state.phase = C.PHASE_P2_WINS
-            return C.REWARD_LOSE, C.REWARD_WIN, True
+            return r_lose, r_win, True
         from sim.state import count_owned_units
         u1 = count_owned_units(state, C.OWNER_P1)
         u2 = count_owned_units(state, C.OWNER_P2)
         if u1 > u2:
             state.phase = C.PHASE_P1_WINS
-            return C.REWARD_WIN, C.REWARD_LOSE, True
+            return r_win, r_lose, True
         if u2 > u1:
             state.phase = C.PHASE_P2_WINS
-            return C.REWARD_LOSE, C.REWARD_WIN, True
+            return r_lose, r_win, True
         state.phase = C.PHASE_DRAW
-        return C.REWARD_DRAW, C.REWARD_DRAW, True
+        return r_draw, r_draw, True
 
     return 0.0, 0.0, False

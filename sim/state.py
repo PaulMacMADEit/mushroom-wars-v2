@@ -145,6 +145,9 @@ class State:
     # Scalars
     tick:          int = 0
     phase:         int = C.PHASE_PLAYING
+    # Reward scheme. 0 = v1.2 (default, back-compat), 1 = v1.3 (rebalance).
+    # Engine indexes into REWARD_*_BY_VERSION lookups via this field.
+    reward_version: int = C.REWARD_VERSION_V12
 
     # Lightweight per-subsystem profiling (nanoseconds accumulated this game).
     perf: dict = field(default_factory=lambda: {

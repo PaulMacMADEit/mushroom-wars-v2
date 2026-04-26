@@ -23,6 +23,7 @@ def make_env(
     level_name: str = "crossroads_6",
     opponent_name: str = "random_legal",
     opponent_kwargs: Optional[dict] = None,
+    reward_version: int = 0,
 ) -> Callable[[], MushroomEnv]:
     """Factory suitable for gymnasium.vector.{Sync,Async}VectorEnv.
 
@@ -45,7 +46,10 @@ def make_env(
             if opponent_name not in _SIMPLE_OPPONENTS:
                 raise ValueError(f"unknown opponent_name: {opponent_name!r}")
             opponent = _SIMPLE_OPPONENTS[opponent_name]
-        return MushroomEnv(level_name=level_name, opponent=opponent, seed=seed)
+        return MushroomEnv(
+            level_name=level_name, opponent=opponent, seed=seed,
+            reward_version=reward_version,
+        )
 
     return _thunk
 

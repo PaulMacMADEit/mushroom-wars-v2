@@ -62,6 +62,8 @@ class StateJax:
     # Scalars as 0-D jnp arrays so they live inside the pytree.
     tick:  jnp.ndarray             # int32 scalar
     phase: jnp.ndarray             # int8  scalar
+    # Reward scheme version (0=v1.2, 1=v1.3). Mirrors numpy `State.reward_version`.
+    reward_version: jnp.ndarray    # int8  scalar
 
     # RNG carried on-state so stochastic ops (reserved) can split it.
     rng_key: jnp.ndarray           # uint32 shape (2,)
@@ -108,6 +110,7 @@ def from_numpy_state(state: State, rng_key: jnp.ndarray | None = None) -> StateJ
         travel_matrix   = jnp.array(state.travel_matrix,   dtype=jnp.int16),
         tick            = jnp.array(state.tick,  dtype=jnp.int32),
         phase           = jnp.array(state.phase, dtype=jnp.int8),
+        reward_version  = jnp.array(state.reward_version, dtype=jnp.int8),
         rng_key         = rng_key,
     )
 
@@ -137,6 +140,7 @@ def to_numpy_state(state_jax: StateJax) -> State:
     out.travel_matrix[:]   = np.asarray(state_jax.travel_matrix,   dtype=np.int16)
     out.tick  = int(state_jax.tick)
     out.phase = int(state_jax.phase)
+    out.reward_version = int(state_jax.reward_version)
     return out
 
 
