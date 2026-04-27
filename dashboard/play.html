@@ -88,9 +88,10 @@
     <h2>Play a game</h2>
     <div class="card">
       <div class="muted small" style="margin-bottom:16px;">
-        Queues a 5-game match, waits for the Mac worker to pick it up, then opens the first replay.
-        Default is self-play. Pinned to <span class="mono">Pauls-MacBook-Air.local</span> so it
-        doesn't steal GPU time from PaulLinux's training loop.
+        Queues a multi-game match (default 5), waits for the Mac worker to pick it up, then shows
+        per-game results with replay links. Default is self-play. Pinned to
+        <span class="mono">Pauls-MacBook-Air.local</span> so it doesn't steal GPU time from
+        PaulLinux's training loop.
       </div>
 
       <div class="play-form">
@@ -102,6 +103,17 @@
           <select id="p2" style="flex:1"><option value="">loading...</option></select>
           <button id="mirror" class="link-btn" title="Set P2 = P1 (self-play)">mirror</button>
         </div>
+
+        <label>Games</label>
+        <select id="games">
+          <option value="1">1 game</option>
+          <option value="3">3 games</option>
+          <option value="5" selected>5 games</option>
+          <option value="10">10 games</option>
+          <option value="20">20 games</option>
+          <option value="50">50 games</option>
+          <option value="100">100 games</option>
+        </select>
 
         <label>Level</label>
         <select id="level">
@@ -142,6 +154,7 @@
     const $p1     = document.getElementById('p1');
     const $p2     = document.getElementById('p2');
     const $level  = document.getElementById('level');
+    const $games  = document.getElementById('games');
     const $mirror = document.getElementById('mirror');
     const $play   = document.getElementById('play');
     const $status = document.getElementById('status');
@@ -204,6 +217,7 @@
       const runA = $p1.value;
       const runB = $p2.value;
       const level = $level.value;
+      const games = parseInt($games.value, 10) || 5;
       if (!runA || !runB) {
         setStatus('error', 'Pick both players.');
         return;
@@ -216,7 +230,7 @@
         p_run_a: runA,
         p_run_b: runB,
         p_level_name: level,
-        p_games: 5,
+        p_games: games,
         p_target_machine: 'Pauls-MacBook-Air.local',
       });
       if (rpcErr) {
@@ -224,12 +238,13 @@
         setStatus('error', `Queue failed: ${esc(rpcErr.message)}`);
         return;
       }
-      setStatus('working', `Queued 5-game match <span class="mono">${esc(matchId.slice(0,8))}...</span> on Mac. Waiting for worker...`);
+      setStatus('working', `Queued ${games}-game match <span class="mono">${esc(matchId.slice(0,8))}...</span> on Mac. Waiting for worker...`);
 
       // Poll for completion. Generous timeout: Mac worker may need to JIT
-      // warm up, then 5 games on top of that.
+      // warm up, then N games on top of that. Scale with the games count
+      // (~10s per game once warm + 60s initial JIT) with a 30-min ceiling.
       const started = Date.now();
-      const timeoutMs = 300_000;
+      const timeoutMs = Math.min(60_000 + games * 10_000, 30 * 60_000);
       let phase = 'queued';
 
       while (Date.now() - started < timeoutMs) {
