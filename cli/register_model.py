@@ -58,6 +58,10 @@ def main():
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--body-dim", type=int, default=128,
                     help="ActorCritic trunk width. Must match build_net_for_model's dispatch.")
+    ap.add_argument("--trigger-rerate", action="store_true",
+                    help="set kv['needs_rerate'] = '1' so the next worker / cron "
+                         "fire kicks off scripts/rate_all_runs.py against the "
+                         "current top-K. Use after a major model bump.")
     args = ap.parse_args()
 
     net = ActorCritic(body_dim=args.body_dim)
@@ -105,6 +109,20 @@ def main():
         print(f"model {args.id!r} already exists (use --force to overwrite).")
     else:
         print(f"registered model {args.id!r}: obs={OBS_DIM}, actions={ACTION_SPACE_SIZE}, params={total_params:,}")
+
+    if args.trigger_rerate:
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO kv (key, value, updated_at)
+                         VALUES ('needs_rerate', '1', NOW())
+                    ON CONFLICT (key) DO UPDATE
+                                SET value = '1', updated_at = NOW()
+                    """,
+                )
+            conn.commit()
+        print("set kv['needs_rerate']='1' — next cron-agent fire will kick off rate_all_runs")
 
 
 if __name__ == "__main__":

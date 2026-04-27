@@ -143,7 +143,7 @@ def _read_recent_runs(conn, since: datetime) -> list[dict]:
             "launch_at":     row[7],
             "started_at":    row[8],
             "finished_at":   row[9],
-            "elo_score":     float(row[10]) if row[10] is not None else 1200.0,
+            "elo_score":     float(row[10]) if row[10] is not None else 1000.0,
             "elo_n_matches": int(row[11])   if row[11] is not None else 0,
         })
     return out
@@ -622,6 +622,28 @@ def main():
         # ---- THEN run Elo review + graduation eval (worker training in parallel). ----
         if not args.skip_elo_review:
             _elo_review_pass(conn, args.dry_run)
+
+        # Version-bump trigger: register_model.py --trigger-rerate sets
+        # kv['needs_rerate']='1' to ask for a top-30 re-rating against new
+        # weights. Honour it once, then clear the flag.
+        rerate_flag = _kv_get(conn, "needs_rerate")
+        if rerate_flag == '1':
+            print("  [kv] needs_rerate=1 — kicking off rate_all_runs --include-rated --max-runs 30")
+            if args.dry_run:
+                print("  [dry-run] would call scripts/rate_all_runs.py and clear flag")
+            else:
+                cmd = [
+                    str(ROOT / ".venv" / "bin" / "python"),
+                    str(ROOT / "scripts" / "rate_all_runs.py"),
+                    "--include-rated", "--max-runs", "30",
+                    "--matches", "4", "--games", "64",
+                ]
+                try:
+                    subprocess.run(cmd, timeout=7200)
+                except subprocess.TimeoutExpired:
+                    print("  rate_all_runs timeout (2h cap)")
+                _kv_set(conn, "needs_rerate", "0")
+                print("  cleared kv['needs_rerate']")
 
         # Now check graduation against the freshly-rated champion. If a
         # graduation event fires, the kv flips so the NEXT cron fire queues

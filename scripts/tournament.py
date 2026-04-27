@@ -305,7 +305,7 @@ def fetch_run_elo(conn, run_id: str) -> tuple[float, int]:
         row = cur.fetchone()
     if row is None:
         raise RuntimeError(f"run {run_id} not found")
-    score = float(row[0]) if row[0] is not None else 1200.0
+    score = float(row[0]) if row[0] is not None else 1000.0
     n     = int(row[1])   if row[1] is not None else 0
     return score, n
 
@@ -342,7 +342,7 @@ def update_elo_from_match(
     p1_rating, p1_n = fetch_run_elo(conn, p1_run_id)
     if p2_run_id is None:
         # Treat opponent as fixed at baseline rating.
-        p2_rating = 1200.0
+        p2_rating = 1000.0
         p1_new, _ = elo_update(p1_rating, p2_rating, p1_score, k=k)
         write_run_elo(conn, p1_run_id, p1_new, p1_n + 1)
         return p1_new, p2_rating
@@ -463,12 +463,12 @@ def main():
                     print(f"  Elo: p1 -> {p1_new:.1f}, p2 -> {p2_new:.1f}")
                 elif p1_id is not None:
                     p1_new, _ = update_elo_from_match(conn, p1_id, None, result, k=args.elo_k)
-                    print(f"  Elo: p1 -> {p1_new:.1f} (vs baseline 1200)")
+                    print(f"  Elo: p1 -> {p1_new:.1f} (vs baseline 1000)")
                 else:
                     # Only p2 is real; flip the result and update p2 against baseline.
                     flipped = {"p1_wins": p2_wins, "p2_wins": p1_wins, "draws": draws, "total": total}
                     p2_new, _ = update_elo_from_match(conn, p2_id, None, flipped, k=args.elo_k)
-                    print(f"  Elo: p2 -> {p2_new:.1f} (vs baseline 1200)")
+                    print(f"  Elo: p2 -> {p2_new:.1f} (vs baseline 1000)")
 
 
 if __name__ == "__main__":

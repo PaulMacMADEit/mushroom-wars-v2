@@ -58,7 +58,7 @@ def _read_unrated(conn, sim_id: str | None, since_hours: int | None) -> list[dic
         rows = cur.fetchall()
     return [
         {"id": str(r[0]), "label": r[1],
-         "elo_score": float(r[2]) if r[2] is not None else 1200.0,
+         "elo_score": float(r[2]) if r[2] is not None else 1000.0,
          "elo_n_matches": int(r[3]) if r[3] is not None else 0,
          "finished_at": r[4]}
         for r in rows
@@ -121,7 +121,7 @@ def main():
                     tuple(params),
                 )
                 unrated = [{"id": str(r[0]), "label": r[1],
-                            "elo_score": float(r[2]) if r[2] is not None else 1200.0,
+                            "elo_score": float(r[2]) if r[2] is not None else 1000.0,
                             "elo_n_matches": int(r[3]) if r[3] is not None else 0,
                             "finished_at": None}
                            for r in cur.fetchall()]

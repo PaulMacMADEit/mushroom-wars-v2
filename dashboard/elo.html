@@ -4,16 +4,6 @@
   <meta charset="utf-8">
   <title>Elo leaderboard — Mushroom Wars v2</title>
   <link rel="stylesheet" href="lib/style.css">
-  <style>
-    .matrix { border-collapse: collapse; font-size: 11px; }
-    .matrix th, .matrix td { border: 1px solid var(--border); padding: 4px 6px; text-align: center; min-width: 42px; }
-    .matrix th { background: #0d0f14; font-weight: 500; }
-    .matrix td.diag { background: #1a1e28; color: var(--fg-muted); }
-    .matrix td.cell { font-family: var(--mono); }
-    .win { color: #86efac; }
-    .lose { color: #fca5a5; }
-    .draw { color: var(--fg-muted); }
-  </style>
 </head>
 <body>
   <header>
@@ -30,7 +20,7 @@
   </header>
 
   <main>
-    <h2>Elo ranking (head-to-head)</h2>
+    <h2>Elo ranking</h2>
     <div class="card muted" id="summary">Loading…</div>
 
     <div class="card" id="ranking">
@@ -39,282 +29,112 @@
 
     <h2>Elo over training time</h2>
     <div class="card">
-      <div class="stat-label">each point = one completed run, plotted at its training-start timestamp</div>
-      <div style="position:relative; height:320px; margin-top:8px;"><canvas id="chart-history"></canvas></div>
-    </div>
-
-    <h2>Pairwise win rates</h2>
-    <div class="card" id="matrix">
-      <div class="muted">Loading matrix…</div>
-    </div>
-
-    <h2>Recent matches</h2>
-    <div class="card" id="recent">
-      <div class="muted">Loading matches…</div>
+      <div class="stat-label">each point = one rated run, plotted at its training-start time. Y = current Elo.</div>
+      <div style="position:relative; height:340px; margin-top:8px;"><canvas id="chart-history"></canvas></div>
     </div>
   </main>
 
   <script type="module">
     import { sb } from './lib/supabase.js';
-    import { fmtTime, fmtPct, esc, tr } from './lib/ui.js';
+    import { fmtTime, fmtDuration, fmtPct, esc, tr,
+             fmtElo, ticksPerMin } from './lib/ui.js';
     import Chart from 'https://esm.sh/chart.js@4/auto';
     Chart.defaults.color = '#8a93a6';
     Chart.defaults.borderColor = '#262a36';
 
-    const K = 32;           // Elo K-factor
-    const INIT_ELO = 1200;  // seed rating for every unrated run
+    const $summary = document.getElementById('summary');
+    const $rank    = document.getElementById('ranking');
 
     async function load() {
-      // Also fetch queued/running matches for the summary header.
-      const [matchesRes, allMatchesRes, runsRes] = await Promise.all([
-        sb.from('matches')
-          .select('id, model_a_run_id, model_b_run_id, status, summary, games_planned, created_at, finished_at')
-          .eq('project', 'mushroom-wars')
-          .eq('status', 'done')
-          .order('created_at', { ascending: true }),
-        sb.from('matches')
-          .select('status')
-          .eq('project', 'mushroom-wars'),
-        sb.from('runs')
-          .select('id, label, model_id, queued_at')
-          .eq('status', 'done')
-          .eq('project', 'mushroom-wars'),
-      ]);
-      if (allMatchesRes.error) throw allMatchesRes.error;
-      if (matchesRes.error) throw matchesRes.error;
-      if (runsRes.error) throw runsRes.error;
+      // Pull every rated run (elo_n_matches >= 1 — keep the unrated 1000s
+      // out of the table). Sort by elo desc.
+      const { data, error } = await sb
+        .from('runs')
+        .select('id, label, status, model_id, simulator_id, machine, hyperparams, result, elo_score, elo_n_matches, queued_at, started_at, finished_at, wall_ms')
+        .eq('status', 'done')
+        .gte('elo_n_matches', 1)
+        .order('elo_score', { ascending: false })
+        .limit(300);
+      if (error) throw error;
 
-      const runsById = Object.fromEntries(runsRes.data.map(r => [r.id, r]));
-      const matches = matchesRes.data;
-
-      if (matches.length === 0) {
-        document.getElementById('summary').textContent =
-          'No completed matches yet — queue some with `python cli/queue_eval.py`.';
-        for (const id of ['ranking', 'matrix', 'recent']) {
-          document.getElementById(id).innerHTML = '<div class="muted">(empty)</div>';
-        }
+      if (!data || !data.length) {
+        $summary.textContent = 'No rated runs yet. The worker auto-rates each new run vs random_legal at finish; first ratings will arrive within ~5 min of the next completed run.';
+        $rank.innerHTML = '<div class="muted">(empty)</div>';
+        renderHistoryChart([]);
         return;
       }
 
-      // Fetch all per-game rows for these matches (needed for exact game-by-game Elo).
-      const matchIds = matches.map(m => m.id);
-      const gamesRes = await sb.from('games')
-        .select('match_id, game_index, player_1_run_id, player_2_run_id, winner')
-        .in('match_id', matchIds);
-      if (gamesRes.error) throw gamesRes.error;
-
-      // Group games by match, play matches in chronological order.
-      const gamesByMatch = {};
-      for (const g of gamesRes.data) {
-        (gamesByMatch[g.match_id] = gamesByMatch[g.match_id] || []).push(g);
-      }
-
-      // Elo walk.
-      const elo = {};
-      const played = {};   // games played per run
-      const wins  = {};    // total wins per run
-      const draws = {};
-      const pair = {};     // "a|b" → {wins, losses, draws, games, a, b}
-
-      function getElo(id) {
-        if (!(id in elo)) elo[id] = INIT_ELO;
-        return elo[id];
-      }
-      function pairKey(a, b) { return a < b ? `${a}|${b}` : `${b}|${a}`; }
-
-      for (const match of matches) {
-        const gs = (gamesByMatch[match.id] || []).sort((x, y) => x.game_index - y.game_index);
-        for (const g of gs) {
-          // Treat each game as one Elo event; score from P1's perspective.
-          const Ra = getElo(g.player_1_run_id);
-          const Rb = getElo(g.player_2_run_id);
-          const Ea = 1 / (1 + Math.pow(10, (Rb - Ra) / 400));
-          let Sa;
-          if (g.winner === g.player_1_run_id) Sa = 1;
-          else if (g.winner === g.player_2_run_id) Sa = 0;
-          else Sa = 0.5;
-          elo[g.player_1_run_id] = Ra + K * (Sa - Ea);
-          elo[g.player_2_run_id] = Rb + K * ((1 - Sa) - (1 - Ea));
-
-          // Per-run totals.
-          for (const rid of [g.player_1_run_id, g.player_2_run_id]) {
-            played[rid] = (played[rid] || 0) + 1;
-          }
-          if (Sa === 1)      wins[g.player_1_run_id] = (wins[g.player_1_run_id] || 0) + 1;
-          else if (Sa === 0) wins[g.player_2_run_id] = (wins[g.player_2_run_id] || 0) + 1;
-          else              { draws[g.player_1_run_id] = (draws[g.player_1_run_id] || 0) + 1;
-                              draws[g.player_2_run_id] = (draws[g.player_2_run_id] || 0) + 1; }
-
-          // Pairwise (undirected a<b).
-          const key = pairKey(g.player_1_run_id, g.player_2_run_id);
-          if (!pair[key]) pair[key] = { a: key.split('|')[0], b: key.split('|')[1],
-                                        a_wins: 0, b_wins: 0, draws: 0, games: 0 };
-          const p = pair[key];
-          p.games++;
-          if (Sa === 0.5) p.draws++;
-          else if (g.winner === p.a) p.a_wins++;
-          else p.b_wins++;
-        }
-      }
-
-      // ---- Vs-baseline (random_legal) tally ----
-      // The absolute skill metric — doesn't inflate as the meta shifts.
-      const BASELINE_ID = '00000000-0000-0000-0000-000000000001';
-      const vsBaseline = {};  // run_id → { wins, games }
-      for (const g of gamesRes.data) {
-        let runId = null, sa = null;
-        if (g.player_1_run_id === BASELINE_ID && g.player_2_run_id !== BASELINE_ID) {
-          runId = g.player_2_run_id;
-          sa = g.winner === g.player_2_run_id ? 1 : (g.winner === null ? 0.5 : 0);
-        } else if (g.player_2_run_id === BASELINE_ID && g.player_1_run_id !== BASELINE_ID) {
-          runId = g.player_1_run_id;
-          sa = g.winner === g.player_1_run_id ? 1 : (g.winner === null ? 0.5 : 0);
-        }
-        if (runId != null) {
-          const v = vsBaseline[runId] = vsBaseline[runId] || { score: 0, games: 0 };
-          v.score += sa;
-          v.games += 1;
-        }
-      }
-
-      const ranked = Object.keys(elo)
-        .filter(id => id !== BASELINE_ID)
-        .map(id => ({
-          id,
-          label: runsById[id]?.label ?? `(${id.slice(0, 8)}…)`,
-          model: runsById[id]?.model_id ?? '?',
-          elo: elo[id],
-          games: played[id] ?? 0,
-          wins: wins[id] ?? 0,
-          draws: draws[id] ?? 0,
-          vs_baseline_rate: vsBaseline[id]
-            ? vsBaseline[id].score / vsBaseline[id].games
-            : null,
-          vs_baseline_games: vsBaseline[id]?.games ?? 0,
-        }))
-        .sort((x, y) => y.elo - x.elo);
-
-      // ---- Summary ----
-      const mStatus = {};
-      for (const r of allMatchesRes.data) mStatus[r.status] = (mStatus[r.status] ?? 0) + 1;
-      const inFlight = (mStatus.queued ?? 0) + (mStatus.running ?? 0);
-      document.getElementById('summary').innerHTML = `
-        ${matches.length} match${matches.length === 1 ? '' : 'es'} scored,
-        ${gamesRes.data.length} games total,
-        ${ranked.length} run${ranked.length === 1 ? '' : 's'} ranked.
-        ${inFlight > 0 ? `<span class="small" style="margin-left:16px;">⟳ ${inFlight} match${inFlight === 1 ? '' : 'es'} still in flight (queued/running)</span>` : ''}
-        <span class="small" style="margin-left:16px;">K=${K}, initial Elo=${INIT_ELO}, Elo updated per-game.</span>
+      // Summary stats.
+      const elos = data.map(r => r.elo_score).filter(x => x != null);
+      const above1k = data.filter(r => r.elo_score > 1000).length;
+      const below1k = data.filter(r => r.elo_score < 1000).length;
+      $summary.innerHTML = `
+        <div style="display:flex; gap:24px; flex-wrap:wrap; align-items:center;">
+          <div><div class="stat-label">rated runs</div><div class="stat">${data.length}</div></div>
+          <div><div class="stat-label">top Elo</div><div class="stat">${Math.round(Math.max(...elos))}</div></div>
+          <div><div class="stat-label">avg Elo</div><div class="stat">${(elos.reduce((a,b)=>a+b,0)/elos.length).toFixed(0)}</div></div>
+          <div><div class="stat-label">&gt; 1000</div><div class="stat win">${above1k}</div></div>
+          <div><div class="stat-label">&lt; 1000</div><div class="stat lose">${below1k}</div></div>
+          <div class="muted small" style="margin-left:auto;">
+            Anchor 1000 = pure random_legal play. Each newly-finished run gets
+            auto-rated by the worker (3 matches vs random_legal); cron-agent
+            adds extra matches against the top-Elo set every 3h. Weekly
+            re-rating refreshes the top-30 (Sun 02:13).
+          </div>
+        </div>
       `;
 
-      // ---- Elo-over-training-time scatter ----
-      // X axis: run.queued_at (when training started).
-      // Y axis: the run's final Elo.
-      // Each run that played ≥1 ranked match gets a point.
-      const historyPoints = ranked
-        .filter(r => runsById[r.id]?.queued_at)
-        .map(r => ({
-          x: new Date(runsById[r.id].queued_at).getTime(),
-          y: r.elo,
-          label: r.label,
-        }))
-        .sort((a, b) => a.x - b.x);
-      renderHistoryChart(historyPoints);
+      // Ranking table.
+      const rows = data.map((r, i) => {
+        const sps = r.result?.steps_per_sec;
+        const hp  = r.hyperparams || {};
+        const lvl = hp.level_name ?? '—';
+        const upd = r.result?.updates ?? '—';
+        const rate = r.result?.rate;
+        const eloDelta = r.elo_score - 1000;
+        const deltaClass = eloDelta >= 0 ? 'win' : 'lose';
+        const deltaSign  = eloDelta >= 0 ? '+' : '';
+        return tr([
+          `<span class="mono">#${i + 1}</span>`,
+          `<span class="mono"><b>${Math.round(r.elo_score)}</b></span>`,
+          `<span class="mono ${deltaClass}">${deltaSign}${eloDelta.toFixed(0)}</span>`,
+          `<span class="mono small">${r.elo_n_matches}</span>`,
+          `<a href="./run.html?id=${esc(r.id)}">${esc(r.label)}</a>`,
+          `<span class="mono small">${esc(r.simulator_id ?? '')}</span>`,
+          `<a href="./model.html?id=${esc(r.model_id)}" class="mono">${esc(r.model_id)}</a>`,
+          `<span class="mono">${esc(lvl)}</span>`,
+          `<span class="mono">${esc(String(upd))}</span>`,
+          fmtPct(rate),
+          fmtDuration(r.wall_ms),
+          `<span class="mono">${ticksPerMin(sps)}</span>`,
+          `<span class="muted">${fmtTime(r.finished_at ?? r.queued_at)}</span>`,
+        ]);
+      });
 
-      // ---- Ranking table ----
-      const $rank = document.getElementById('ranking');
       $rank.innerHTML = `
         <table>
           <thead><tr>
-            <th>rank</th><th>Elo</th><th>run</th><th>model</th>
-            <th>games</th><th>W</th><th>D</th><th>L</th><th>win%</th>
-            <th title="absolute skill vs the random_legal baseline; stable across time">vs random</th>
+            <th>rank</th><th>Elo</th><th>Δ vs 1000</th><th>matches</th>
+            <th>run</th><th>sim</th><th>model</th><th>level</th>
+            <th>updates</th><th>rate</th><th>wall</th><th>ticks/min</th><th>finished</th>
           </tr></thead>
-          <tbody>
-            ${ranked.map((r, i) => {
-              const losses = r.games - r.wins - r.draws;
-              const wr = r.games > 0 ? (r.wins + 0.5 * r.draws) / r.games : null;
-              const vbr = r.vs_baseline_rate != null
-                ? `${(r.vs_baseline_rate * 100).toFixed(0)}% <span class="muted small">(${r.vs_baseline_games})</span>`
-                : '<span class="muted">—</span>';
-              return tr([
-                `<span class="mono">#${i + 1}</span>`,
-                `<span class="mono"><b>${r.elo.toFixed(0)}</b></span>`,
-                `<a href="./run.html?id=${esc(r.id)}">${esc(r.label)}</a>`,
-                `<a href="./model.html?id=${esc(r.model)}" class="mono">${esc(r.model)}</a>`,
-                String(r.games),
-                `<span class="win mono">${r.wins}</span>`,
-                `<span class="draw mono">${r.draws}</span>`,
-                `<span class="lose mono">${losses}</span>`,
-                fmtPct(wr),
-                vbr,
-              ]);
-            }).join('')}
-          </tbody>
-        </table>`;
+          <tbody>${rows.join('')}</tbody>
+        </table>
+        <div class="muted small" style="margin-top:8px;">
+          Δ vs 1000 = Elo distance from the random_legal baseline anchor.
+          A 200-point lead means winning ~76% of head-to-heads.
+        </div>`;
 
-      // ---- Pairwise win-rate matrix ----
-      // Rows: run index, Cols: opponent index. Cell shows A's win% against B.
-      const labels = ranked.map(r => r.label);
-      const idToIdx = Object.fromEntries(ranked.map((r, i) => [r.id, i]));
-      const grid = Array.from({ length: ranked.length }, () => Array(ranked.length).fill(null));
-      for (const p of Object.values(pair)) {
-        const i = idToIdx[p.a], j = idToIdx[p.b];
-        if (i == null || j == null) continue;
-        const a_rate = (p.a_wins + 0.5 * p.draws) / p.games;
-        grid[i][j] = a_rate;
-        grid[j][i] = 1 - a_rate;
-      }
-
-      const $matrix = document.getElementById('matrix');
-      if (ranked.length < 2) {
-        $matrix.innerHTML = '<div class="muted">need ≥2 runs to build a matrix</div>';
-      } else {
-        let html = '<table class="matrix"><thead><tr><th></th>';
-        for (const l of labels) html += `<th title="${esc(l)}">${esc(l.slice(0, 10))}</th>`;
-        html += '</tr></thead><tbody>';
-        for (let i = 0; i < ranked.length; i++) {
-          html += `<tr><th title="${esc(labels[i])}">${esc(labels[i].slice(0, 18))}</th>`;
-          for (let j = 0; j < ranked.length; j++) {
-            if (i === j) html += `<td class="diag">—</td>`;
-            else if (grid[i][j] == null) html += `<td class="muted">·</td>`;
-            else {
-              const pct = (grid[i][j] * 100).toFixed(0);
-              const cls = grid[i][j] > 0.55 ? 'win' : (grid[i][j] < 0.45 ? 'lose' : 'draw');
-              html += `<td class="cell ${cls}">${pct}</td>`;
-            }
-          }
-          html += '</tr>';
-        }
-        html += '</tbody></table><div class="small muted" style="margin-top:6px;">row vs col, entry = row\'s win rate.</div>';
-        $matrix.innerHTML = html;
-      }
-
-      // ---- Recent matches ----
-      const $recent = document.getElementById('recent');
-      const recent = matches.slice(-20).reverse();
-      $recent.innerHTML = `
-        <table>
-          <thead><tr>
-            <th>when</th><th>A</th><th>vs</th><th>B</th>
-            <th>games</th><th>A wins</th><th>B wins</th><th>draws</th><th>level</th>
-          </tr></thead>
-          <tbody>
-            ${recent.map(m => {
-              const s = m.summary || {};
-              return tr([
-                `<span class="muted">${fmtTime(m.finished_at ?? m.created_at)}</span>`,
-                `<a href="./run.html?id=${esc(m.model_a_run_id)}">${esc(runsById[m.model_a_run_id]?.label ?? 'A')}</a>`,
-                '<span class="muted">vs</span>',
-                `<a href="./run.html?id=${esc(m.model_b_run_id)}">${esc(runsById[m.model_b_run_id]?.label ?? 'B')}</a>`,
-                String(m.games_planned ?? '—'),
-                `<span class="win mono">${s.wins_a ?? '?'}</span>`,
-                `<span class="lose mono">${s.wins_b ?? '?'}</span>`,
-                `<span class="draw mono">${s.draws ?? '?'}</span>`,
-                `<span class="mono">${esc(s.level_name ?? '?')}</span>`,
-              ]);
-            }).join('')}
-          </tbody>
-        </table>`;
+      // Elo over time scatter — uses queued_at as x, elo_score as y.
+      const points = data
+        .filter(r => r.queued_at)
+        .map(r => ({
+          x: new Date(r.queued_at).getTime(),
+          y: r.elo_score,
+          label: r.label,
+        }))
+        .sort((a, b) => a.x - b.x);
+      renderHistoryChart(points);
     }
 
     let historyChart = null;
@@ -324,7 +144,7 @@
       if (historyChart) historyChart.destroy();
       if (!points.length) {
         canvas.replaceWith(Object.assign(document.createElement('div'),
-          { className: 'muted', textContent: 'no ranked runs yet' }));
+          { className: 'muted', textContent: 'no rated runs yet' }));
         return;
       }
       historyChart = new Chart(canvas, {
@@ -332,13 +152,24 @@
         data: {
           datasets: [{
             label: 'Elo',
-            data: points,  // {x, y, label}
+            data: points,
             borderColor: '#60a5fa',
             backgroundColor: '#60a5fa',
-            borderWidth: 1.5,
-            tension: 0.15,
+            borderWidth: 1.2,
+            tension: 0.0,
+            showLine: false,
             pointRadius: 4,
-            pointHoverRadius: 6,
+            pointHoverRadius: 7,
+          }, {
+            // Reference line at 1000 (random_legal anchor).
+            label: 'baseline 1000',
+            data: points.map(p => ({ x: p.x, y: 1000 })),
+            borderColor: '#444',
+            borderWidth: 1,
+            borderDash: [4, 4],
+            pointRadius: 0,
+            showLine: true,
+            tension: 0,
           }],
         },
         options: {
@@ -348,7 +179,7 @@
           scales: {
             x: {
               type: 'linear',
-              title: { display: true, text: 'training start (UTC)' },
+              title: { display: true, text: 'training start' },
               grid: { color: 'rgba(96,165,250,0.05)' },
               ticks: {
                 callback: (v) => new Date(v).toLocaleString(undefined,
@@ -370,7 +201,8 @@
                 title: (items) => new Date(items[0].parsed.x).toLocaleString(),
                 label: (item) => {
                   const p = item.raw;
-                  return `${p.label}: Elo ${p.y.toFixed(0)}`;
+                  if (!p.label) return null;
+                  return `${p.label}: Elo ${Math.round(p.y)}`;
                 },
               },
             },
@@ -380,8 +212,7 @@
     }
 
     load().catch(e => {
-      document.getElementById('summary').innerHTML =
-        `<span class="error">${esc(e.message)}</span>`;
+      $summary.innerHTML = `<span class="error">${esc(e.message)}</span>`;
     });
   </script>
 </body>

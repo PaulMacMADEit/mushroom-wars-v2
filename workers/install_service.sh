@@ -141,6 +141,41 @@ elif [[ "$os" == "Linux" ]]; then
     logs-cron)
       journalctl --user -u mushroom-cron.service -n 40 -f
       ;;
+    install-rerate)
+      RERATE_SVC="mushroom-rerate.service"
+      RERATE_TIMER="mushroom-rerate.timer"
+      RERATE_SVC_SRC="$REPO/workers/systemd/mushroom-rerate.service.template"
+      RERATE_TIMER_SRC="$REPO/workers/systemd/mushroom-rerate.timer.template"
+      mkdir -p "$LOG_DIR" "$UNIT_DIR"
+      sed -e "s|{{REPO}}|$REPO|g" \
+          -e "s|{{VENV_PYTHON}}|$VENV_PYTHON|g" \
+          -e "s|{{LOG_DIR}}|$LOG_DIR|g" \
+          "$RERATE_SVC_SRC" > "$UNIT_DIR/$RERATE_SVC"
+      cp "$RERATE_TIMER_SRC" "$UNIT_DIR/$RERATE_TIMER"
+      systemctl --user daemon-reload
+      systemctl --user enable --now "$RERATE_TIMER"
+      loginctl enable-linger "$(whoami)" 2>/dev/null || true
+      echo "installed $RERATE_TIMER (systemd --user, fires Sun 02:13 weekly)"
+      systemctl --user list-timers "$RERATE_TIMER" --no-pager
+      ;;
+    uninstall-rerate)
+      systemctl --user disable --now "mushroom-rerate.timer" 2>/dev/null || true
+      rm -f "$UNIT_DIR/mushroom-rerate.timer" "$UNIT_DIR/mushroom-rerate.service"
+      systemctl --user daemon-reload
+      echo "uninstalled mushroom-rerate.timer"
+      ;;
+    run-rerate)
+      systemctl --user start mushroom-rerate.service
+      echo "kicked off mushroom-rerate.service"
+      systemctl --user status mushroom-rerate.service --no-pager || true
+      ;;
+    status-rerate)
+      systemctl --user status mushroom-rerate.timer --no-pager || true
+      systemctl --user list-timers mushroom-rerate.timer --no-pager 2>/dev/null || true
+      ;;
+    logs-rerate)
+      journalctl --user -u mushroom-rerate.service -n 40 -f
+      ;;
     *)
       echo "unknown command: $cmd" >&2
       exit 1

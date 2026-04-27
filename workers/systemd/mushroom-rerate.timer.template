@@ -1,0 +1,13 @@
+[Unit]
+Description=Fire mushroom-rerate weekly (Sunday 02:00)
+Requires=mushroom-rerate.service
+
+[Timer]
+# Once a week at Sun 02:00 local; off-the-hour to dodge global cron piles.
+OnCalendar=Sun *-*-* 02:13:00
+# If the machine was off through the scheduled time, fire on next boot.
+Persistent=true
+RandomizedDelaySec=120s
+
+[Install]
+WantedBy=timers.target

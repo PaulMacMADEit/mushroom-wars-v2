@@ -1,0 +1,15 @@
+[Unit]
+Description=Periodic Elo re-rating for top-30 runs
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{REPO}}
+ExecStart={{VENV_PYTHON}} {{REPO}}/scripts/rate_all_runs.py --include-rated --max-runs 30 --matches 4 --games 64
+StandardOutput=append:{{LOG_DIR}}/rerate.out.log
+StandardError=append:{{LOG_DIR}}/rerate.err.log
+TimeoutStartSec=2h
+
+[Install]
+WantedBy=default.target

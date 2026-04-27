@@ -277,6 +277,47 @@ def _queue_admission_matches(conn, new_run_id, level_name: str = ADMISSION_LEVEL
           f"× {ADMISSION_GAMES_PER_MATCH} games for run {new_run_id}")
 
 
+# Auto-rate config (CURRICULUM_PLAN.md §3.3 — fast Elo seeding so runs land
+# on the dashboard with a real score within minutes of finishing).
+AUTO_RATE_GAMES   = 64    # per match — same as cron-agent's Elo review
+AUTO_RATE_LEVEL   = "random_8_16"
+AUTO_RATE_K       = 32    # standard Elo K
+AUTO_RATE_OPPONENTS_VS_BASELINE = 3   # 3 matches vs random_legal
+
+def _auto_rate_run(run_id: str, label: str) -> None:
+    """Run a quick Elo benchmarking pass for a freshly-finished run.
+
+    Runs N matches vs random_legal (the stable absolute baseline anchored at
+    1000), each updating runs.elo_score via the standard tournament helpers.
+    Reuses the same code path as scripts/tournament.py --update-elo so Elo
+    updates are consistent across all paths (worker / cron / manual).
+
+    Failures here are non-fatal (the cron's Elo review will catch up later).
+    """
+    # Lazy import — keeps the worker startup time low when the function isn't
+    # called (e.g. failed runs).
+    import importlib
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    tournament = importlib.import_module("scripts.tournament")
+
+    print(f"[worker] auto-rate: {label} ({AUTO_RATE_OPPONENTS_VS_BASELINE} matches "
+          f"vs random_legal on {AUTO_RATE_LEVEL})", flush=True)
+    for i in range(AUTO_RATE_OPPONENTS_VS_BASELINE):
+        res = tournament.run_match(
+            p1=run_id, p2="random_legal",
+            games=AUTO_RATE_GAMES, level=AUTO_RATE_LEVEL,
+            max_ticks=200, seed=i, verbose=False,
+        )
+        with connect() as c:
+            new_elo, _ = tournament.update_elo_from_match(
+                c, p1_run_id=run_id, p2_run_id=None,
+                result=res, k=AUTO_RATE_K,
+            )
+        rate = res["p1_wins"] / max(res["total"], 1)
+        print(f"[worker] auto-rate [{i+1}/{AUTO_RATE_OPPONENTS_VS_BASELINE}] "
+              f"vs random_legal: rate={rate:.3f}  Elo→{new_elo:.0f}", flush=True)
+
+
 # ---------------------------------------------------------------------------
 # Match claim + finalize (eval jobs)
 # ---------------------------------------------------------------------------
@@ -992,6 +1033,16 @@ def main():
                     _queue_admission_matches(conn, claimed["id"])
                 except Exception as admit_exc:
                     print(f"[worker] auto-admission failed for {claimed['id']}: {admit_exc}")
+
+            # Auto-rate the newly-done run so it appears on the dashboard
+            # with a real Elo score within ~5 min of finishing — not 3h
+            # later when the cron-agent's Elo review pass picks it up.
+            # 3 matches vs random_legal (the stable baseline) gets us above
+            # ELO_MIN_MATCHES=3 immediately. Each match ~5-7s on GPU.
+            try:
+                _auto_rate_run(claimed["id"], claimed["label"])
+            except Exception as rate_exc:
+                print(f"[worker] auto-rate failed for {claimed['id']}: {rate_exc}")
 
             print(f"[worker] done id={claimed['id']} games={games} "
                   f"wall={wall_ms}ms rate={result['rate']:.3f} "
