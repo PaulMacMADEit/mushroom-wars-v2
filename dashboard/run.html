@@ -25,7 +25,8 @@
 
   <script type="module">
     import { sb, signedUrl, queryParam } from './lib/supabase.js';
-    import { fmtTime, fmtDuration, fmtPct, esc, statusPill } from './lib/ui.js';
+    import { fmtTime, fmtDuration, fmtPct, esc, statusPill,
+             fmtElo, ticksPerMin, totalTicks, fmtBig } from './lib/ui.js';
     import { lineChart } from './lib/chart.js';
 
     const $root = document.getElementById('root');
@@ -70,6 +71,8 @@
       const gamesPerUpd = (run.games_played && updates)
         ? (run.games_played / updates)
         : null;
+      const stepsPerSec = run.result?.steps_per_sec ?? null;
+      const totalTicksRun = totalTicks(run.result, run.hyperparams);
 
       $root.innerHTML = `
         <h2>Run ${esc(run.label)}</h2>
@@ -90,6 +93,10 @@
             <div class="stat-label">rate</div>
           </div>
           <div class="card">
+            <div class="stat">${fmtElo(run.elo_score, run.elo_n_matches)}</div>
+            <div class="stat-label">Elo (matches)</div>
+          </div>
+          <div class="card">
             <div class="stat">${esc(String(run.games_played ?? '—'))}</div>
             <div class="stat-label">games</div>
           </div>
@@ -104,6 +111,14 @@
           <div class="card">
             <div class="stat">${esc(String(updates || '—'))}</div>
             <div class="stat-label">updates</div>
+          </div>
+          <div class="card">
+            <div class="stat">${ticksPerMin(stepsPerSec)}</div>
+            <div class="stat-label">ticks / min</div>
+          </div>
+          <div class="card">
+            <div class="stat">${fmtBig(totalTicksRun)}</div>
+            <div class="stat-label">total ticks</div>
           </div>
           <div class="card">
             <div class="stat">${fmtDuration(run.wall_ms)}</div>
@@ -340,21 +355,26 @@
       }
 
       const timer = setInterval(async () => {
-        const { data: run, error } = await sb.from('runs').select('status, log_url, games_played, wall_ms, result').eq('id', runId).single();
+        const { data: run, error } = await sb.from('runs').select('status, log_url, games_played, wall_ms, result, hyperparams, elo_score, elo_n_matches').eq('id', runId).single();
         if (error) return;
         // Update header stats row.
         const gamesPerMin = (run.games_played && run.wall_ms) ? (run.games_played / (run.wall_ms / 60000)) : null;
         const statEls = document.querySelectorAll('.grid .card .stat');
-        // Header grid order: rate, games, games/min, games/update, updates, wall
-        if (statEls.length >= 6) {
+        // Header grid order: rate, Elo, games, games/min, games/update, updates, ticks/min, total-ticks, wall
+        if (statEls.length >= 9) {
           const u = run.result?.updates ?? 0;
           const gpu = (run.games_played && u) ? (run.games_played / u) : null;
+          const sps = run.result?.steps_per_sec;
+          const tt = totalTicks(run.result, run.hyperparams);
           statEls[0].textContent = (run.result?.rate != null) ? (run.result.rate * 100).toFixed(1) + '%' : '—';
-          statEls[1].textContent = String(run.games_played ?? '—');
-          statEls[2].textContent = gamesPerMin != null ? gamesPerMin.toFixed(0) : '—';
-          statEls[3].textContent = gpu != null ? gpu.toFixed(1) : '—';
-          statEls[4].textContent = String(u || '—');
-          statEls[5].textContent = run.wall_ms ? fmtDurationShort(run.wall_ms) : '—';
+          statEls[1].innerHTML    = fmtElo(run.elo_score, run.elo_n_matches);
+          statEls[2].textContent = String(run.games_played ?? '—');
+          statEls[3].textContent = gamesPerMin != null ? gamesPerMin.toFixed(0) : '—';
+          statEls[4].textContent = gpu != null ? gpu.toFixed(1) : '—';
+          statEls[5].textContent = String(u || '—');
+          statEls[6].textContent = ticksPerMin(sps);
+          statEls[7].textContent = fmtBig(tt);
+          statEls[8].textContent = run.wall_ms ? fmtDurationShort(run.wall_ms) : '—';
         }
         // Refresh charts with the latest live log.
         await refreshCharts(signedUrl(run.log_url), chartIds, failAllCharts);

@@ -20,6 +20,11 @@
   </header>
 
   <main>
+    <h2>Champion</h2>
+    <div class="card" id="champion">
+      <div class="muted">Loading…</div>
+    </div>
+
     <h2>Status</h2>
     <div class="grid" id="stats">
       <div class="card"><div class="stat-label">Loading…</div></div>
@@ -38,11 +43,13 @@
 
   <script type="module">
     import { sb } from './lib/supabase.js';
-    import { fmtTime, fmtDuration, fmtPct, esc, statusPill, tr } from './lib/ui.js';
+    import { fmtTime, fmtDuration, fmtPct, esc, statusPill, tr,
+             fmtElo, ticksPerMin, totalTicks, fmtBig } from './lib/ui.js';
 
-    const $stats   = document.getElementById('stats');
-    const $workers = document.getElementById('workers');
-    const $recent  = document.getElementById('recent-runs');
+    const $stats     = document.getElementById('stats');
+    const $workers   = document.getElementById('workers');
+    const $recent    = document.getElementById('recent-runs');
+    const $champion  = document.getElementById('champion');
 
     // Friendly labels for the two known machines. Anything else still shows
     // with its raw hostname.
@@ -101,12 +108,63 @@
       });
     }
 
+    async function loadChampion() {
+      // Top run by Elo (with at least 3 matches) — that's the cron-agent's
+      // champion-of-record. Falls back to "highest result.rate done" if no
+      // run has been Elo-rated yet.
+      const { data: top, error } = await sb
+        .from('runs')
+        .select('id, label, model_id, simulator_id, machine, hyperparams, result, elo_score, elo_n_matches, wall_ms, games_played, finished_at')
+        .eq('status', 'done')
+        .gte('elo_n_matches', 3)
+        .order('elo_score', { ascending: false })
+        .limit(1);
+      if (error) {
+        $champion.innerHTML = `<div class="error">error: ${esc(error.message)}</div>`;
+        return;
+      }
+      let r = top && top[0];
+      if (!r) {
+        // Bootstrap: no Elo champ yet; show top by result.rate.
+        const fallback = await sb
+          .from('runs')
+          .select('id, label, model_id, simulator_id, machine, hyperparams, result, elo_score, elo_n_matches, wall_ms, games_played, finished_at')
+          .eq('status', 'done')
+          .order('result->rate', { ascending: false, nullsFirst: false })
+          .limit(1);
+        if (fallback.error || !fallback.data || !fallback.data.length) {
+          $champion.innerHTML = `<div class="muted">no done runs yet</div>`;
+          return;
+        }
+        r = fallback.data[0];
+      }
+      const sps  = r.result?.steps_per_sec;
+      const tt   = totalTicks(r.result, r.hyperparams);
+      const rate = r.result?.rate;
+      $champion.innerHTML = `
+        <div style="display:flex; gap:24px; flex-wrap:wrap; align-items:center;">
+          <div>
+            <div class="stat-label">leader</div>
+            <div><a href="./run.html?id=${esc(r.id)}"><strong>${esc(r.label)}</strong></a></div>
+            <div class="muted small">${esc(r.model_id)} · ${esc(r.simulator_id)}</div>
+          </div>
+          <div><div class="stat-label">Elo</div><div class="stat">${fmtElo(r.elo_score, r.elo_n_matches)}</div></div>
+          <div><div class="stat-label">rate</div><div class="stat">${fmtPct(rate)}</div></div>
+          <div><div class="stat-label">updates</div><div class="stat">${esc(String(r.result?.updates ?? '—'))}</div></div>
+          <div><div class="stat-label">games</div><div class="stat">${(r.games_played ?? 0).toLocaleString()}</div></div>
+          <div><div class="stat-label">ticks/min</div><div class="stat">${ticksPerMin(sps)}</div></div>
+          <div><div class="stat-label">train time</div><div class="stat">${fmtDuration(r.wall_ms)}</div></div>
+          <div><div class="stat-label">total ticks</div><div class="stat">${fmtBig(tt)}</div></div>
+        </div>
+      `;
+    }
+
     async function loadStats() {
       const [runs, models, sims, doneRuns] = await Promise.all([
         sb.from('runs').select('status', { count: 'exact', head: false }),
         sb.from('models').select('id', { count: 'exact', head: true }),
         sb.from('simulators').select('id', { count: 'exact', head: true }),
-        sb.from('runs').select('games_played, wall_ms').eq('status', 'done'),
+        sb.from('runs').select('games_played, wall_ms, hyperparams, result, elo_n_matches').eq('status', 'done'),
       ]);
       if (runs.error || models.error || sims.error || doneRuns.error) {
         $stats.innerHTML = `<div class="card error">error: ${esc(runs.error?.message ?? models.error?.message ?? sims.error?.message ?? doneRuns.error?.message)}</div>`;
@@ -116,12 +174,18 @@
       for (const r of runs.data) byStatus[r.status] = (byStatus[r.status] || 0) + 1;
 
       // Aggregates over completed runs.
-      let totalGames = 0, totalWallMs = 0;
+      let totalGames = 0, totalWallMs = 0, totalTicksAll = 0, eloRated = 0, sumStepsPerSec = 0, sumStepsCount = 0;
       for (const r of doneRuns.data) {
         totalGames   += (r.games_played ?? 0);
         totalWallMs  += (r.wall_ms ?? 0);
+        const tt = totalTicks(r.result, r.hyperparams);
+        if (tt) totalTicksAll += tt;
+        if ((r.elo_n_matches ?? 0) >= 3) eloRated++;
+        const sps = r.result?.steps_per_sec;
+        if (sps != null) { sumStepsPerSec += sps; sumStepsCount++; }
       }
       const avgGpm = totalWallMs > 0 ? (totalGames / (totalWallMs / 60000)) : 0;
+      const avgTpm = sumStepsCount > 0 ? (sumStepsPerSec / sumStepsCount) * 60 : 0;
 
       const cells = [
         ['models',            models.count],
@@ -131,21 +195,24 @@
         ['running',           byStatus.running || 0],
         ['done',              byStatus.done    || 0],
         ['failed',            byStatus.failed  || 0],
+        ['Elo-rated',         eloRated],
         ['games trained',     totalGames.toLocaleString()],
+        ['total ticks',       fmtBig(totalTicksAll)],
         ['avg games/min',     avgGpm.toFixed(0)],
+        ['avg ticks/min',     fmtBig(Math.round(avgTpm))],
         ['total train time',  fmtDuration(totalWallMs)],
       ];
       $stats.innerHTML = cells.map(([label, v]) =>
-        `<div class="card"><div class="stat">${esc(String(v))}</div><div class="stat-label">${esc(label)}</div></div>`
+        `<div class="card"><div class="stat">${typeof v === 'string' && v.startsWith('<') ? v : esc(String(v))}</div><div class="stat-label">${esc(label)}</div></div>`
       ).join('');
     }
 
     async function loadRecentRuns() {
       const { data, error } = await sb
         .from('runs')
-        .select('id, label, status, machine, model_id, wall_ms, queued_at, result')
+        .select('id, label, status, machine, model_id, simulator_id, wall_ms, queued_at, result, hyperparams, elo_score, elo_n_matches')
         .order('queued_at', { ascending: false })
-        .limit(15);
+        .limit(20);
       if (error) {
         $recent.innerHTML = `<div class="error">error: ${esc(error.message)}</div>`;
         return;
@@ -154,25 +221,33 @@
         $recent.innerHTML = `<div class="muted">no runs yet — push one with <span class="inline-code">python cli/push_experiments.py</span></div>`;
         return;
       }
-      const rows = data.map(r => tr([
-        statusPill(r.status),
-        `<a href="./run.html?id=${esc(r.id)}">${esc(r.label)}</a>`,
-        `<span class="mono">${esc(r.model_id)}</span>`,
-        `<span class="mono">${esc(r.machine)}</span>`,
-        fmtDuration(r.wall_ms),
-        fmtPct(r.result?.rate),
-        `<span class="muted">${fmtTime(r.queued_at)}</span>`,
-      ]));
+      const rows = data.map(r => {
+        const sps = r.result?.steps_per_sec;
+        return tr([
+          statusPill(r.status),
+          `<a href="./run.html?id=${esc(r.id)}">${esc(r.label)}</a>`,
+          `<span class="mono">${esc(r.model_id)}</span>`,
+          `<span class="mono small">${esc(r.simulator_id ?? '')}</span>`,
+          `<span class="mono">${esc(r.machine ?? '')}</span>`,
+          fmtDuration(r.wall_ms),
+          `<span class="mono">${esc(String(r.result?.updates ?? '—'))}</span>`,
+          fmtPct(r.result?.rate),
+          `<span class="mono">${fmtElo(r.elo_score, r.elo_n_matches)}</span>`,
+          `<span class="mono">${ticksPerMin(sps)}</span>`,
+          `<span class="muted">${fmtTime(r.queued_at)}</span>`,
+        ]);
+      });
       $recent.innerHTML = `
         <table>
           <thead><tr>
-            <th>status</th><th>label</th><th>model</th><th>machine</th>
-            <th>wall</th><th>rate</th><th>queued</th>
+            <th>status</th><th>label</th><th>model</th><th>sim</th><th>machine</th>
+            <th>wall</th><th>updates</th><th>rate</th><th>Elo (n)</th><th>ticks/min</th><th>queued</th>
           </tr></thead>
           <tbody>${rows.join('')}</tbody>
         </table>`;
     }
 
+    loadChampion().catch(e => $champion.innerHTML = `<div class="error">${esc(e.message)}</div>`);
     loadStats().catch(e => $stats.innerHTML  = `<div class="card error">${esc(e.message)}</div>`);
     loadWorkers().catch(e => $workers.innerHTML = `<div class="error">${esc(e.message)}</div>`);
     loadRecentRuns().catch(e => $recent.innerHTML = `<div class="error">${esc(e.message)}</div>`);

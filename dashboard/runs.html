@@ -51,7 +51,8 @@
   <script type="module">
     import { sb } from './lib/supabase.js';
     import { fmtTime, fmtDuration, fmtPct, esc, statusPill, tr,
-             gamesPerSec, fmtParams, bottleneckPill } from './lib/ui.js';
+             gamesPerSec, fmtParams, bottleneckPill,
+             fmtElo, ticksPerMin } from './lib/ui.js';
 
     const $runs = document.getElementById('runs');
     const $status = document.getElementById('filter-status');
@@ -62,7 +63,7 @@
     async function load() {
       $runs.innerHTML = `<div class="muted">loading…</div>`;
       let q = sb.from('runs')
-        .select('id, label, status, machine, model_id, simulator_id, seed, wall_ms, games_played, queued_at, result')
+        .select('id, label, status, machine, model_id, simulator_id, seed, wall_ms, games_played, queued_at, result, elo_score, elo_n_matches')
         .order('queued_at', { ascending: false })
         .limit(100);
       if ($status.value) q = q.eq('status', $status.value);
@@ -78,20 +79,23 @@
         `<span class="mono">${esc(r.simulator_id)}</span>`,
         `<span class="mono">${fmtParams(r.result?.param_count)}</span>`,
         `<span class="mono">${gamesPerSec(r.result, r.games_played, r.wall_ms)}</span>`,
+        `<span class="mono">${ticksPerMin(r.result?.steps_per_sec)}</span>`,
         bottleneckPill(r.result?.resource_usage?.bottleneck),
         `<span class="mono">${esc(r.seed || '')}</span>`,
         `<span class="mono">${esc(r.machine)}</span>`,
         fmtDuration(r.wall_ms),
+        `<span class="mono">${esc(String(r.result?.updates ?? '—'))}</span>`,
         esc(String(r.games_played ?? '—')),
         fmtPct(r.result?.rate),
+        `<span class="mono">${fmtElo(r.elo_score, r.elo_n_matches)}</span>`,
         `<span class="muted">${fmtTime(r.queued_at)}</span>`,
       ]));
       $runs.innerHTML = `
         <table>
           <thead><tr>
             <th>status</th><th>label</th><th>model</th><th>sim</th><th>params</th>
-            <th>g/s</th><th>bottleneck</th>
-            <th>seed</th><th>machine</th><th>wall</th><th>games</th><th>rate</th><th>queued</th>
+            <th>g/s</th><th>ticks/min</th><th>bottleneck</th>
+            <th>seed</th><th>machine</th><th>wall</th><th>upd</th><th>games</th><th>rate</th><th>Elo (n)</th><th>queued</th>
           </tr></thead>
           <tbody>${rows.join('')}</tbody>
         </table>

@@ -75,6 +75,43 @@ export function fmtParams(n) {
   return String(n);
 }
 
+/** Format Elo score + match count → "1243 (3 matches)" or "—". */
+export function fmtElo(score, nMatches) {
+  if (score == null) return '—';
+  const s = Math.round(score);
+  const n = nMatches ?? 0;
+  return `${s}` + (n > 0 ? ` <span class="muted small">(${n})</span>` : '');
+}
+
+/** Convert steps_per_sec → "144k/min" / "2.4M/min" for display. */
+export function ticksPerMin(stepsPerSec) {
+  if (stepsPerSec == null) return '—';
+  const tpm = stepsPerSec * 60;
+  if (tpm >= 1e6) return (tpm / 1e6).toFixed(1) + 'M';
+  if (tpm >= 1e3) return Math.round(tpm / 1e3) + 'k';
+  return Math.round(tpm).toString();
+}
+
+/** Total ticks across a run = updates × n_envs × rollout_steps × action_repeat (default K=1). */
+export function totalTicks(result, hyperparams) {
+  if (!result || !hyperparams) return null;
+  const u = result.updates ?? 0;
+  const n = hyperparams.n_envs ?? 0;
+  const r = hyperparams.rollout_steps ?? 0;
+  const k = hyperparams.action_repeat ?? 1;
+  if (!u || !n || !r) return null;
+  return u * n * r * k;
+}
+
+/** Big-int → "1.2k" / "85M" / "1.4B". */
+export function fmtBig(n) {
+  if (n == null) return '—';
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return String(n);
+}
+
 /** Compact bottleneck pill. */
 export function bottleneckPill(b) {
   const tone = {
