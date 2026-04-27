@@ -20,6 +20,11 @@
   </header>
 
   <main>
+    <h2>Curriculum</h2>
+    <div class="card" id="curriculum">
+      <div class="muted">Loading…</div>
+    </div>
+
     <h2>Champion</h2>
     <div class="card" id="champion">
       <div class="muted">Loading…</div>
@@ -60,6 +65,7 @@
     const $stats     = document.getElementById('stats');
     const $workers   = document.getElementById('workers');
     const $champion  = document.getElementById('champion');
+    const $curriculum = document.getElementById('curriculum');
     const $tabCompleted = document.getElementById('tab-completed');
     const $tabUpcoming  = document.getElementById('tab-upcoming');
     const $countCompleted = document.getElementById('completed-count');
@@ -136,6 +142,33 @@
           loadWorkers();
         });
       });
+    }
+
+    async function loadCurriculum() {
+      const { data, error } = await sb
+        .from('kv')
+        .select('key, value, updated_at')
+        .order('key');
+      if (error) {
+        $curriculum.innerHTML = `<div class="error">${esc(error.message)}</div>`;
+        return;
+      }
+      if (!data || !data.length) {
+        $curriculum.innerHTML = `<div class="muted">no curriculum state yet (kv table empty)</div>`;
+        return;
+      }
+      const phaseRow = data.find(r => r.key === 'curriculum_phase');
+      const advRow   = data.find(r => r.key === 'curriculum_phase_advanced_at');
+      const phase = phaseRow?.value ?? '?';
+      const advAt = advRow?.value;
+      const updatedAt = phaseRow?.updated_at;
+      $curriculum.innerHTML = `
+        <div style="display:flex; gap:24px; flex-wrap:wrap; align-items:center;">
+          <div><div class="stat-label">phase</div><div class="stat">${esc(phase)}</div></div>
+          ${advAt ? `<div><div class="stat-label">graduated</div><div>${fmtTime(advAt)}</div></div>` : ''}
+          <div><div class="stat-label">last update</div><div class="muted">${updatedAt ? fmtTime(updatedAt) : '—'}</div></div>
+        </div>
+      `;
     }
 
     async function loadChampion() {
@@ -310,6 +343,7 @@
         </table>`;
     }
 
+    loadCurriculum().catch(e => $curriculum.innerHTML = `<div class="error">${esc(e.message)}</div>`);
     loadChampion().catch(e => $champion.innerHTML = `<div class="error">${esc(e.message)}</div>`);
     loadStats().catch(e => $stats.innerHTML  = `<div class="card error">${esc(e.message)}</div>`);
     loadWorkers().catch(e => $workers.innerHTML = `<div class="error">${esc(e.message)}</div>`);
