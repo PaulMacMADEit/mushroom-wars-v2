@@ -61,8 +61,27 @@ def _gen_state_batch(
     level_name: str,
     seeds: np.ndarray,
     reward_version: int = C.REWARD_VERSION_V12,
+    level_mix: list[tuple[str, float]] | None = None,
+    rng: np.random.Generator | None = None,
 ) -> list[State]:
-    """Regenerate numpy States for a batch of seeds. CPU-only."""
+    """Regenerate numpy States for a batch of seeds. CPU-only.
+
+    `level_mix`: optional list of (level_name, weight) pairs. When provided,
+    each generated state samples its level independently from this mix
+    (reproducible under the supplied `rng`). `level_name` is ignored in this
+    case but kept as a fallback for callers that pass mix=None.
+    """
+    if level_mix:
+        if rng is None:
+            rng = np.random.default_rng(int(seeds[0]) if len(seeds) else 0)
+        names  = [n for n, _ in level_mix]
+        probs  = np.asarray([w for _, w in level_mix], dtype=np.float64)
+        probs  = probs / probs.sum()
+        choices = rng.choice(len(names), size=len(seeds), p=probs)
+        return [
+            level_reset(names[int(c)], seed=int(s), reward_version=reward_version)
+            for c, s in zip(choices, seeds)
+        ]
     return [
         level_reset(level_name, seed=int(s), reward_version=reward_version)
         for s in seeds
@@ -197,17 +216,24 @@ class JaxVecEnv:
         level_name: str = "crossroads_6",
         base_seed: int = 0,
         reward_version: int = C.REWARD_VERSION_V12,
+        level_mix: list[tuple[str, float]] | None = None,
     ):
         self.n_envs = int(n_envs)
         self.level_name = str(level_name)
         self.reward_version = int(reward_version)
+        # When level_mix is set, each (re)generated env picks a level from the
+        # distribution. Each tuple is (level_name, weight); weights normalised.
+        self.level_mix = list(level_mix) if level_mix else None
         self._rng = np.random.default_rng(base_seed)
         self._next_reset_seed = int(base_seed)
 
         # Build the first batch.
         initial_seeds = np.arange(self.n_envs, dtype=np.int64) + int(base_seed)
         self.state: StateJax = _stack_states(
-            _gen_state_batch(self.level_name, initial_seeds, self.reward_version)
+            _gen_state_batch(
+                self.level_name, initial_seeds, self.reward_version,
+                level_mix=self.level_mix, rng=self._rng,
+            )
         )
         self._next_reset_seed += self.n_envs
 
@@ -225,7 +251,10 @@ class JaxVecEnv:
             if arr.shape != (self.n_envs,):
                 raise ValueError(f"seeds must have length {self.n_envs}, got {arr.shape}")
         self.state = _stack_states(
-            _gen_state_batch(self.level_name, arr, self.reward_version)
+            _gen_state_batch(
+                self.level_name, arr, self.reward_version,
+                level_mix=self.level_mix, rng=self._rng,
+            )
         )
 
     def step(self, actions: np.ndarray) -> JaxVecStepResult:
@@ -399,7 +428,10 @@ class JaxVecEnv:
         seeds = np.arange(n, dtype=np.int64) + self._next_reset_seed
         self._next_reset_seed += n
         fresh = _stack_states(
-            _gen_state_batch(self.level_name, seeds, self.reward_version)
+            _gen_state_batch(
+                self.level_name, seeds, self.reward_version,
+                level_mix=self.level_mix, rng=self._rng,
+            )
         )  # (n, …)
 
         # Build a (n_envs,) bool mask + scatter each field.

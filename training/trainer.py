@@ -80,6 +80,11 @@ class PPOConfig:
     # -0.5, 4x speed bonus). Set the per-state reward_version flag at env
     # construction; engine indexes into REWARD_*_BY_VERSION accordingly.
     reward_v13:           bool  = False
+    # Optional per-env level distribution. None → all envs use cfg.level_name
+    # (back-compat). Otherwise: list of (name, weight) pairs; each env (re)reset
+    # samples from this mix. Only honoured by SIM_BACKEND=jax — the numpy
+    # AsyncVectorEnv path uses level_name per factory.
+    level_mix: list | None = None
 
 
 class PPOTrainer:
@@ -171,6 +176,15 @@ class PPOTrainer:
         backend = get_backend_name()
 
         rv = 1 if self.cfg.reward_v13 else 0
+        # Normalise level_mix from a possibly-jsonified dict into a list of
+        # (name, weight) tuples. Accept dict {name: weight} or list[[name, w]].
+        level_mix = None
+        if self.cfg.level_mix:
+            raw = self.cfg.level_mix
+            if isinstance(raw, dict):
+                level_mix = [(str(k), float(v)) for k, v in raw.items()]
+            else:
+                level_mix = [(str(item[0]), float(item[1])) for item in raw]
         if backend == "jax":
             # JaxVecEnv is a single-process, one-opponent env. Per-env neural
             # opponent specs (self-play pool) aren't supported on this path
@@ -188,6 +202,7 @@ class PPOTrainer:
                 opponent_name=self._initial_opponent_name,
                 opponent_kwargs=self._initial_opponent_kwargs or None,
                 reward_version=rv,
+                level_mix=level_mix,
             )
         else:
             factories = []

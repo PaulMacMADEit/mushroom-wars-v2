@@ -57,18 +57,36 @@ DEFAULT_CFG = {
 DEFAULT_MODEL_ID = "v9.0-1024"
 DEFAULT_SIM_ID   = "sim-v1.3"
 
-# Curriculum (CURRICULUM_PLAN.md §3.2). One row per phase.
+# Curriculum (CURRICULUM_PLAN.md §3.2, revised post-b5).
+#
+# Original phase1_close was dropped after b5 evidence (2026-04-26 21:00 PDT):
+# building-count, NOT map size, is the binding constraint on transfer. A
+# random_close_6_10 specialist hit 91% on close maps but only 5% on
+# random_16_24. So phase1 now trains directly on the FULL distribution and
+# graduation requires generalist skill (≥80% on each of 4_8 / 8_16 / 16_24).
 CURRICULUM = {
-    "phase1_close": {
-        "levels":       {"random_close_4_6": 0.5, "random_close_6_10": 0.5},
+    "phase1_full_mix": {
+        # Single env per run trains on a level mix (per-env sampling) so a
+        # single rollout sees buildings from 4 → 24. The trainer reads
+        # cfg.level_mix; cfg.level_name is unused when level_mix is set but
+        # kept as a label.
+        "level_name":   "random_full_mix",
+        "level_mix":    {"random_4_8":  0.20,
+                         "random_6_10": 0.20,
+                         "random_8_16": 0.30,
+                         "random_16_24": 0.30},
         "K":            4,
         "opponent_mix": {"random_legal": 1.0},
         "reward_v13":   True,
         "gamma":        0.97,
     },
-    "phase2_wild": {
-        "levels":       {"random_4_8":  0.20, "random_6_10": 0.30,
-                         "random_8_16": 0.30, "random_16_24": 0.20},
+    "phase2_selfplay": {
+        # Same level mix; opponent flips to Elo champion.
+        "level_name":   "random_full_mix",
+        "level_mix":    {"random_4_8":  0.20,
+                         "random_6_10": 0.20,
+                         "random_8_16": 0.30,
+                         "random_16_24": 0.30},
         "K":            2,
         "opponent_mix": {"self_play_elo_champ": 0.80,
                          "leaderboard_top3":    0.15,
@@ -78,7 +96,11 @@ CURRICULUM = {
     },
 }
 
-GRADUATION_THRESHOLD = 0.95   # ≥ 95% vs random_legal for 100 games → graduate
+# Graduation: champion must clear THIS threshold on EACH check level vs
+# random_legal. Multi-level gate replaces the single-level 0.95 of the
+# original plan — generalist skill is what we need, not point-on-curve.
+GRADUATION_THRESHOLD = 0.80
+GRADUATION_LEVELS    = ("random_4_8", "random_8_16", "random_16_24")
 GRADUATION_GAMES     = 100
 ELO_MIN_MATCHES      = 3      # need at least this many head-to-heads to pick champion
 ELO_REVIEW_PER_FIRE  = 5      # max NEW unrated runs to score per cron fire (cost cap)
@@ -300,71 +322,84 @@ def _check_graduation_to_phase2(
     champion: dict | None,
     dry_run: bool,
 ) -> bool:
-    """If we have an Elo champion, run a 100-game eval vs random_legal.
-    Returns True if we should advance to phase2 (rate ≥ GRADUATION_THRESHOLD)."""
+    """If we have an Elo champion, run a 100-game eval vs random_legal at each
+    graduation level. Returns True only if rate ≥ GRADUATION_THRESHOLD on EVERY
+    level (multi-level generalist gate, post-b5 design)."""
     if champion is None:
-        print("  graduation check: no Elo champion yet — staying in phase1_close")
+        print("  graduation check: no Elo champion yet — staying in phase1")
         return False
     if dry_run:
-        print(f"  [dry-run] graduation check would eval {champion['label']} vs random_legal "
-              f"({GRADUATION_GAMES} games)")
+        print(f"  [dry-run] graduation would eval {champion['label']} vs random_legal "
+              f"on {GRADUATION_LEVELS} ({GRADUATION_GAMES} games each)")
         return False
-    print(f"  graduation check: eval {champion['label']} vs random_legal ({GRADUATION_GAMES} games)")
-    cmd = [
-        str(ROOT / ".venv" / "bin" / "python"),
-        str(ROOT / "scripts" / "eval_vs_random.py"),
-        "--p1",   champion["id"],
-        "--games", str(GRADUATION_GAMES),
-        "--level", "random_8_16",
-    ]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-    except subprocess.TimeoutExpired:
-        print("    (eval timeout — keeping current phase)")
-        return False
-    if proc.returncode != 0:
-        print(f"    (eval failed rc={proc.returncode})")
-        print(proc.stderr[-500:])
-        return False
-    # Last line is JSON.
-    last_line = proc.stdout.strip().splitlines()[-1]
-    try:
-        result = json.loads(last_line)
-    except Exception:
-        print(f"    (couldn't parse eval JSON; stdout tail: {last_line[:200]})")
-        return False
-    rate = result.get("win_rate", 0.0)
-    print(f"    win_rate vs random_legal = {rate:.3f}")
-    return rate >= GRADUATION_THRESHOLD
+
+    rates = {}
+    for level in GRADUATION_LEVELS:
+        print(f"  graduation check: eval {champion['label']} vs random_legal "
+              f"on {level} ({GRADUATION_GAMES} games)")
+        cmd = [
+            str(ROOT / ".venv" / "bin" / "python"),
+            str(ROOT / "scripts" / "eval_vs_random.py"),
+            "--p1",   champion["id"],
+            "--games", str(GRADUATION_GAMES),
+            "--level", level,
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
+        except subprocess.TimeoutExpired:
+            print("    (eval timeout — keeping current phase)")
+            return False
+        if proc.returncode != 0:
+            print(f"    (eval failed rc={proc.returncode})")
+            print(proc.stderr[-500:])
+            return False
+        last_line = proc.stdout.strip().splitlines()[-1]
+        try:
+            result = json.loads(last_line)
+        except Exception:
+            print(f"    (couldn't parse eval JSON; stdout tail: {last_line[:200]})")
+            return False
+        rate = result.get("win_rate", 0.0)
+        rates[level] = rate
+        print(f"    win_rate vs random_legal on {level} = {rate:.3f}")
+
+    pass_all = all(r >= GRADUATION_THRESHOLD for r in rates.values())
+    print(f"  graduation: {'PASS' if pass_all else 'FAIL'} "
+          f"(threshold {GRADUATION_THRESHOLD:.2f}, rates={rates})")
+    return pass_all
 
 
 def _decide_curriculum_phase(conn, dry_run: bool) -> str:
     """Resolve current curriculum phase from the kv table; promote if eligible."""
-    current = _kv_get(conn, "curriculum_phase", default="phase1_close")
+    current = _kv_get(conn, "curriculum_phase", default="phase1_full_mix")
+    # Migrate stale phase names from earlier designs.
+    if current in ("phase1_small", "phase1_close"):
+        current = "phase1_full_mix"
+        if not dry_run:
+            _kv_set(conn, "curriculum_phase", current)
+    if current == "phase2_wild":
+        # Old name → new name.
+        current = "phase2_selfplay"
+        if not dry_run:
+            _kv_set(conn, "curriculum_phase", current)
     if current not in CURRICULUM:
-        # Unknown / corrupt value; default to phase1_close.
-        current = "phase1_close"
+        current = "phase1_full_mix"
         if not dry_run:
             _kv_set(conn, "curriculum_phase", current)
 
-    if current == "phase2_wild":
+    if current == "phase2_selfplay":
         return current
 
-    # We're in phase1_close — check if we can graduate.
+    # We're in phase1 — check if we can graduate.
     champ = _read_top_elo_runs(conn, limit=1)
     champion = champ[0] if champ else None
     if _check_graduation_to_phase2(conn, champion, dry_run):
         if not dry_run:
-            _kv_set(conn, "curriculum_phase", "phase2_wild")
+            _kv_set(conn, "curriculum_phase", "phase2_selfplay")
             _kv_set(conn, "curriculum_phase_advanced_at", _utc_now().isoformat())
-        print("  *** graduating to phase2_wild ***")
-        return "phase2_wild"
-    return "phase1_close"
-
-
-def _pick_level(phase: str, rng: random.Random) -> str:
-    weights = CURRICULUM[phase]["levels"]
-    return rng.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
+        print("  *** graduating to phase2_selfplay ***")
+        return "phase2_selfplay"
+    return "phase1_full_mix"
 
 
 def _pick_opponent_for_run(
@@ -415,26 +450,31 @@ def _decide_next_batch(
     elo_top: list[dict],
     rng: random.Random,
 ) -> list[dict]:
-    """Build the next ~6h batch (14 runs)."""
+    """Build the next ~6h batch (14 runs).
+
+    Each run uses the phase's `level_mix` so a single rollout sees the full
+    building-count distribution (4 → 24). cfg.level_name is a label only.
+    """
     cfg_phase = CURRICULUM[phase]
     base_cfg = {
         **DEFAULT_CFG,
         "action_repeat": cfg_phase["K"],
         "reward_v13":    cfg_phase["reward_v13"],
         "gamma":         cfg_phase["gamma"],
+        "level_name":    cfg_phase["level_name"],
+        "level_mix":     cfg_phase["level_mix"],
     }
 
     runs = []
     epoch = _utc_now().strftime("%y%m%d-%H%M")
 
     def _make_run(label_suffix: str, minutes: int, notes: str):
-        level = _pick_level(phase, rng)
         opp_name, opp_kwargs = _pick_opponent_for_run(phase, rng, elo_champion, elo_top)
         return {
             "label":   f"cron-{epoch}-{phase}-{label_suffix}",
             "minutes": minutes,
             "seed":    str(rng.randint(0, 2**31 - 1)),
-            "config":  {**base_cfg, "level_name": level},
+            "config":  dict(base_cfg),
             "opponent_name":   opp_name,
             "opponent_kwargs": opp_kwargs,
             "notes":   notes,
@@ -446,15 +486,15 @@ def _decide_next_batch(
     # 4 medium runs (30 min × 4 = 120 min)
     for i in range(4):
         runs.append(_make_run(f"med-{i:02d}", 30, f"phase={phase} medium"))
-    # 3 self-play runs (30 min × 3 = 90 min). Forced to use the champion.
-    if elo_champion is not None and phase == "phase2_wild":
+    # 3 long runs (60 min × 3 = 180 min). In phase1 these are extra random_legal
+    # endurance probes; in phase2 they're forced self-play vs the Elo champion.
+    if elo_champion is not None and phase == "phase2_selfplay":
         for i in range(3):
-            level = _pick_level(phase, rng)
             runs.append({
                 "label":   f"cron-{epoch}-{phase}-selfplay-{i:02d}",
-                "minutes": 30,
+                "minutes": 60,
                 "seed":    str(rng.randint(0, 2**31 - 1)),
-                "config":  {**base_cfg, "level_name": level},
+                "config":  dict(base_cfg),
                 "opponent_name":   "neural",
                 "opponent_kwargs": {
                     "opponent_run_id": elo_champion["id"],
@@ -462,10 +502,9 @@ def _decide_next_batch(
                 },
                 "notes":  f"phase={phase} self-play vs Elo champion",
             })
-    elif phase == "phase1_close":
-        # Phase 1 has no champion path; just queue 3 more medium runs vs random.
+    else:
         for i in range(3):
-            runs.append(_make_run(f"med-extra-{i:02d}", 30, f"phase={phase} extra medium"))
+            runs.append(_make_run(f"long-{i:02d}", 60, f"phase={phase} 1h long"))
 
     # 1 endurance run (60 min) — same opponent_mix sampling.
     runs.append(_make_run("endurance", 60, f"phase={phase} 1h endurance"))
