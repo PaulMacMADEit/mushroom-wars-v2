@@ -258,7 +258,7 @@
         if (m.status === 'done') {
           setStatus('working', 'Loading replays...');
           const { data: games } = await sb.from('games')
-            .select('id, game_index, winner, duration_ms, actions_url, player_1_run_id')
+            .select('id, game_index, winner, duration_ms, actions_url, player_1_run_id, player_2_run_id, stats')
             .eq('match_id', matchId)
             .order('game_index', { ascending: true });
           if (!games || games.length === 0) {
@@ -266,15 +266,32 @@
             setStatus('error', 'Match finished but no replays were uploaded.');
             return;
           }
-          // Render results table; let the user click into any individual game.
-          const winsP1 = games.filter(g => g.winner === g.player_1_run_id).length;
-          const draws  = games.filter(g => g.winner === null).length;
-          const winsP2 = games.length - winsP1 - draws;
-          const rows = games.map(g => {
+          // Use engine phase (1=P1 wins, 2=P2 wins, 3=draw) so the count is
+          // correct even in true self-play (where winner==P1==P2 by run id).
+          // Falls back to run-id comparison if stats.phase is missing.
+          function sideOf(g) {
+            const phase = g.stats?.phase;
+            if (phase === 1) return 'p1';
+            if (phase === 2) return 'p2';
+            if (phase === 3 || g.winner === null) return 'draw';
+            // fallback: when winner == both run ids (self-play), we can't tell — call it draw.
+            if (g.winner === g.player_1_run_id && g.winner === g.player_2_run_id) return '?';
+            if (g.winner === g.player_1_run_id) return 'p1';
+            if (g.winner === g.player_2_run_id) return 'p2';
+            return 'draw';
+          }
+          const sides = games.map(sideOf);
+          const winsP1 = sides.filter(s => s === 'p1').length;
+          const winsP2 = sides.filter(s => s === 'p2').length;
+          const draws  = sides.filter(s => s === 'draw').length;
+          const isSelfPlay = games[0]?.player_1_run_id === games[0]?.player_2_run_id;
+          const rows = games.map((g, i) => {
             const url = g.actions_url ? publicUrl(g.actions_url) : null;
             const dur = g.duration_ms ? `${(g.duration_ms / 1000).toFixed(1)}s` : '—';
-            const winnerStr = g.winner === null ? 'draw'
-                            : g.winner === g.player_1_run_id ? 'P1 wins' : 'P2 wins';
+            const swapped = g.stats?.swapped === true;
+            const sideLabel = sides[i] === 'p1' ? 'P1' : sides[i] === 'p2' ? 'P2' : sides[i];
+            const winnerStr = sides[i] === 'draw' ? 'draw'
+                            : `${sideLabel} wins${swapped ? ' (sides swapped)' : ''}`;
             const link = url ? `<a href="./game.html?url=${encodeURIComponent(url)}">replay</a>` : '—';
             return `<tr>
               <td><span class="mono">#${g.game_index + 1}</span></td>
@@ -283,10 +300,20 @@
               <td>${link}</td>
             </tr>`;
           }).join('');
+          // Self-play note: with the same model on both sides, P1/P2 imbalance
+          // measures map asymmetry, not skill. asym_* levels are intentionally
+          // unfair (so P1 should win > 50% on average). Symmetric levels
+          // should hover near 50/50.
+          const selfPlayNote = isSelfPlay
+            ? `<div class="muted small" style="margin-top:6px;">
+                 Self-play: same model on both sides. P1/P2 imbalance reflects
+                 the level's spatial bias, not skill.
+               </div>` : '';
           $status.innerHTML = `
             <div style="margin-bottom:10px;">
               <strong>Match done</strong>: P1 ${winsP1} · P2 ${winsP2} · draws ${draws}
             </div>
+            ${selfPlayNote}
             <table style="margin-top:8px;">
               <thead><tr><th>game</th><th>result</th><th>duration</th><th></th></tr></thead>
               <tbody>${rows}</tbody>

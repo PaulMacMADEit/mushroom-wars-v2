@@ -307,17 +307,57 @@ def run_match(
 
 
 def summarize(results: list[dict], run_a_id, run_b_id) -> dict:
-    """Aggregate per-game results into a match summary."""
+    """Aggregate per-game results into a match summary.
+
+    For true self-play (a_id == b_id), `winner == a_id` and `winner == b_id`
+    are both true on every win, which makes naive wins_a / wins_b counts
+    overlap. We also track engine-side counts (wins_p1 / wins_p2) drawn from
+    `stats.phase`; these are unambiguous and useful for measuring map
+    asymmetry. Self-play counts wins_a as the side-A-was-on victories
+    (i.e. half from P1, half from P2 across the swap rotation).
+    """
     a_id, b_id = str(run_a_id), str(run_b_id)
-    wins_a = sum(1 for g in results if g["winner"] == a_id)
-    wins_b = sum(1 for g in results if g["winner"] == b_id)
-    draws  = sum(1 for g in results if g["winner"] is None)
+    is_self_play = (a_id == b_id)
+
+    draws = sum(1 for g in results if g["winner"] is None)
+    n = len(results)
+
+    # Engine-side counts (1=P1, 2=P2, 3=draw). Stable across self-play /
+    # head-to-head; reflects pure spatial asymmetry of the level.
+    wins_p1 = sum(1 for g in results if (g.get("stats") or {}).get("phase") == 1)
+    wins_p2 = sum(1 for g in results if (g.get("stats") or {}).get("phase") == 2)
+
+    if is_self_play:
+        # Run-id-keyed counts are meaningless in self-play. Report the
+        # side-rotated view: A's wins = the wins it got while playing whichever
+        # side it was assigned (alternates every game via stats.swapped).
+        wins_a = sum(
+            1 for g in results
+            if g["winner"] is not None and (
+                ((g.get("stats") or {}).get("swapped") is False and (g.get("stats") or {}).get("phase") == 1) or
+                ((g.get("stats") or {}).get("swapped") is True  and (g.get("stats") or {}).get("phase") == 2)
+            )
+        )
+        wins_b = sum(
+            1 for g in results
+            if g["winner"] is not None and (
+                ((g.get("stats") or {}).get("swapped") is False and (g.get("stats") or {}).get("phase") == 2) or
+                ((g.get("stats") or {}).get("swapped") is True  and (g.get("stats") or {}).get("phase") == 1)
+            )
+        )
+    else:
+        wins_a = sum(1 for g in results if g["winner"] == a_id)
+        wins_b = sum(1 for g in results if g["winner"] == b_id)
+
     return {
         "wins_a":     wins_a,
         "wins_b":     wins_b,
+        "wins_p1":    wins_p1,
+        "wins_p2":    wins_p2,
         "draws":      draws,
-        "rate_a":     wins_a / len(results) if results else 0.0,
-        "rate_b":     wins_b / len(results) if results else 0.0,
-        "draw_rate":  draws  / len(results) if results else 0.0,
-        "games":      len(results),
+        "rate_a":     wins_a / n if n else 0.0,
+        "rate_b":     wins_b / n if n else 0.0,
+        "draw_rate":  draws  / n if n else 0.0,
+        "games":      n,
+        "self_play":  is_self_play,
     }
