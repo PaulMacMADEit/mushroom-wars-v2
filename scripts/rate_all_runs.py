@@ -27,7 +27,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.40")
+os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.18")
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("SIM_BACKEND", "jax")
 
 from cli.db import PROJECT, connect
