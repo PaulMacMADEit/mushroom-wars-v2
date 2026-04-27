@@ -349,21 +349,44 @@ def _worker_mode(conn, machine: str) -> tuple[bool, bool]:
     return bool(row[0]), bool(row[1])
 
 
-def claim_one_match(conn):
-    """Atomically claim the oldest queued match row. Returns dict or None."""
+def claim_one_match(conn, machine: str | None = None):
+    """Atomically claim the oldest queued match row. Returns dict or None.
+
+    `machine`: when set, only claims matches that EITHER have no
+    `summary.target_machine` (open to any worker) OR have it set to
+    exactly this hostname. This keeps interactive-play matches pinned to
+    Mac so the dashboard's Play button doesn't steal GPU time from
+    PaulLinux's training loop.
+    """
     with conn.cursor() as cur:
-        cur.execute("""
-            UPDATE matches SET status='running'
-             WHERE id IN (
-               SELECT id FROM matches
-                WHERE project=%s AND status='queued'
-                ORDER BY created_at
-                FOR UPDATE SKIP LOCKED
-                LIMIT 1
-             )
-             RETURNING id, model_a_run_id, model_b_run_id, games_planned,
-                       simulator_id, description, summary::text
-        """, (PROJECT,))
+        if machine is not None:
+            cur.execute("""
+                UPDATE matches SET status='running'
+                 WHERE id IN (
+                   SELECT id FROM matches
+                    WHERE project=%s AND status='queued'
+                      AND (summary->>'target_machine' IS NULL
+                           OR summary->>'target_machine' = %s)
+                    ORDER BY created_at
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                 )
+                 RETURNING id, model_a_run_id, model_b_run_id, games_planned,
+                           simulator_id, description, summary::text
+            """, (PROJECT, machine))
+        else:
+            cur.execute("""
+                UPDATE matches SET status='running'
+                 WHERE id IN (
+                   SELECT id FROM matches
+                    WHERE project=%s AND status='queued'
+                    ORDER BY created_at
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                 )
+                 RETURNING id, model_a_run_id, model_b_run_id, games_planned,
+                           simulator_id, description, summary::text
+            """, (PROJECT,))
         row = cur.fetchone()
     conn.commit()
     if row is None:
@@ -979,8 +1002,10 @@ def main():
                 # this machine is in matches_only mode (dashboard-controlled).
                 job = None if matches_only else claim_one(conn, args.machine)
                 if job is None:
-                    # 2) Fall back to queued eval matches.
-                    match = claim_one_match(conn)
+                    # 2) Fall back to queued eval matches. Filter by
+                    # `summary.target_machine` so interactive-play matches
+                    # routed to Mac stay on Mac.
+                    match = claim_one_match(conn, machine=args.machine)
                     if match is not None:
                         idle_streak = 0
                         _handle_match(conn, match, device)

@@ -88,8 +88,9 @@
     <h2>Play a game</h2>
     <div class="card">
       <div class="muted small" style="margin-bottom:16px;">
-        Queues a 1-game match, waits for a worker to pick it up, then opens the replay.
-        Default is self-play. Assumes a worker is polling.
+        Queues a 5-game match, waits for the Mac worker to pick it up, then opens the first replay.
+        Default is self-play. Pinned to <span class="mono">Pauls-MacBook-Air.local</span> so it
+        doesn't steal GPU time from PaulLinux's training loop.
       </div>
 
       <div class="play-form">
@@ -215,17 +216,20 @@
         p_run_a: runA,
         p_run_b: runB,
         p_level_name: level,
+        p_games: 5,
+        p_target_machine: 'Pauls-MacBook-Air.local',
       });
       if (rpcErr) {
         $play.disabled = false;
         setStatus('error', `Queue failed: ${esc(rpcErr.message)}`);
         return;
       }
-      setStatus('working', `Queued match <span class="mono">${esc(matchId.slice(0,8))}...</span>. Waiting for worker...`);
+      setStatus('working', `Queued 5-game match <span class="mono">${esc(matchId.slice(0,8))}...</span> on Mac. Waiting for worker...`);
 
-      // Poll for completion.
+      // Poll for completion. Generous timeout: Mac worker may need to JIT
+      // warm up, then 5 games on top of that.
       const started = Date.now();
-      const timeoutMs = 120_000;
+      const timeoutMs = 300_000;
       let phase = 'queued';
 
       while (Date.now() - started < timeoutMs) {
@@ -237,18 +241,49 @@
           setStatus('working', 'Worker is playing the game...');
         }
         if (m.status === 'done') {
-          setStatus('working', 'Loading replay...');
+          setStatus('working', 'Loading replays...');
           const { data: games } = await sb.from('games')
-            .select('id, actions_url')
+            .select('id, game_index, winner, duration_ms, actions_url, player_1_run_id')
             .eq('match_id', matchId)
-            .limit(1);
-          const url = games?.[0]?.actions_url ? publicUrl(games[0].actions_url) : null;
-          if (!url) {
+            .order('game_index', { ascending: true });
+          if (!games || games.length === 0) {
             $play.disabled = false;
-            setStatus('error', 'Match finished but no replay was uploaded.');
+            setStatus('error', 'Match finished but no replays were uploaded.');
             return;
           }
-          location.href = `./game.html?url=${encodeURIComponent(url)}`;
+          // Render results table; let the user click into any individual game.
+          const winsP1 = games.filter(g => g.winner === g.player_1_run_id).length;
+          const draws  = games.filter(g => g.winner === null).length;
+          const winsP2 = games.length - winsP1 - draws;
+          const rows = games.map(g => {
+            const url = g.actions_url ? publicUrl(g.actions_url) : null;
+            const dur = g.duration_ms ? `${(g.duration_ms / 1000).toFixed(1)}s` : '—';
+            const winnerStr = g.winner === null ? 'draw'
+                            : g.winner === g.player_1_run_id ? 'P1 wins' : 'P2 wins';
+            const link = url ? `<a href="./game.html?url=${encodeURIComponent(url)}">replay</a>` : '—';
+            return `<tr>
+              <td><span class="mono">#${g.game_index + 1}</span></td>
+              <td>${esc(winnerStr)}</td>
+              <td><span class="mono">${esc(dur)}</span></td>
+              <td>${link}</td>
+            </tr>`;
+          }).join('');
+          $status.innerHTML = `
+            <div style="margin-bottom:10px;">
+              <strong>Match done</strong>: P1 ${winsP1} · P2 ${winsP2} · draws ${draws}
+            </div>
+            <table style="margin-top:8px;">
+              <thead><tr><th>game</th><th>result</th><th>duration</th><th></th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+            <div style="margin-top:12px;">
+              <button id="play-again" class="play-button">Play another</button>
+            </div>
+          `;
+          document.getElementById('play-again').addEventListener('click', () => {
+            $play.disabled = false;
+            $status.style.display = 'none';
+          });
           return;
         }
         if (m.status === 'failed') {
