@@ -35,9 +35,20 @@
       <div class="muted">Loading…</div>
     </div>
 
-    <h2>Recent runs</h2>
-    <div class="card" id="recent-runs">
-      <div class="muted">Loading…</div>
+    <h2>Runs</h2>
+    <div class="card" id="run-tabs">
+      <div style="display:flex; gap:8px; margin-bottom:12px; border-bottom:1px solid var(--border); padding-bottom:8px;">
+        <button class="tab-btn active" data-tab="completed"
+                style="background:var(--accent); color:#000; border:0; padding:6px 14px; border-radius:6px; cursor:pointer;">
+          Completed <span class="muted small" id="completed-count"></span>
+        </button>
+        <button class="tab-btn" data-tab="upcoming"
+                style="background:var(--bg-card); color:var(--fg); border:1px solid var(--border); padding:6px 14px; border-radius:6px; cursor:pointer;">
+          Upcoming <span class="muted small" id="upcoming-count"></span>
+        </button>
+      </div>
+      <div id="tab-completed"><div class="muted">Loading…</div></div>
+      <div id="tab-upcoming" style="display:none;"><div class="muted">Loading…</div></div>
     </div>
   </main>
 
@@ -48,8 +59,27 @@
 
     const $stats     = document.getElementById('stats');
     const $workers   = document.getElementById('workers');
-    const $recent    = document.getElementById('recent-runs');
     const $champion  = document.getElementById('champion');
+    const $tabCompleted = document.getElementById('tab-completed');
+    const $tabUpcoming  = document.getElementById('tab-upcoming');
+    const $countCompleted = document.getElementById('completed-count');
+    const $countUpcoming  = document.getElementById('upcoming-count');
+
+    // Tab switching.
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tab = btn.getAttribute('data-tab');
+        document.querySelectorAll('.tab-btn').forEach(b => {
+          const isActive = b === btn;
+          b.classList.toggle('active', isActive);
+          b.style.background = isActive ? 'var(--accent)' : 'var(--bg-card)';
+          b.style.color      = isActive ? '#000' : 'var(--fg)';
+          b.style.border     = isActive ? '0' : '1px solid var(--border)';
+        });
+        $tabCompleted.style.display = tab === 'completed' ? '' : 'none';
+        $tabUpcoming.style.display  = tab === 'upcoming'  ? '' : 'none';
+      });
+    });
 
     // Friendly labels for the two known machines. Anything else still shows
     // with its raw hostname.
@@ -160,27 +190,21 @@
     }
 
     async function loadStats() {
-      const [runs, models, sims, doneRuns] = await Promise.all([
-        sb.from('runs').select('status', { count: 'exact', head: false }),
-        sb.from('models').select('id', { count: 'exact', head: true }),
-        sb.from('simulators').select('id', { count: 'exact', head: true }),
-        sb.from('runs').select('games_played, wall_ms, hyperparams, result, elo_n_matches').eq('status', 'done'),
-      ]);
-      if (runs.error || models.error || sims.error || doneRuns.error) {
-        $stats.innerHTML = `<div class="card error">error: ${esc(runs.error?.message ?? models.error?.message ?? sims.error?.message ?? doneRuns.error?.message)}</div>`;
+      const { data: doneRuns, error } = await sb
+        .from('runs')
+        .select('games_played, wall_ms, hyperparams, result')
+        .eq('status', 'done');
+      if (error) {
+        $stats.innerHTML = `<div class="card error">error: ${esc(error.message)}</div>`;
         return;
       }
-      const byStatus = {};
-      for (const r of runs.data) byStatus[r.status] = (byStatus[r.status] || 0) + 1;
 
-      // Aggregates over completed runs.
-      let totalGames = 0, totalWallMs = 0, totalTicksAll = 0, eloRated = 0, sumStepsPerSec = 0, sumStepsCount = 0;
-      for (const r of doneRuns.data) {
+      let totalGames = 0, totalWallMs = 0, totalTicksAll = 0, sumStepsPerSec = 0, sumStepsCount = 0;
+      for (const r of doneRuns) {
         totalGames   += (r.games_played ?? 0);
         totalWallMs  += (r.wall_ms ?? 0);
         const tt = totalTicks(r.result, r.hyperparams);
         if (tt) totalTicksAll += tt;
-        if ((r.elo_n_matches ?? 0) >= 3) eloRated++;
         const sps = r.result?.steps_per_sec;
         if (sps != null) { sumStepsPerSec += sps; sumStepsCount++; }
       }
@@ -188,37 +212,32 @@
       const avgTpm = sumStepsCount > 0 ? (sumStepsPerSec / sumStepsCount) * 60 : 0;
 
       const cells = [
-        ['models',            models.count],
-        ['simulators',        sims.count],
-        ['runs total',        runs.count],
-        ['queued',            byStatus.queued  || 0],
-        ['running',           byStatus.running || 0],
-        ['done',              byStatus.done    || 0],
-        ['failed',            byStatus.failed  || 0],
-        ['Elo-rated',         eloRated],
         ['games trained',     totalGames.toLocaleString()],
         ['total ticks',       fmtBig(totalTicksAll)],
         ['avg games/min',     avgGpm.toFixed(0)],
         ['avg ticks/min',     fmtBig(Math.round(avgTpm))],
-        ['total train time',  fmtDuration(totalWallMs)],
+        ['total runtime',     fmtDuration(totalWallMs)],
       ];
       $stats.innerHTML = cells.map(([label, v]) =>
         `<div class="card"><div class="stat">${typeof v === 'string' && v.startsWith('<') ? v : esc(String(v))}</div><div class="stat-label">${esc(label)}</div></div>`
       ).join('');
     }
 
-    async function loadRecentRuns() {
+    async function loadCompleted() {
+      // Done + failed runs, most recent first.
       const { data, error } = await sb
         .from('runs')
-        .select('id, label, status, machine, model_id, simulator_id, wall_ms, queued_at, result, hyperparams, elo_score, elo_n_matches')
-        .order('queued_at', { ascending: false })
-        .limit(20);
+        .select('id, label, status, machine, model_id, simulator_id, wall_ms, queued_at, finished_at, result, hyperparams, elo_score, elo_n_matches')
+        .in('status', ['done', 'failed'])
+        .order('finished_at', { ascending: false, nullsFirst: false })
+        .limit(30);
       if (error) {
-        $recent.innerHTML = `<div class="error">error: ${esc(error.message)}</div>`;
+        $tabCompleted.innerHTML = `<div class="error">error: ${esc(error.message)}</div>`;
         return;
       }
-      if (data.length === 0) {
-        $recent.innerHTML = `<div class="muted">no runs yet — push one with <span class="inline-code">python cli/push_experiments.py</span></div>`;
+      $countCompleted.textContent = data.length ? `(${data.length})` : '';
+      if (!data.length) {
+        $tabCompleted.innerHTML = `<div class="muted">no completed runs yet</div>`;
         return;
       }
       const rows = data.map(r => {
@@ -234,14 +253,58 @@
           fmtPct(r.result?.rate),
           `<span class="mono">${fmtElo(r.elo_score, r.elo_n_matches)}</span>`,
           `<span class="mono">${ticksPerMin(sps)}</span>`,
-          `<span class="muted">${fmtTime(r.queued_at)}</span>`,
+          `<span class="muted">${fmtTime(r.finished_at ?? r.queued_at)}</span>`,
         ]);
       });
-      $recent.innerHTML = `
+      $tabCompleted.innerHTML = `
         <table>
           <thead><tr>
             <th>status</th><th>label</th><th>model</th><th>sim</th><th>machine</th>
-            <th>wall</th><th>updates</th><th>rate</th><th>Elo (n)</th><th>ticks/min</th><th>queued</th>
+            <th>wall</th><th>updates</th><th>rate</th><th>Elo (n)</th><th>ticks/min</th><th>finished</th>
+          </tr></thead>
+          <tbody>${rows.join('')}</tbody>
+        </table>`;
+    }
+
+    async function loadUpcoming() {
+      // Running + queued runs.
+      const { data, error } = await sb
+        .from('runs')
+        .select('id, label, status, machine, model_id, simulator_id, wall_ms, budget_ms, queued_at, started_at, hyperparams')
+        .in('status', ['running', 'queued'])
+        .order('queued_at', { ascending: true })
+        .limit(40);
+      if (error) {
+        $tabUpcoming.innerHTML = `<div class="error">error: ${esc(error.message)}</div>`;
+        return;
+      }
+      $countUpcoming.textContent = data.length ? `(${data.length})` : '';
+      if (!data.length) {
+        $tabUpcoming.innerHTML = `<div class="muted">no upcoming runs queued</div>`;
+        return;
+      }
+      const rows = data.map(r => {
+        const lvl = r.hyperparams?.level_name ?? '—';
+        const opp = r.hyperparams?.opponent_name ?? 'random_legal';
+        const K   = r.hyperparams?.action_repeat ?? 1;
+        const budget = r.budget_ms ? fmtDuration(r.budget_ms) : '—';
+        return tr([
+          statusPill(r.status),
+          `<a href="./run.html?id=${esc(r.id)}">${esc(r.label)}</a>`,
+          `<span class="mono small">${esc(r.simulator_id ?? '')}</span>`,
+          `<span class="mono">${esc(lvl)}</span>`,
+          `<span class="mono">K=${K}</span>`,
+          `<span class="mono">${esc(opp)}</span>`,
+          `<span class="mono">${budget}</span>`,
+          `<span class="muted">${r.started_at ? fmtTime(r.started_at) : '—'}</span>`,
+          `<span class="muted">${fmtTime(r.queued_at)}</span>`,
+        ]);
+      });
+      $tabUpcoming.innerHTML = `
+        <table>
+          <thead><tr>
+            <th>status</th><th>label</th><th>sim</th><th>level</th><th>K</th>
+            <th>opponent</th><th>budget</th><th>started</th><th>queued</th>
           </tr></thead>
           <tbody>${rows.join('')}</tbody>
         </table>`;
@@ -250,7 +313,8 @@
     loadChampion().catch(e => $champion.innerHTML = `<div class="error">${esc(e.message)}</div>`);
     loadStats().catch(e => $stats.innerHTML  = `<div class="card error">${esc(e.message)}</div>`);
     loadWorkers().catch(e => $workers.innerHTML = `<div class="error">${esc(e.message)}</div>`);
-    loadRecentRuns().catch(e => $recent.innerHTML = `<div class="error">${esc(e.message)}</div>`);
+    loadCompleted().catch(e => $tabCompleted.innerHTML = `<div class="error">${esc(e.message)}</div>`);
+    loadUpcoming().catch(e => $tabUpcoming.innerHTML = `<div class="error">${esc(e.message)}</div>`);
   </script>
 </body>
 </html>

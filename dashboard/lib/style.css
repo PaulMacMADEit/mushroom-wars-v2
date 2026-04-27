@@ -40,7 +40,7 @@ header nav a {
 }
 header nav a:hover { color: var(--fg); }
 
-main { padding: 24px; max-width: 1200px; margin: 0 auto; }
+main { padding: 24px; max-width: 1480px; margin: 0 auto; }
 
 h2 { font-size: 15px; margin: 24px 0 10px; color: var(--fg-muted); text-transform: uppercase; letter-spacing: .6px; font-weight: 600; }
 
