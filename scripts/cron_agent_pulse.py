@@ -592,26 +592,44 @@ def main():
         if not args.no_cancel_backlog:
             _cancel_queued_backlog(conn, args.dry_run)
 
-        # Per-fire Elo review pass: rate up to N unrated runs.
-        if not args.skip_elo_review:
-            _elo_review_pass(conn, args.dry_run)
-
-        # Pick top-Elo runs (incl. brand-new scores written above).
+        # ---- queue FIRST so the worker isn't idle while we run Elo / eval. ----
+        # Read the current Elo top + curriculum state without doing any
+        # tournament work.
         elo_top = _read_top_elo_runs(conn, limit=5)
         elo_champion = elo_top[0] if elo_top else None
         if elo_champion is not None:
-            print(f"  Elo champion: {elo_champion['label']} "
+            print(f"  Elo champion (pre-review): {elo_champion['label']} "
                   f"score={elo_champion['elo_score']:.1f} "
                   f"matches={elo_champion['elo_n_matches']}")
         else:
             print("  no Elo-rated champion yet (need ≥3 matches)")
 
-        # Decide curriculum phase (with possible auto-graduation).
-        phase = _decide_curriculum_phase(conn, args.dry_run)
-        print(f"  curriculum phase: {phase}")
+        kv_phase = _kv_get(conn, "curriculum_phase", default="phase1_full_mix")
+        # Map any legacy phase names → current.
+        if kv_phase in ("phase1_small", "phase1_close"):
+            kv_phase = "phase1_full_mix"
+        elif kv_phase == "phase2_wild":
+            kv_phase = "phase2_selfplay"
+        if kv_phase not in CURRICULUM:
+            kv_phase = "phase1_full_mix"
+        print(f"  curriculum phase (pre-review): {kv_phase}")
 
-        next_runs = _decide_next_batch(phase, elo_champion, elo_top, rng)
+        next_runs = _decide_next_batch(kv_phase, elo_champion, elo_top, rng)
         ids = _push_runs(conn, next_runs, args.model_id, args.sim_id, args.dry_run)
+        if not args.dry_run:
+            print(f"  queued {len(ids)} new runs (worker can start immediately)")
+
+        # ---- THEN run Elo review + graduation eval (worker training in parallel). ----
+        if not args.skip_elo_review:
+            _elo_review_pass(conn, args.dry_run)
+
+        # Now check graduation against the freshly-rated champion. If a
+        # graduation event fires, the kv flips so the NEXT cron fire queues
+        # the new phase. Don't re-queue this fire (workers already busy).
+        new_phase = _decide_curriculum_phase(conn, args.dry_run)
+        if new_phase != kv_phase:
+            print(f"  curriculum phase changed: {kv_phase} → {new_phase} "
+                  f"(applies to next cron fire)")
 
     if args.dry_run:
         print("[dry-run] no rows inserted")
