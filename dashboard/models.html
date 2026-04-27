@@ -182,10 +182,12 @@
               grid: { color: 'rgba(96,165,250,0.05)' },
               ticks: {
                 callback: (v) => new Date(v).toLocaleString(undefined,
-                  { month: 'short', day: 'numeric' }),
+                  opts.compact
+                    ? { month: 'short', day: 'numeric', hour: '2-digit' }
+                    : { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
                 maxRotation: 0,
                 autoSkip: true,
-                maxTicksLimit: opts.compact ? 4 : 8,
+                maxTicksLimit: opts.compact ? 4 : 10,
                 font: { size: opts.compact ? 10 : 12 },
               },
             },
