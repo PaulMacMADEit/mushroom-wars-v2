@@ -35,8 +35,8 @@
   <main>
     <h2>Elo over training time</h2>
     <div class="card">
-      <div class="stat-label">each point = one rated run, plotted at its training-start time. Y = current Elo. Trend up = models improving.</div>
-      <div style="position:relative; height:340px; margin-top:8px;"><canvas id="chart-elo"></canvas></div>
+      <div class="stat-label">each point = one rated run, plotted at its finish time. Y = current Elo. Grey × markers = runs that failed the gate (&lt;70% vs random_legal over 30 games) — pinned at 950 so you can see they happened without skewing the ladder.</div>
+      <div style="position:relative; height:360px; margin-top:8px;"><canvas id="chart-elo"></canvas></div>
     </div>
 
     <div class="chart-grid-3">
@@ -100,21 +100,32 @@
     async function loadCharts() {
       const { data, error } = await sb
         .from('runs')
-        .select('id, label, status, queued_at, started_at, finished_at, elo_score, elo_n_matches, result')
+        .select('id, label, status, queued_at, started_at, finished_at, elo_score, elo_n_matches, elo_status, result')
         .eq('status', 'done')
-        .gte('elo_n_matches', 1)
         .order('finished_at', { ascending: true })
         .limit(500);
       if (error) throw error;
       // Use finished_at (when the model's weights were frozen) — falls back to
       // started_at then queued_at for older rows missing the column.
       const ts = (r) => new Date(r.finished_at ?? r.started_at ?? r.queued_at).getTime();
-      const points = (data ?? []).filter(r => r.finished_at || r.started_at || r.queued_at);
+      const all = (data ?? []).filter(r => r.finished_at || r.started_at || r.queued_at);
+      const rated = all.filter(r => r.elo_status === 'rated' && r.elo_score != null);
+      const failed = all.filter(r => r.elo_status === 'did_not_perform');
 
-      renderScatter('chart-elo', points
-        .map(r => ({ x: ts(r), y: r.elo_score, label: r.label }))
-        .filter(p => p.y != null),
-        { yLabel: 'Elo', color: '#60a5fa', baseline: 1000, baselineLabel: 'random_legal anchor' });
+      // Elo chart: rated points (full color) + did-not-perform points
+      // (grey, pinned at y=950 so they sit visibly below the baseline).
+      renderScatter('chart-elo',
+        rated.map(r => ({ x: ts(r), y: r.elo_score, label: r.label })),
+        { yLabel: 'Elo', color: '#60a5fa', baseline: 1000, baselineLabel: 'random_legal anchor',
+          extraSeries: {
+            label: 'did not perform',
+            color: '#6b7280',
+            points: failed.map(r => ({ x: ts(r), y: 950, label: r.label + ' (did not perform)' })),
+          },
+        });
+
+      // Other charts only use rated runs (signal would be drowned by failed ones).
+      const points = rated;
 
       renderScatter('chart-rate', points
         .map(r => ({ x: ts(r), y: r.result?.rate, label: r.label }))
@@ -152,6 +163,19 @@
         pointRadius: opts.compact ? 3 : 4,
         pointHoverRadius: opts.compact ? 5 : 7,
       }];
+      if (opts.extraSeries && opts.extraSeries.points.length) {
+        datasets.push({
+          label: opts.extraSeries.label,
+          data: opts.extraSeries.points,
+          borderColor: opts.extraSeries.color,
+          backgroundColor: opts.extraSeries.color,
+          borderWidth: 1,
+          showLine: false,
+          pointRadius: opts.compact ? 2 : 3,
+          pointHoverRadius: 6,
+          pointStyle: 'crossRot',
+        });
+      }
       if (opts.baseline != null) {
         const xs = points.map(p => p.x);
         datasets.push({
@@ -197,7 +221,9 @@
             y: yScale,
           },
           plugins: {
-            legend: { display: false },
+            legend: { display: !opts.compact && !!opts.extraSeries,
+                      position: 'bottom',
+                      labels: { padding: 10, boxWidth: 10, boxHeight: 10 } },
             tooltip: {
               callbacks: {
                 title: (items) => new Date(items[0].parsed.x).toLocaleString(),

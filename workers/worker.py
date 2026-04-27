@@ -1064,15 +1064,15 @@ def main():
                 except Exception as admit_exc:
                     print(f"[worker] auto-admission failed for {claimed['id']}: {admit_exc}")
 
-            # Auto-rate the newly-done run so it appears on the dashboard
-            # with a real Elo score within ~5 min of finishing — not 3h
-            # later when the cron-agent's Elo review pass picks it up.
-            # 3 matches vs random_legal (the stable baseline) gets us above
-            # ELO_MIN_MATCHES=3 immediately. Each match ~5-7s on GPU.
+            # Run the 4-step Elo gate: gate(30 vs random_legal) ->
+            # seed(8 vs random_legal) -> ladder(8 vs nearest-Elo peer) ->
+            # batch(8 vs last batch peer). Failed gate => elo_status=
+            # 'did_not_perform'. See workers/elo_gate.py for the policy.
             try:
-                _auto_rate_run(claimed["id"], claimed["label"])
+                from workers.elo_gate import run_elo_gate
+                run_elo_gate(claimed["id"], claimed["label"])
             except Exception as rate_exc:
-                print(f"[worker] auto-rate failed for {claimed['id']}: {rate_exc}")
+                print(f"[worker] elo-gate failed for {claimed['id']}: {rate_exc}")
 
             print(f"[worker] done id={claimed['id']} games={games} "
                   f"wall={wall_ms}ms rate={result['rate']:.3f} "
