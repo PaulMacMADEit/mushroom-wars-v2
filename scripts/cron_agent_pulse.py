@@ -230,6 +230,7 @@ def _read_top_elo_runs(conn, limit: int = 5) -> list[dict]:
                    result::text
               FROM runs
              WHERE project=%s AND status='done' AND weights_url IS NOT NULL
+               AND elo_status = 'rated'
                AND elo_n_matches >= %s
              ORDER BY elo_score DESC
              LIMIT %s
@@ -260,6 +261,7 @@ def _read_unrated_done_runs(conn, limit: int) -> list[dict]:
             SELECT id, label
               FROM runs
              WHERE project=%s AND status='done' AND weights_url IS NOT NULL
+               AND elo_status = 'unrated'
                AND (elo_n_matches IS NULL OR elo_n_matches < %s)
              ORDER BY finished_at DESC NULLS LAST
              LIMIT %s
