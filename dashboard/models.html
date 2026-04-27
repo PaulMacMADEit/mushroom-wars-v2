@@ -100,33 +100,36 @@
     async function loadCharts() {
       const { data, error } = await sb
         .from('runs')
-        .select('id, label, status, queued_at, elo_score, elo_n_matches, result')
+        .select('id, label, status, queued_at, started_at, finished_at, elo_score, elo_n_matches, result')
         .eq('status', 'done')
         .gte('elo_n_matches', 1)
-        .order('queued_at', { ascending: true })
+        .order('finished_at', { ascending: true })
         .limit(500);
       if (error) throw error;
-      const points = (data ?? []).filter(r => r.queued_at);
+      // Use finished_at (when the model's weights were frozen) — falls back to
+      // started_at then queued_at for older rows missing the column.
+      const ts = (r) => new Date(r.finished_at ?? r.started_at ?? r.queued_at).getTime();
+      const points = (data ?? []).filter(r => r.finished_at || r.started_at || r.queued_at);
 
       renderScatter('chart-elo', points
-        .map(r => ({ x: new Date(r.queued_at).getTime(), y: r.elo_score, label: r.label }))
+        .map(r => ({ x: ts(r), y: r.elo_score, label: r.label }))
         .filter(p => p.y != null),
         { yLabel: 'Elo', color: '#60a5fa', baseline: 1000, baselineLabel: 'random_legal anchor' });
 
       renderScatter('chart-rate', points
-        .map(r => ({ x: new Date(r.queued_at).getTime(), y: r.result?.rate, label: r.label }))
+        .map(r => ({ x: ts(r), y: r.result?.rate, label: r.label }))
         .filter(p => p.y != null)
         .map(p => ({ ...p, y: p.y * 100 })),
         { yLabel: 'win %', color: '#f472b6', yMin: 0, yMax: 100, compact: true });
 
       renderScatter('chart-tpm', points
-        .map(r => ({ x: new Date(r.queued_at).getTime(), y: r.result?.steps_per_sec, label: r.label }))
+        .map(r => ({ x: ts(r), y: r.result?.steps_per_sec, label: r.label }))
         .filter(p => p.y != null)
         .map(p => ({ ...p, y: p.y * 60 / 1000 })),
         { yLabel: 'ticks/min (k)', color: '#34d399', compact: true });
 
       renderScatter('chart-upd', points
-        .map(r => ({ x: new Date(r.queued_at).getTime(), y: r.result?.updates, label: r.label }))
+        .map(r => ({ x: ts(r), y: r.result?.updates, label: r.label }))
         .filter(p => p.y != null),
         { yLabel: 'updates', color: '#fbbf24', compact: true });
     }
