@@ -357,6 +357,10 @@ def claim_one_match(conn, machine: str | None = None):
     exactly this hostname. This keeps interactive-play matches pinned to
     Mac so the dashboard's Play button doesn't steal GPU time from
     PaulLinux's training loop.
+
+    Priority: matches with an explicit `target_machine` (= user-initiated,
+    e.g. dashboard Play) jump the queue ahead of background admission
+    matches. Tie-break by created_at within each priority class.
     """
     with conn.cursor() as cur:
         if machine is not None:
@@ -367,7 +371,8 @@ def claim_one_match(conn, machine: str | None = None):
                     WHERE project=%s AND status='queued'
                       AND (summary->>'target_machine' IS NULL
                            OR summary->>'target_machine' = %s)
-                    ORDER BY created_at
+                    ORDER BY (summary->>'target_machine' IS NOT NULL) DESC,
+                             created_at
                     FOR UPDATE SKIP LOCKED
                     LIMIT 1
                  )
