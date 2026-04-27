@@ -4,6 +4,19 @@
   <meta charset="utf-8">
   <title>Models — Mushroom Wars v2</title>
   <link rel="stylesheet" href="lib/style.css">
+  <style>
+    .chart-grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    @media (max-width: 800px) {
+      .chart-grid-3 { grid-template-columns: 1fr; }
+    }
+    .chart-grid-3 .card { margin: 0; }
+    .chart-grid-3 .stat-label { font-size: 11px; }
+  </style>
 </head>
 <body>
   <header>
@@ -20,6 +33,27 @@
   </header>
 
   <main>
+    <h2>Elo over training time</h2>
+    <div class="card">
+      <div class="stat-label">each point = one rated run, plotted at its training-start time. Y = current Elo. Trend up = models improving.</div>
+      <div style="position:relative; height:340px; margin-top:8px;"><canvas id="chart-elo"></canvas></div>
+    </div>
+
+    <div class="chart-grid-3">
+      <div class="card">
+        <div class="stat-label">win rate vs random_legal — raw skill</div>
+        <div style="position:relative; height:180px;"><canvas id="chart-rate"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="stat-label">ticks / min — training throughput</div>
+        <div style="position:relative; height:180px;"><canvas id="chart-tpm"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="stat-label">updates to finish — sample efficiency (lower = better)</div>
+        <div style="position:relative; height:180px;"><canvas id="chart-upd"></canvas></div>
+      </div>
+    </div>
+
     <h2>All models</h2>
     <div class="card" id="models"><div class="muted">Loading…</div></div>
   </main>
@@ -27,10 +61,13 @@
   <script type="module">
     import { sb } from './lib/supabase.js';
     import { fmtTime, fmtPct, esc, tr } from './lib/ui.js';
+    import Chart from 'https://esm.sh/chart.js@4/auto';
+    Chart.defaults.color = '#8a93a6';
+    Chart.defaults.borderColor = '#262a36';
 
     const $root = document.getElementById('models');
 
-    async function load() {
+    async function loadModels() {
       const { data, error } = await sb
         .from('models')
         .select('id, name, obs_size, num_actions, total_params, run_count, best_rate, created_at, parent_model')
@@ -60,7 +97,121 @@
         </table>`;
     }
 
-    load().catch(e => $root.innerHTML = `<div class="error">${esc(e.message)}</div>`);
+    async function loadCharts() {
+      const { data, error } = await sb
+        .from('runs')
+        .select('id, label, status, queued_at, elo_score, elo_n_matches, result')
+        .eq('status', 'done')
+        .gte('elo_n_matches', 1)
+        .order('queued_at', { ascending: true })
+        .limit(500);
+      if (error) throw error;
+      const points = (data ?? []).filter(r => r.queued_at);
+
+      renderScatter('chart-elo', points
+        .map(r => ({ x: new Date(r.queued_at).getTime(), y: r.elo_score, label: r.label }))
+        .filter(p => p.y != null),
+        { yLabel: 'Elo', color: '#60a5fa', baseline: 1000, baselineLabel: 'random_legal anchor' });
+
+      renderScatter('chart-rate', points
+        .map(r => ({ x: new Date(r.queued_at).getTime(), y: r.result?.rate, label: r.label }))
+        .filter(p => p.y != null)
+        .map(p => ({ ...p, y: p.y * 100 })),
+        { yLabel: 'win %', color: '#f472b6', yMin: 0, yMax: 100, compact: true });
+
+      renderScatter('chart-tpm', points
+        .map(r => ({ x: new Date(r.queued_at).getTime(), y: r.result?.steps_per_sec, label: r.label }))
+        .filter(p => p.y != null)
+        .map(p => ({ ...p, y: p.y * 60 / 1000 })),
+        { yLabel: 'ticks/min (k)', color: '#34d399', compact: true });
+
+      renderScatter('chart-upd', points
+        .map(r => ({ x: new Date(r.queued_at).getTime(), y: r.result?.updates, label: r.label }))
+        .filter(p => p.y != null),
+        { yLabel: 'updates', color: '#fbbf24', compact: true });
+    }
+
+    function renderScatter(canvasId, points, opts) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      if (!points.length) {
+        canvas.replaceWith(Object.assign(document.createElement('div'),
+          { className: 'muted', textContent: 'no data yet' }));
+        return;
+      }
+      const datasets = [{
+        label: opts.yLabel,
+        data: points,
+        borderColor: opts.color,
+        backgroundColor: opts.color,
+        borderWidth: 1.2,
+        showLine: false,
+        pointRadius: opts.compact ? 3 : 4,
+        pointHoverRadius: opts.compact ? 5 : 7,
+      }];
+      if (opts.baseline != null) {
+        const xs = points.map(p => p.x);
+        datasets.push({
+          label: opts.baselineLabel ?? 'baseline',
+          data: [{ x: Math.min(...xs), y: opts.baseline }, { x: Math.max(...xs), y: opts.baseline }],
+          borderColor: '#444',
+          borderWidth: 1,
+          borderDash: [4, 4],
+          pointRadius: 0,
+          showLine: true,
+        });
+      }
+      const yScale = {
+        title: { display: !opts.compact, text: opts.yLabel },
+        grid: { color: 'rgba(96,165,250,0.05)' },
+        ticks: { font: { size: opts.compact ? 10 : 12 } },
+      };
+      if (opts.yMin != null) yScale.min = opts.yMin;
+      if (opts.yMax != null) yScale.max = opts.yMax;
+      new Chart(canvas, {
+        type: 'line',
+        data: { datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          parsing: false,
+          scales: {
+            x: {
+              type: 'linear',
+              title: { display: !opts.compact, text: 'training start' },
+              grid: { color: 'rgba(96,165,250,0.05)' },
+              ticks: {
+                callback: (v) => new Date(v).toLocaleString(undefined,
+                  { month: 'short', day: 'numeric' }),
+                maxRotation: 0,
+                autoSkip: true,
+                maxTicksLimit: opts.compact ? 4 : 8,
+                font: { size: opts.compact ? 10 : 12 },
+              },
+            },
+            y: yScale,
+          },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: (items) => new Date(items[0].parsed.x).toLocaleString(),
+                label: (item) => {
+                  const p = item.raw;
+                  if (!p.label) return null;
+                  const v = typeof p.y === 'number' ? p.y.toFixed(opts.compact ? 1 : 0) : p.y;
+                  return `${p.label}: ${v}`;
+                },
+              },
+            },
+          },
+        },
+      });
+    }
+
+    Promise.all([loadModels(), loadCharts()]).catch(e => {
+      $root.innerHTML = `<div class="error">${esc(e.message)}</div>`;
+    });
   </script>
 </body>
 </html>
