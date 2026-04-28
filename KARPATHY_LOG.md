@@ -815,6 +815,56 @@ Plateau confirmed. Original worker died at peak 9.0GB after 5h+ CPU
 time; current process at 2h 38min / 5.79GB is well below that
 trajectory, but worth a flag if it continues climbing past ~7GB.
 
+### Game-review addition (per Paul's ask, fire 19)
+
+Built `scripts/karp_review_games.py` to sample 1 win + 1 loss from the
+latest rated karp- run, compute behavior signals (action-type
+distribution, noop rate, entropy, value-drop, repeat-pick streaks,
+weak sends), and flag anomalies. Now part of every loop fire.
+
+**First-run finding on `karp-260428-1512-lr-lo` (Elo 1073, our best
+karp- run this loop):**
+
+| game | tag | ticks | dec | noop% | entropy | value drop | top types | flags |
+|---|---|---|---|---|---|---|---|---|
+| `d993327c` | WIN | 92 | 46 | 59% | 2.33 | +0.19 | noop=59% 100%=28% 75%=7% | high noop rate 59% |
+| `9c2156c5` | LOSS | 83 | 42 | 52% | 3.02 | +6.70 | noop=52% 100%=31% 75%=12% | high noop rate 52% |
+
+🚩 **High no-op rate** in both win + loss (52-59% of decisions are
+"do nothing"). The policy is **passive by default** — only acts on
+~half its decision opportunities. Notable additional signals:
+- **No 25% or 50% sends ever** — when it does send, it's always
+  75% or 100% (commit-max behavior).
+- **Value drop +6.70 in the loss** vs +0.19 in the win — policy
+  was confident at game start (~5.5) and lost confidence over the
+  course of the game (-1.x at end). It saw the loss coming and
+  didn't adjust strategy.
+- **Long games (80-90 ticks)** for `random_8_12` map — passive
+  behavior dragging out matches.
+
+Possible causes of no-op preference:
+1. Reward function doesn't penalize inaction enough.
+2. Random_legal opponent is *also* passive enough that no-op is
+   optimal at many ticks.
+3. Action mask gates valid sends conservatively (need a min-garrison
+   to send) and noop is the only legal action a lot of the time.
+
+Worth investigating root cause before next config bump. Paul's ask
+was prescient — aggregate Elo metrics never would have surfaced this.
+
+## Code changes during loop
+
+### 2026-04-28 16:50 PT — added scripts/karp_review_games.py
+
+Per Paul's fire-19 ask: review actual gameplay each loop fire. Script
+samples 1 win + 1 loss from the latest rated karp- run, computes
+behavior signals from replay JSON in the `replays` bucket, and flags
+anomalies (high noop, type-collapse, repeat streaks, weak sends, low
+entropy). First run discovered 52-59% noop rate in lr-lo — a real
+behavior bug aggregate Elo numbers were hiding.
+
+Procedure addition saved to project memory.
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
