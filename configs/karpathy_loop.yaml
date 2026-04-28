@@ -46,8 +46,11 @@ baseline_hyperparams:
   # Engine
   sim_backend: "jax"
   vec_mode: "sync"
-  fused_rollout: true
-  action_repeat: 2                # K
+  # fused_rollout is mutually exclusive with self_play (NotImplementedError
+  # in trainer._collect_rollout_fused). Loop runs are PFSP-self-play, so
+  # fused stays off. action_repeat is only meaningful under fused.
+  fused_rollout: false
+  action_repeat: 1
   rollout_steps: 64
   n_envs: 1024
   # Optimisation
@@ -113,8 +116,11 @@ sweep_axes:
       - { label: "mid", value: 0.30 }
       - { label: "hi",  value: 0.50 }
 
-  - axis: "action_repeat"
+  - axis: "latest_bias"
     cells:
-      - { label: "lo",  value: 1 }
-      - { label: "mid", value: 2 }
-      - { label: "hi",  value: 4 }
+      - { label: "lo",  value: 0.50 }
+      - { label: "mid", value: 0.80 }
+      - { label: "hi",  value: 0.95 }
+    # within self-play pool, P(latest snapshot) vs older. PFSP archive
+    # mixing is independent (controlled by leaderboard_bias). Tests how
+    # much "freshness" matters vs older snapshots.
