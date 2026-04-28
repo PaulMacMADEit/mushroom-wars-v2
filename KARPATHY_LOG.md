@@ -220,6 +220,23 @@ the needle.
 {1e-4, 3e-4, 1e-3}. Same baseline cfg, training vs same champion
 `cdcc0826`. Sweep finishes ~08:42 PT.
 
+### Loop fire 6 — 2026-04-28 08:12 PT — lr-lo finished, lr-mid in flight
+
+| run | lr | training rate | PFSP | bv n | promoted? | Elo |
+|---|---|---|---|---|---|---|
+| karp-260428-0742-lr-lo  | 1e-4 | 5.3% | 0.840 | 10 | N | **1003** |
+
+lr-mid running (started 15:04 UTC), lr-hi queued. Skipping queue this fire
+(2 karp runs ahead, sweep mid-flight). Will catch the full lr sweep next
+fire (08:43 PT) and queue rollout_steps.
+
+**Note:** lr-lo Elo 1003 is the **first karp run to clear the 1000 anchor**
+— still well below the live champion (1118) but above all 3 entropy runs
+(977/978/991). Reading: low lr (1e-4) didn't underfit at 20 min as the
+legacy entropy_coef sweep had hinted (at 15-min budget that data showed
+lr=1e-4 barely beat random at 50%). New eval system is showing different
+signal.
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
