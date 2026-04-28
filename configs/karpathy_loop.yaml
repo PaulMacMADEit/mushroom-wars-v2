@@ -12,8 +12,10 @@
 # Reload cost: zero — every fire reads fresh from disk.
 
 schedule:
-  # Hours between loop fires. Loop self-schedules via ScheduleWakeup.
-  fire_interval_seconds: 3600
+  # Seconds between loop fires. 30min was chosen 2026-04-28 after a 5.5h
+  # gap (loop chain broke; one missed wakeup = no recovery). Smaller
+  # intervals = faster recovery from a broken chain.
+  fire_interval_seconds: 1800
   # Each axis cell gets this much wall time. 3 cells × 20min = 60min/sweep.
   cell_budget_seconds: 1200
   # If queue is non-empty with >= this many karp-* runs ahead, skip queueing

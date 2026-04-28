@@ -1,0 +1,13 @@
+[Unit]
+Description=Fire mushroom-karp.service every 30 minutes
+Requires=mushroom-karp.service
+
+[Timer]
+# Every 30 minutes on the :15 and :45 marks (off-the-hour to avoid piling).
+OnCalendar=*-*-* *:15,45:00
+# Fire on boot if we missed a window.
+Persistent=true
+RandomizedDelaySec=30s
+
+[Install]
+WantedBy=timers.target

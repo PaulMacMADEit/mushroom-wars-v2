@@ -13,6 +13,11 @@
 #   ./workers/install_service.sh uninstall-cron   # stop + remove the cron
 #   ./workers/install_service.sh status-cron      # show cron timer state
 #   ./workers/install_service.sh logs-cron        # tail cron logs
+#   ./workers/install_service.sh install-karp     # 30-min karp-loop backstop (queue if Claude asleep)
+#   ./workers/install_service.sh uninstall-karp
+#   ./workers/install_service.sh status-karp
+#   ./workers/install_service.sh logs-karp
+#   ./workers/install_service.sh run-karp         # one-off fire (test)
 #   ./workers/install_service.sh install-host-telemetry    # 1/min host CPU/GPU sample → Supabase
 #   ./workers/install_service.sh uninstall-host-telemetry
 #   ./workers/install_service.sh status-host-telemetry
@@ -179,6 +184,40 @@ elif [[ "$os" == "Linux" ]]; then
       ;;
     logs-rerate)
       journalctl --user -u mushroom-rerate.service -n 40 -f
+      ;;
+    install-karp)
+      KARP_SVC="mushroom-karp.service"
+      KARP_TIMER="mushroom-karp.timer"
+      KARP_SVC_SRC="$REPO/workers/systemd/mushroom-karp.service.template"
+      KARP_TIMER_SRC="$REPO/workers/systemd/mushroom-karp.timer.template"
+      mkdir -p "$LOG_DIR" "$UNIT_DIR"
+      sed -e "s|{{REPO}}|$REPO|g" \
+          -e "s|{{VENV_PYTHON}}|$VENV_PYTHON|g" \
+          -e "s|{{LOG_DIR}}|$LOG_DIR|g" \
+          "$KARP_SVC_SRC" > "$UNIT_DIR/$KARP_SVC"
+      cp "$KARP_TIMER_SRC" "$UNIT_DIR/$KARP_TIMER"
+      systemctl --user daemon-reload
+      systemctl --user enable --now "$KARP_TIMER"
+      loginctl enable-linger "$(whoami)" 2>/dev/null || true
+      echo "installed $KARP_TIMER (systemd --user, fires every 30 min at :15/:45)"
+      systemctl --user list-timers "$KARP_TIMER" --no-pager
+      ;;
+    uninstall-karp)
+      systemctl --user disable --now "mushroom-karp.timer" 2>/dev/null || true
+      rm -f "$UNIT_DIR/mushroom-karp.timer" "$UNIT_DIR/mushroom-karp.service"
+      systemctl --user daemon-reload
+      echo "uninstalled mushroom-karp.timer"
+      ;;
+    status-karp)
+      systemctl --user status mushroom-karp.timer --no-pager || true
+      systemctl --user list-timers mushroom-karp.timer --no-pager 2>/dev/null || true
+      ;;
+    logs-karp)
+      journalctl --user -u mushroom-karp.service -n 40 -f
+      ;;
+    run-karp)
+      systemctl --user start mushroom-karp.service
+      echo "kicked off mushroom-karp.service"
       ;;
     install-host-telemetry)
       HT_SVC="mushroom-host-telemetry.service"

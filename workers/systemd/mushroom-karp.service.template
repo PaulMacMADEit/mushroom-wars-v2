@@ -1,0 +1,13 @@
+[Unit]
+Description=Mushroom Wars v2 karpathy-loop backstop — queue next sweep autonomously
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{REPO}}
+# `-u` for real-time streaming logs.
+ExecStart={{VENV_PYTHON}} -u {{REPO}}/scripts/karp_backstop.py
+StandardOutput=append:{{LOG_DIR}}/karp_backstop.out.log
+StandardError=append:{{LOG_DIR}}/karp_backstop.err.log
+Environment=PYTHONUNBUFFERED=1
