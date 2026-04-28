@@ -444,6 +444,57 @@ unchanged.
 budget). clip_coef sweep starts after. Fire 12 at 13:07 will likely have
 gamma-hi result + first clip_coef cell mid-flight.
 
+### Loop fire 12 — 2026-04-28 13:11 PT — gamma curve clean; clip_coef-lo unrated; skipped self_play-gated axes
+
+**State:** Worker + karp timer active. Champion drift 1145→1145 (same id).
+
+**Gamma sweep complete — clean monotone curve:**
+
+| run | gamma | updates | sps | rate | Elo | PFSP | bv n |
+|---|---|---|---|---|---|---|---|
+| gamma-lo  | 0.95 | 66 | 3588 | 0.909 | **1095** | 0.545 | 10 |
+| gamma-mid | 0.97 | 66 | 3521 | 0.907 | 1080 | 0.579 | 10 |
+| gamma-hi  | 0.99 | 77 | 4192 | 0.894 | 1070 | 0.581 | 10 |
+
+**Finding:** **lower gamma wins by ~25 Elo across the range** at 20-min
+budget. 1095/1080/1070 — first axis with a clean monotone signal across
+all three cells. Same direction as rollout_steps (lower wins) and n_envs
+(noisy but lo edges). Theme: shorter horizons / smaller batches → more
+updates → better Elo at this compute budget.
+
+**Possible YAML change:** drop baseline gamma from 0.97 to 0.95. Holding
+off without Paul's nod — would be a one-variable shift to all subsequent
+sweeps.
+
+**clip_coef-lo finished but UNRATED:**
+
+| run | clip_coef | updates | sps | rate | Elo | PFSP | bv n | elo_status |
+|---|---|---|---|---|---|---|---|---|
+| clip_coef-lo  | 0.10 | 64 | 3491 | 0.909 | 1023 | None | **0** | **unrated** |
+
+bench_eval skipped — no `bench_vector`, no PFSP weight, `elo_status=unrated`.
+Elo 1023 is the bootstrap default (rated only against random_legal anchor).
+Worker has no journald output (stdout not captured by systemd unit), so
+root cause unknown. **Will let clip_coef-mid run and see if it repeats.**
+If 2/3 cells in the sweep are unrated, that's a real bug to dig into.
+
+**Queue management:** 0 running + 2 queued (clip_coef-mid/hi) = depth 2.
+Cap 6, room for 3 more.
+
+**Skipped 2 axes from round-robin** (`leaderboard_bias`, `latest_bias`)
+— both self-play-pool gated. With `self_play: false` in baseline, they're
+no-ops. Forced next axis to **entropy_coef** to skip the wasted-compute
+cycle. Round-robin will hit them again later; if `self_play=true` is
+unlocked (currently blocked by JAX backend per trainer.py:210 comment),
+they become informative.
+
+**Queued entropy_coef sweep** (lo=0.003 / mid=0.01 / hi=0.03). Total queue
+depth now 5.
+
+**Open question still open:** karp ceiling ~1095 vs champion 1145; nothing
+this fire moved that. Skipping leaderboard_bias/latest_bias was the
+small-but-right call.
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
