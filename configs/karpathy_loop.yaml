@@ -1,0 +1,120 @@
+# Karpathy loop configuration
+#
+# Single source of truth for everything the hourly Karpathy loop reads:
+#   - baseline training hyperparams (the fixed cfg around which we sweep)
+#   - level distribution (what maps the agent trains on)
+#   - sweep axes + cell values (one variable at a time, 3 cells, ~60min)
+#   - schedule + queue policy
+#
+# Edit this file (not Python) when you want to change loop behaviour.
+# scripts/queue_karp_sweep.py reads it; the loop prompt references it.
+#
+# Reload cost: zero — every fire reads fresh from disk.
+
+schedule:
+  # Hours between loop fires. Loop self-schedules via ScheduleWakeup.
+  fire_interval_seconds: 3600
+  # Each axis cell gets this much wall time. 3 cells × 20min = 60min/sweep.
+  cell_budget_seconds: 1200
+  # If queue is non-empty with >= this many karp-* runs ahead, skip queueing
+  # this fire (don't pile up). 0 disables.
+  max_karp_queue_depth: 6
+  # Stop the loop after this many consecutive fires with no signal change
+  # (no new champions, no axis movement). 0 = never stop on idleness.
+  idle_fires_before_stop: 0
+
+queue_policy:
+  # On each fire, mark stale-running runs as failed if started_at older than this.
+  stale_running_minutes: 90
+  # On each fire, discard queued runs that don't match this label prefix.
+  protected_label_prefix: "karp-"
+  # Don't ever cancel runs whose label matches any of these (regex).
+  protected_label_patterns: []
+
+model:
+  # Defaults match the b6 phase1_full_mix champion. Override per-axis if needed.
+  model_id: "v9.0-1024"
+  simulator_id: "sim-v1.3"
+
+# Baseline training hyperparams. The 3-cell sweep keeps everything in this
+# block fixed and varies ONE field (the swept axis).
+baseline_hyperparams:
+  # Self-play + PFSP archive draws (the new bench_eval pipeline).
+  self_play: true
+  leaderboard_bias: 0.30          # P(env draws from champion archive)
+  leaderboard_source: "pfsp"      # 'pfsp' | 'elo' (legacy)
+  # Engine
+  sim_backend: "jax"
+  vec_mode: "sync"
+  fused_rollout: true
+  action_repeat: 2                # K
+  rollout_steps: 64
+  n_envs: 1024
+  # Optimisation
+  gamma: 0.97
+  entropy_coef: 0.01
+  lr: 3.0e-4
+  clip_coef: 0.2
+  # Reward
+  reward_v13: true
+  # Level distribution (per-env sampling each reset)
+  level_name: "random_full_mix"
+  level_mix:
+    random_4_8:   0.20
+    random_6_10:  0.20
+    random_8_16:  0.30
+    random_16_24: 0.30
+
+# Sweep axes. Loop cycles through this list (round-robin); never repeats the
+# same axis two fires in a row. Each axis declares its 3 cells.
+#
+# Add or remove axes here. Cells are (label, value) pairs; the label appears
+# in run labels (karp-YYMMDD-HHMM-<axis>-<cell_label>).
+sweep_axes:
+  - axis: "entropy_coef"
+    cells:
+      - { label: "lo",  value: 0.003 }
+      - { label: "mid", value: 0.01 }
+      - { label: "hi",  value: 0.03 }
+
+  - axis: "lr"
+    cells:
+      - { label: "lo",  value: 1.0e-4 }
+      - { label: "mid", value: 3.0e-4 }
+      - { label: "hi",  value: 1.0e-3 }
+
+  - axis: "rollout_steps"
+    cells:
+      - { label: "lo",  value: 32 }
+      - { label: "mid", value: 64 }
+      - { label: "hi",  value: 128 }
+
+  - axis: "n_envs"
+    cells:
+      - { label: "lo",  value: 512 }
+      - { label: "mid", value: 1024 }
+      - { label: "hi",  value: 2048 }
+
+  - axis: "gamma"
+    cells:
+      - { label: "lo",  value: 0.95 }
+      - { label: "mid", value: 0.97 }
+      - { label: "hi",  value: 0.99 }
+
+  - axis: "clip_coef"
+    cells:
+      - { label: "lo",  value: 0.10 }
+      - { label: "mid", value: 0.20 }
+      - { label: "hi",  value: 0.30 }
+
+  - axis: "leaderboard_bias"
+    cells:
+      - { label: "lo",  value: 0.10 }
+      - { label: "mid", value: 0.30 }
+      - { label: "hi",  value: 0.50 }
+
+  - axis: "action_repeat"
+    cells:
+      - { label: "lo",  value: 1 }
+      - { label: "mid", value: 2 }
+      - { label: "hi",  value: 4 }
