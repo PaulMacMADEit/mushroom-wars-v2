@@ -13,6 +13,10 @@
 #   ./workers/install_service.sh uninstall-cron   # stop + remove the cron
 #   ./workers/install_service.sh status-cron      # show cron timer state
 #   ./workers/install_service.sh logs-cron        # tail cron logs
+#   ./workers/install_service.sh install-host-telemetry    # 1/min host CPU/GPU sample → Supabase
+#   ./workers/install_service.sh uninstall-host-telemetry
+#   ./workers/install_service.sh status-host-telemetry
+#   ./workers/install_service.sh logs-host-telemetry
 #
 # The .venv directory must already exist at repo root with the worker's deps
 # installed.
@@ -175,6 +179,36 @@ elif [[ "$os" == "Linux" ]]; then
       ;;
     logs-rerate)
       journalctl --user -u mushroom-rerate.service -n 40 -f
+      ;;
+    install-host-telemetry)
+      HT_SVC="mushroom-host-telemetry.service"
+      HT_TIMER="mushroom-host-telemetry.timer"
+      HT_SVC_SRC="$REPO/workers/systemd/mushroom-host-telemetry.service.template"
+      HT_TIMER_SRC="$REPO/workers/systemd/mushroom-host-telemetry.timer.template"
+      mkdir -p "$LOG_DIR" "$UNIT_DIR"
+      sed -e "s|{{REPO}}|$REPO|g" \
+          -e "s|{{VENV_PYTHON}}|$VENV_PYTHON|g" \
+          -e "s|{{LOG_DIR}}|$LOG_DIR|g" \
+          "$HT_SVC_SRC" > "$UNIT_DIR/$HT_SVC"
+      cp "$HT_TIMER_SRC" "$UNIT_DIR/$HT_TIMER"
+      systemctl --user daemon-reload
+      systemctl --user enable --now "$HT_TIMER"
+      loginctl enable-linger "$(whoami)" 2>/dev/null || true
+      echo "installed $HT_TIMER (systemd --user, fires every 1 min)"
+      systemctl --user list-timers "$HT_TIMER" --no-pager
+      ;;
+    uninstall-host-telemetry)
+      systemctl --user disable --now "mushroom-host-telemetry.timer" 2>/dev/null || true
+      rm -f "$UNIT_DIR/mushroom-host-telemetry.timer" "$UNIT_DIR/mushroom-host-telemetry.service"
+      systemctl --user daemon-reload
+      echo "uninstalled mushroom-host-telemetry.timer"
+      ;;
+    status-host-telemetry)
+      systemctl --user status mushroom-host-telemetry.timer --no-pager || true
+      systemctl --user list-timers mushroom-host-telemetry.timer --no-pager 2>/dev/null || true
+      ;;
+    logs-host-telemetry)
+      journalctl --user -u mushroom-host-telemetry.service -n 40 -f
       ;;
     *)
       echo "unknown command: $cmd" >&2

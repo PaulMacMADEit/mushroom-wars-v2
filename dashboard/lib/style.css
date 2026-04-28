@@ -142,3 +142,23 @@ pre {
 
 .worker-btns { display: inline-flex; gap: 4px; }
 .worker-btns button[disabled] { opacity: 0.5; cursor: default; }
+
+.ht-range {
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.ht-range:hover  { color: var(--fg); }
+.ht-range.active {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+}
+/* uPlot dark-theme nudges: legend + grid against our dark bg. */
+.uplot { color: var(--fg); }
+.u-legend { color: var(--fg); font-size: 12px; }
+.u-legend th { color: var(--fg-muted); }

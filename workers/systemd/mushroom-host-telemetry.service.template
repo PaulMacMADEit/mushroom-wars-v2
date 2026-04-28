@@ -1,0 +1,12 @@
+[Unit]
+Description=Mushroom Wars v2 host telemetry — one-shot host CPU/GPU sample
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{REPO}}
+ExecStart={{VENV_PYTHON}} -u -m workers.host_telemetry
+StandardOutput=append:{{LOG_DIR}}/host-telemetry.out.log
+StandardError=append:{{LOG_DIR}}/host-telemetry.err.log
+Environment=PYTHONUNBUFFERED=1

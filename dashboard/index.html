@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>Mushroom Wars v2 — Dashboard</title>
   <link rel="stylesheet" href="lib/style.css">
+  <link rel="stylesheet" href="https://esm.sh/uplot@1.6.31/dist/uPlot.min.css">
 </head>
 <body>
   <header>
@@ -40,6 +41,33 @@
       <div class="muted">Loading…</div>
     </div>
 
+    <h2>Host utilization</h2>
+    <div class="card" id="host-telemetry-card">
+      <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin-bottom:12px;">
+        <div>
+          <label class="stat-label" for="ht-machine">machine</label>
+          <select id="ht-machine" style="background:var(--bg-card); color:var(--fg); border:1px solid var(--border); padding:4px 8px; border-radius:6px;">
+            <option value="PaulLinux">PaulLinux</option>
+          </select>
+        </div>
+        <div>
+          <label class="stat-label">range</label>
+          <div id="ht-ranges" style="display:flex; gap:6px;">
+            <button class="ht-range" data-range="1h">1h</button>
+            <button class="ht-range" data-range="24h">24h</button>
+            <button class="ht-range active" data-range="7d">7d</button>
+            <button class="ht-range" data-range="30d">30d</button>
+            <button class="ht-range" data-range="all">all</button>
+          </div>
+        </div>
+        <div class="muted small" id="ht-status" style="margin-left:auto;">loading…</div>
+      </div>
+      <div id="ht-chart" style="width:100%; height:340px;"></div>
+      <div class="muted small" style="margin-top:8px;">
+        Drag inside the chart to zoom in. Double-click to reset. Click legend rows to toggle series.
+      </div>
+    </div>
+
     <h2>Runs</h2>
     <div class="card" id="run-tabs">
       <div style="display:flex; gap:8px; margin-bottom:12px; border-bottom:1px solid var(--border); padding-bottom:8px;">
@@ -61,6 +89,7 @@
     import { sb } from './lib/supabase.js';
     import { fmtTime, fmtDuration, fmtPct, esc, statusPill, tr,
              fmtElo, ticksPerMin, totalTicks, fmtBig } from './lib/ui.js';
+    import uPlot from 'https://esm.sh/uplot@1.6.31';
 
     const $stats     = document.getElementById('stats');
     const $workers   = document.getElementById('workers');
@@ -342,6 +371,155 @@
           <tbody>${rows.join('')}</tbody>
         </table>`;
     }
+
+    // ---- Host utilization chart -------------------------------------------
+    const $htChart   = document.getElementById('ht-chart');
+    const $htStatus  = document.getElementById('ht-status');
+    const $htMachine = document.getElementById('ht-machine');
+    const $htRanges  = document.getElementById('ht-ranges');
+
+    let htPlot = null;
+    let htCurrentRange = '7d';
+
+    function rangeToSinceMs(range) {
+      const now = Date.now();
+      switch (range) {
+        case '1h':  return now - 1 * 60 * 60 * 1000;
+        case '24h': return now - 24 * 60 * 60 * 1000;
+        case '7d':  return now - 7 * 24 * 60 * 60 * 1000;
+        case '30d': return now - 30 * 24 * 60 * 60 * 1000;
+        case 'all': return 0;
+        default:    return now - 7 * 24 * 60 * 60 * 1000;
+      }
+    }
+
+    async function fetchHostTelemetry(machine, sinceMs) {
+      // Pull a chunked time-series. Cap at 20k rows so we don't melt the page;
+      // 20k @ 1/min ≈ 14 days at full resolution, 1 year if we ever downsample.
+      let q = sb.from('host_telemetry')
+        .select('ts, cpu_pct, gpu_sm_pct, vram_used_gib, vram_total_gib, mem_used_gib, mem_total_gib, gpu_temp_c, gpu_power_w')
+        .eq('machine', machine)
+        .order('ts', { ascending: true })
+        .limit(20000);
+      if (sinceMs > 0) {
+        q = q.gte('ts', new Date(sinceMs).toISOString());
+      }
+      const { data, error } = await q;
+      if (error) throw error;
+      return data;
+    }
+
+    function buildSeriesData(rows) {
+      // uPlot wants column-oriented arrays: [xs, y1s, y2s, ...]
+      const xs = new Array(rows.length);
+      const cpu = new Array(rows.length);
+      const gpu = new Array(rows.length);
+      const vramPct = new Array(rows.length);
+      const ramPct = new Array(rows.length);
+      const temp = new Array(rows.length);
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        xs[i] = Math.floor(new Date(r.ts).getTime() / 1000);  // uPlot uses unix-seconds
+        cpu[i] = r.cpu_pct;
+        gpu[i] = r.gpu_sm_pct;
+        vramPct[i] = (r.vram_used_gib != null && r.vram_total_gib)
+          ? +(100 * r.vram_used_gib / r.vram_total_gib).toFixed(1)
+          : null;
+        ramPct[i] = (r.mem_used_gib != null && r.mem_total_gib)
+          ? +(100 * r.mem_used_gib / r.mem_total_gib).toFixed(1)
+          : null;
+        temp[i] = r.gpu_temp_c;
+      }
+      return [xs, gpu, vramPct, cpu, ramPct, temp];
+    }
+
+    function htOpts() {
+      return {
+        width:  $htChart.clientWidth || 800,
+        height: 340,
+        scales: {
+          x: { time: true },
+          y: { range: [0, 100] },
+          temp: { range: [20, 95] },
+        },
+        axes: [
+          { stroke: '#8a93a6' },
+          { stroke: '#8a93a6', label: '%', labelSize: 24 },
+          { side: 1, stroke: '#fbbf24', label: '°C', labelSize: 24, scale: 'temp', grid: { show: false } },
+        ],
+        cursor: { drag: { x: true, y: false, setScale: true } },
+        legend: { live: true },
+        series: [
+          { label: 'time' },
+          { label: 'GPU %',   stroke: '#34d399', width: 1.5, scale: 'y' },
+          { label: 'VRAM %',  stroke: '#60a5fa', width: 1.5, scale: 'y' },
+          { label: 'CPU %',   stroke: '#f87171', width: 1.5, scale: 'y' },
+          { label: 'RAM %',   stroke: '#a78bfa', width: 1, scale: 'y' },
+          { label: 'GPU °C',  stroke: '#fbbf24', width: 1, scale: 'temp', dash: [4, 4], show: false },
+        ],
+      };
+    }
+
+    async function loadHostTelemetry() {
+      const machine = $htMachine.value || 'PaulLinux';
+      const since = rangeToSinceMs(htCurrentRange);
+      $htStatus.textContent = 'loading…';
+      try {
+        const rows = await fetchHostTelemetry(machine, since);
+        if (!rows.length) {
+          $htChart.innerHTML = `<div class="muted" style="padding:40px; text-align:center;">no host telemetry yet — wait a minute or two for the timer</div>`;
+          $htStatus.textContent = '0 samples';
+          if (htPlot) { htPlot.destroy(); htPlot = null; }
+          return;
+        }
+        const data = buildSeriesData(rows);
+        const lastTs = rows[rows.length - 1].ts;
+        $htStatus.textContent = `${rows.length.toLocaleString()} samples · last ${new Date(lastTs).toLocaleString()}`;
+        $htChart.innerHTML = '';
+        if (htPlot) { htPlot.destroy(); htPlot = null; }
+        htPlot = new uPlot(htOpts(), data, $htChart);
+      } catch (e) {
+        $htChart.innerHTML = `<div class="error">error: ${esc(e.message)}</div>`;
+        $htStatus.textContent = 'error';
+      }
+    }
+
+    // Range button wiring.
+    $htRanges.querySelectorAll('.ht-range').forEach(btn => {
+      btn.addEventListener('click', () => {
+        $htRanges.querySelectorAll('.ht-range').forEach(b => b.classList.toggle('active', b === btn));
+        htCurrentRange = btn.getAttribute('data-range');
+        loadHostTelemetry();
+      });
+    });
+    $htMachine.addEventListener('change', loadHostTelemetry);
+
+    // Resize → redraw at new width.
+    let htResizeT = null;
+    window.addEventListener('resize', () => {
+      clearTimeout(htResizeT);
+      htResizeT = setTimeout(() => { if (htPlot) htPlot.setSize({ width: $htChart.clientWidth, height: 340 }); }, 150);
+    });
+
+    // Populate machine dropdown from distinct machines that have data.
+    async function loadHostMachines() {
+      const { data, error } = await sb
+        .from('host_telemetry')
+        .select('machine')
+        .order('ts', { ascending: false })
+        .limit(2000);
+      if (error || !data) return;
+      const seen = new Set(data.map(r => r.machine));
+      if (!seen.size) return;
+      const cur = $htMachine.value;
+      $htMachine.innerHTML = [...seen].sort().map(m =>
+        `<option value="${esc(m)}"${m === cur ? ' selected' : ''}>${esc(m)}</option>`
+      ).join('');
+    }
+
+    loadHostMachines().then(loadHostTelemetry).catch(e => {
+      $htChart.innerHTML = `<div class="error">${esc(e.message)}</div>`;
+    });
 
     loadCurriculum().catch(e => $curriculum.innerHTML = `<div class="error">${esc(e.message)}</div>`);
     loadChampion().catch(e => $champion.innerHTML = `<div class="error">${esc(e.message)}</div>`);

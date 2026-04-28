@@ -1,0 +1,14 @@
+[Unit]
+Description=Fire mushroom-host-telemetry.service every minute
+Requires=mushroom-host-telemetry.service
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=1min
+# If the box was off at the scheduled minute, fire once on boot rather than
+# trying to "catch up" with N missed runs.
+Persistent=false
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

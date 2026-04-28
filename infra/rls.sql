@@ -15,27 +15,30 @@ BEGIN;
 -- Enable RLS
 -- ---------------------------------------------------------------------------
 
-ALTER TABLE models     ENABLE ROW LEVEL SECURITY;
-ALTER TABLE simulators ENABLE ROW LEVEL SECURITY;
-ALTER TABLE runs       ENABLE ROW LEVEL SECURITY;
-ALTER TABLE matches    ENABLE ROW LEVEL SECURITY;
-ALTER TABLE games      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE models         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE simulators     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE runs           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE matches        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE games          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE host_telemetry ENABLE ROW LEVEL SECURITY;
 
 -- ---------------------------------------------------------------------------
 -- Read policies — anon + authenticated get SELECT on everything.
 -- ---------------------------------------------------------------------------
 
-DROP POLICY IF EXISTS anon_read_models     ON models;
-DROP POLICY IF EXISTS anon_read_simulators ON simulators;
-DROP POLICY IF EXISTS anon_read_runs       ON runs;
-DROP POLICY IF EXISTS anon_read_matches    ON matches;
-DROP POLICY IF EXISTS anon_read_games      ON games;
+DROP POLICY IF EXISTS anon_read_models         ON models;
+DROP POLICY IF EXISTS anon_read_simulators     ON simulators;
+DROP POLICY IF EXISTS anon_read_runs           ON runs;
+DROP POLICY IF EXISTS anon_read_matches        ON matches;
+DROP POLICY IF EXISTS anon_read_games          ON games;
+DROP POLICY IF EXISTS anon_read_host_telemetry ON host_telemetry;
 
-CREATE POLICY anon_read_models     ON models     FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY anon_read_simulators ON simulators FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY anon_read_runs       ON runs       FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY anon_read_matches    ON matches    FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY anon_read_games      ON games      FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY anon_read_models         ON models         FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY anon_read_simulators     ON simulators     FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY anon_read_runs           ON runs           FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY anon_read_matches        ON matches        FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY anon_read_games          ON games          FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY anon_read_host_telemetry ON host_telemetry FOR SELECT TO anon, authenticated USING (true);
 
 -- ---------------------------------------------------------------------------
 -- Revoke the dangerous default grants on the anon role.
@@ -47,10 +50,11 @@ CREATE POLICY anon_read_games      ON games      FOR SELECT TO anon, authenticat
 -- RLS bypass bug or misconfiguration hits, we're still safe.
 -- ---------------------------------------------------------------------------
 
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON models     FROM anon, authenticated;
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON simulators FROM anon, authenticated;
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON runs       FROM anon, authenticated;
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON matches    FROM anon, authenticated;
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON games      FROM anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON models         FROM anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON simulators     FROM anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON runs           FROM anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON matches        FROM anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON games          FROM anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON host_telemetry FROM anon, authenticated;
 
 COMMIT;

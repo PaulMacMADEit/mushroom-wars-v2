@@ -119,6 +119,25 @@ CREATE TABLE IF NOT EXISTS games (
   log_url         TEXT
 );
 
+-- Host-level resource samples, independent of runs. Written once a minute by
+-- a systemd timer on each training box; the dashboard reads it as a sanity
+-- "is the box being used at all" timeseries.
+CREATE TABLE IF NOT EXISTS host_telemetry (
+  ts              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  machine         TEXT        NOT NULL,
+  cpu_pct         REAL,
+  mem_used_gib    REAL,
+  mem_total_gib   REAL,
+  load1           REAL,
+  gpu_sm_pct      REAL,
+  gpu_mem_pct     REAL,
+  vram_used_gib   REAL,
+  vram_total_gib  REAL,
+  gpu_power_w     REAL,
+  gpu_temp_c      REAL,
+  PRIMARY KEY (machine, ts)
+);
+
 -- ---------------------------------------------------------------------------
 -- Indexes
 -- ---------------------------------------------------------------------------
@@ -131,6 +150,8 @@ CREATE INDEX IF NOT EXISTS runs_parent_run_idx            ON runs(parent_run_id)
 
 CREATE INDEX IF NOT EXISTS matches_project_status_idx     ON matches(project, status, created_at);
 CREATE INDEX IF NOT EXISTS games_match_index_idx          ON games(match_id, game_index);
+
+CREATE INDEX IF NOT EXISTS host_telemetry_machine_ts_idx  ON host_telemetry(machine, ts DESC);
 
 -- ---------------------------------------------------------------------------
 -- Triggers: maintain denormalized counts/bests on models + simulators
