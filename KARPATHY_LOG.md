@@ -277,6 +277,45 @@ Expected impact: karp runs go from 6 → ~85 updates per 20-min cell. The
 *signal* per run becomes much stronger. May lift Elo readings by enough
 to start producing promotion-eligible runs.
 
+### Loop fire 8 — 2026-04-28 09:14 PT — fused didn't speed things up; root cause = neural opponent
+
+**Result of fire-7's "fused fix":** zero speedup. `889a3d78` still doing
+~317 sps, ~5 updates in ~10 min. GPU still 18%.
+
+**Root cause:** `opponent_name=neural` forces fused rollout into a
+**slow per-env CPU loop** (`fused_rollout.py:188`). The cron-agent's fast
+runs (3087 sps) use `opponent_name=random_legal` — fully on-device path
+(`fused_rollout.py:181-185`). I conflated "fused works with neural" (it
+doesn't crash) with "fused is fast with neural" (it isn't).
+
+**lr sweep results:**
+
+| run | lr | Elo | PFSP |
+|---|---|---|---|
+| lr-lo  | 1e-4 | **1003** | 0.840 |
+| lr-mid | 3e-4 | 938 | 0.707 |
+| lr-hi  | 1e-3 | 953 | 0.770 |
+
+**Lower lr (1e-4) wins decisively.** Legacy archive's "1e-3 wins" finding
+was rebench-invalidated.
+
+**Fix (commit `10354f2`):**
+- `scripts/queue_karp_sweep.py`: drop the auto-inject-champion-as-neural
+  logic. Default to `opponent_name=random_legal`. The cron-agent's
+  champion path proves: train fast vs random_legal, let bench_eval do
+  the heavy lifting on champion comparison.
+- Killed in-flight rollout_steps sweep (was running with neural opp).
+  *Note: marking status=failed in DB doesn't stop the worker process —
+  it'll finish naturally and overwrite the status. Bug to fix later.*
+- Re-queued `karp-260428-0916-rollout_steps-{lo,mid,hi}` with
+  `opponent_name=random_legal`.
+
+Expected for next sweep: ~85 updates per 20-min cell (vs current ~6).
+GPU should jump from 18% to ~70-80%.
+
+**Backstop now fires every 15 min** (was 30) and has zero grace window —
+empty queue = queue immediately. Eliminates idle gaps between sweeps.
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
