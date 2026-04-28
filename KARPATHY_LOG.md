@@ -91,6 +91,43 @@ from the 9-deep champion archive, weighted by PFSP).
 
 Sweep finishes around 00:55 PT (after the live cron run drains).
 
+### Loop fire 2 — 2026-04-28 00:06 PT — entropy sweep crashed; YAML fixed; re-queued
+
+**All 3 entropy runs failed within 30s** with:
+> `NotImplementedError: fused rollout doesn't support self_play yet; set cfg.fused_rollout=False or self_play=False`
+(at `training/trainer.py:387` in `_collect_rollout_fused`)
+
+Root cause: I set both `fused_rollout: true` and `self_play: true` in the
+YAML baseline. Trainer asserts they're mutually exclusive — fused mode
+hasn't been ported to handle self-play opponent specs yet.
+
+**Fix (commit `3707773`):**
+- `configs/karpathy_loop.yaml`: `fused_rollout: false`, `action_repeat: 1`.
+  Wall-clock cost is ~30% per the Phase G memory but PFSP champion-archive
+  draws are what we're actually testing, so non-fused is the right path.
+- Removed `action_repeat` from sweep axes (no-op under non-fused).
+- Added `latest_bias` axis instead — within-pool freshness vs older
+  snapshots. Lets the sweep cycle reach 8 informative axes.
+
+**Cron-meanwhile.** During the failure window, the live `cdcc0826`
+(`cron-260428-0407-phase2_selfplay-med-00`) finished cleanly, was
+**promoted to champion `0952f5cc`**. Notable readings:
+- training rate=0.92 (it's `opponent_name=neural` against a fixed
+  champion, not self-play — explains the high rate vs the 0.05 self-play
+  norm)
+- pfsp=0.536 (lowest we've seen — means strong/clear win-rates, not
+  noisy 50/50 across the archive)
+- Elo 1118 (highest live-rated entry on the chart)
+
+**Re-queued** (`karp-260428-0022-entropy_coef-{lo,mid,hi}`):
+| label | entropy_coef |
+|---|---|
+| karp-260428-0022-entropy_coef-lo  | 0.003 |
+| karp-260428-0022-entropy_coef-mid | 0.01  |
+| karp-260428-0022-entropy_coef-hi  | 0.03  |
+
+Sweep finishes ~01:24 PT.
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
