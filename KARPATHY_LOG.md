@@ -630,6 +630,40 @@ data point we want repeated in the re-run.
 **No karp- promotions yet.** Champion `0952f5cc` holding at Elo 1140
 (drift continues, identity unchanged).
 
+### Loop fire 16 — 2026-04-28 15:11 PT — back to healthy serial; entropy_coef-lo done; queued lr
+
+**State:** Worker healthy (PID 3680495, 1h 8min uptime, RSS 5.7GB,
++0.4GB since fire 15 — slow growth worth watching). GPU 4% (between
+training iters when polled). Queue back to **serial flow** post-cleanup.
+
+**Re-queued entropy_coef sweep — lo done, mid running, hi queued:**
+
+| run | entropy_coef | updates | rate | Elo | PFSP | bv n |
+|---|---|---|---|---|---|---|
+| -lo  | 0.003 | 47 | 0.914 | **1057** | 0.588 | 10 |
+| -mid | 0.01  | — | — | — running (6 min in) | — | — |
+| -hi  | 0.03  | — | — | — queued | — | — |
+
+**Note on -lo:** Only 47 updates (vs gamma sweep's 66, n_envs's 67, lr's
+~100 from old config). Same 20-min budget. With low entropy_coef
+(0.003), training apparently converged faster — fewer required updates
+per fixed sps. Possible artifact of randomness or genuine signal that
+low-entropy pol learns the random_legal opponent quicker. Will see
+mid + hi.
+
+**Champion Elo:** 1140 → 1142 (+2, drift only). Identity unchanged.
+
+**Queued lr sweep next** (`karp-260428-1512-lr-{lo=1e-4,mid=3e-4,hi=1e-3}`).
+Reasoning: `lr` was last swept in fire 7-8 BEFORE the opponent switch
+to `random_legal`. Current cycle hasn't tested lr under the current
+config. Forced this axis to skip `latest_bias` (self_play no-op).
+
+**Queue depth now 5 (1 running + 4 queued)** — under cap 6. Worker has
+~80 min of work ahead.
+
+**Carry forward:** all 3 open decisions from fire 15 still open
+(worker death, gamma baseline, self_play-gated axes).
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
