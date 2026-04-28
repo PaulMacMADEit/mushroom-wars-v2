@@ -641,7 +641,52 @@ def _public_url(path: str) -> str:
 # Train one run
 # ---------------------------------------------------------------------------
 
-METRICS_UPLOAD_EVERY = 5  # updates; ~every 15-30s depending on rollout size
+METRICS_UPLOAD_EVERY    = 5    # updates; ~every 15-30s depending on rollout size
+SNAPSHOT_INTERVAL_S     = 600  # 10 min between mid-run weight snapshots
+
+
+def _upload_snapshot(run_id, snap_n: int, trainer) -> str | None:
+    """Upload current weights to storage as a mid-run snapshot.
+
+    Returns the storage path, or None on failure (non-fatal).
+    path: snapshots/<run_id>/<n>/weights.pt
+    Also records the snapshot in the DB (snapshots table if it exists).
+    """
+    import tempfile
+    from workers import storage
+
+    run_id_str = str(run_id)
+    storage_path = f"snapshots/{run_id_str}/{snap_n}/weights.pt"
+    obs_storage_path = f"snapshots/{run_id_str}/{snap_n}/obs_norm.pt"
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="mw2-snap-") as tmp:
+            tmp_path = Path(tmp)
+            w_file = tmp_path / "weights.pt"
+            torch.save(trainer.agent.net.state_dict(), w_file)
+            w_url = storage.upload("models", storage_path, w_file)
+
+            n_url = None
+            if trainer.obs_norm is not None:
+                n_file = tmp_path / "obs_norm.pt"
+                trainer.obs_norm.save(n_file)
+                n_url = storage.upload("models", obs_storage_path, n_file)
+
+        with connect() as c:
+            with c.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO run_snapshots
+                        (run_id, snap_n, weights_url, obs_norm_url)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                """, (run_id_str, snap_n, w_url, n_url))
+            c.commit()
+
+        print(f"[worker] snapshot {snap_n} uploaded: {w_url}", flush=True)
+        return w_url
+    except Exception as exc:
+        print(f"[worker] snapshot {snap_n} failed (non-fatal): {exc}", flush=True)
+        return None
 
 
 def _handle_match(conn, match: dict, device: torch.device) -> None:
@@ -817,6 +862,8 @@ def run_training(
     total_wins = 0
 
     live_log_url: str | None = None
+    last_snapshot_at = training_started_at
+    snap_count = 0
 
     # Per-run telemetry: CPU%, GPU%, VRAM, RAM. Summarised into result JSON.
     from workers.telemetry import ResourceSampler
@@ -857,6 +904,13 @@ def run_training(
                 except Exception as upload_exc:
                     # Don't crash training on transient upload failure.
                     print(f"[worker] live-upload failed: {upload_exc}")
+
+            # Periodic mid-run weight snapshot every SNAPSHOT_INTERVAL_S.
+            now = time.time()
+            if now - last_snapshot_at >= SNAPSHOT_INTERVAL_S:
+                snap_count += 1
+                _upload_snapshot(job["id"], snap_count, trainer)
+                last_snapshot_at = now
     finally:
         # AsyncVectorEnv subprocesses need explicit cleanup; don't leak them
         # across claimed runs in the polling worker.
@@ -1064,15 +1118,12 @@ def main():
                 except Exception as admit_exc:
                     print(f"[worker] auto-admission failed for {claimed['id']}: {admit_exc}")
 
-            # Run the 4-step Elo gate: gate(30 vs random_legal) ->
-            # seed(8 vs random_legal) -> ladder(8 vs nearest-Elo peer) ->
-            # batch(8 vs last batch peer). Failed gate => elo_status=
-            # 'did_not_perform'. See workers/elo_gate.py for the policy.
+            # Archive sweep + PFSP weight update. See workers/bench_eval.py.
             try:
-                from workers.elo_gate import run_elo_gate
-                run_elo_gate(claimed["id"], claimed["label"])
+                from workers.bench_eval import run_bench_eval
+                run_bench_eval(claimed["id"], claimed["label"])
             except Exception as rate_exc:
-                print(f"[worker] elo-gate failed for {claimed['id']}: {rate_exc}")
+                print(f"[worker] bench-eval failed for {claimed['id']}: {rate_exc}")
 
             print(f"[worker] done id={claimed['id']} games={games} "
                   f"wall={wall_ms}ms rate={result['rate']:.3f} "
