@@ -664,6 +664,40 @@ config. Forced this axis to skip `latest_bias` (self_play no-op).
 **Carry forward:** all 3 open decisions from fire 15 still open
 (worker death, gamma baseline, self_play-gated axes).
 
+### Loop fire 17 — 2026-04-28 15:41 PT — entropy_coef ultra-flat (lo=mid within 1 Elo); skipped queueing
+
+**State:** Worker healthy (PID 3680495, 1h 38min uptime, RSS 5.74GB —
+**growth has stalled**, +0.04 vs +0.4 since last fire). GPU 3% (between
+iters when polled). Champion Elo 1140 (drift, identity unchanged).
+
+**Entropy_coef sweep — lo + mid done:**
+
+| run | entropy_coef | updates | rate | Elo | PFSP | bv n |
+|---|---|---|---|---|---|---|
+| -lo  | 0.003 | 47 | 0.914 | 1057 | 0.588 | 10 |
+| -mid | 0.01  | 49 | 0.912 | 1058 | 0.607 | 10 |
+| -hi  | 0.03  | — | — | — running (15 min in) | — | — |
+
+**Within 1 Elo between lo and mid.** Updates count and training rate
+near-identical. **PPO entropy bonus is a non-lever** at this scale vs
+random_legal. Will see hi for the symmetry — fire-14's old entropy_coef-hi
+was 0.03 → 1061 / rate 0.863 / 80 updates. Expect hi this run to be
+similar (more exploration + slower convergence + similar terminal Elo).
+
+**Worker memory tracking (since fire 15 restart):**
+- Fire 15: 5.32GB (just-restarted)
+- Fire 16 (+30 min): 5.73GB (+0.4)
+- Fire 17 (+30 min): 5.74GB (+0.04)
+
+Growth has plateaued. Probably JAX trace cache filling up to steady
+state. No imminent OOM risk.
+
+**Queue depth 4** (1 entropy_coef-hi running + 3 lr queued) — under cap
+6 with 2 slots free. **Skipped queueing** — worker has ~80 min of work
+ahead, no point piling on while bench_eval is healthy.
+
+**Carry forward:** open decisions unchanged from fire 15-16.
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
