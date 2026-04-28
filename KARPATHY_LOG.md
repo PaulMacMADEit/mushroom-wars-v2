@@ -58,6 +58,39 @@ phase2_selfplay-short-NN`):
 Next fire: re-check queue depth; if drained <5 runs, queue first axis
 sweep (entropy_coef: 0.003 / 0.01 / 0.03 against current champion).
 
+### Loop fire 1.5 — 2026-04-27 23:30 PT — clear + queue entropy sweep
+
+Paul: "Karpathy runs take precedence over every other run. Clear out runs
+if they are not karpathy loop." Acted:
+
+- **Stopped + disabled `mushroom-cron.timer` on PaulLinux.** The 3h cron
+  pulse was filling the queue ahead of karp- runs every 3h. Will re-enable
+  when the loop is wound down. The worker daemon (`mushroom-worker`) stays
+  active — that's what runs the karp- sweeps.
+- **Marked 3 stale "running" runs as `failed`** (started 2-9h ago, all
+  >5x past their 30-min budget). Worker had crashed/restarted without
+  resetting their state.
+- **Marked 7 queued non-karp runs as `discarded`** (cron-agent backlog).
+- Left genuinely-running `cdcc0826` (started 06:22 UTC, 7min into
+  30-min budget) alone — finishes ~23:52 PT.
+
+**Queued first karpathy sweep — entropy_coef:**
+
+| label | entropy_coef | other |
+|---|---|---|
+| karp-260427-2330-entropy-lo  | 0.003 | self_play=true, lb_bias=0.3, pfsp source |
+| karp-260427-2330-entropy-mid | 0.01  | (baseline) |
+| karp-260427-2330-entropy-hi  | 0.03  | |
+
+Other cfg is the b6 champion's: `gamma=0.97, n_envs=1024, rollout_steps=64,
+fused_rollout=true, action_repeat=2, level_mix=random_4_8/6_10/8_16/16_24
+(reward_v13), sim_backend=jax`. Budget 20min each = 60 min total. All run
+self-play with the new PFSP champion-archive sampling
+(`leaderboard_source='pfsp'`, `leaderboard_bias=0.3` → ~30% of envs draw
+from the 9-deep champion archive, weighted by PFSP).
+
+Sweep finishes around 00:55 PT (after the live cron run drains).
+
 ---
 
 ## Archive (legacy axes — pre-2026-04-27, random_legal anchor)
