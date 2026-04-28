@@ -3,11 +3,13 @@ Description=Fire mushroom-karp.service every 30 minutes
 Requires=mushroom-karp.service
 
 [Timer]
-# Every 30 minutes on the :15 and :45 marks (off-the-hour to avoid piling).
-OnCalendar=*-*-* *:15,45:00
-# Fire on boot if we missed a window.
+# Every 15 minutes. Loop's 30-min cadence + 60-min sweeps leaves the
+# queue at depth 0 for ~10-15min between fires; a 15-min backstop fills
+# those gaps. Idempotent: backstop no-ops when karp- runs are already
+# queued/running/recently-finished.
+OnCalendar=*-*-* *:00,15,30,45:00
 Persistent=true
-RandomizedDelaySec=30s
+RandomizedDelaySec=20s
 
 [Install]
 WantedBy=timers.target

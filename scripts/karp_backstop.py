@@ -28,36 +28,25 @@ sys.path.insert(0, str(ROOT))
 from cli.db import connect, PROJECT
 
 
-# Window in which the loop is considered "active". If a karp- run is
-# queued, running, or finished within this many minutes, the backstop
-# stays out of the way.
-ACTIVE_WINDOW_MIN = 25
-
+# Backstop only stays out of the way when the worker is *currently* busy
+# with a karp run (queued or running). The previous "recently finished"
+# check (25min window) caused 15-min idle gaps when a sweep finished and
+# Claude wasn't awake to queue the next one. GPU sat at 0% during those
+# gaps; we'd rather over-queue and let the cap (max_karp_queue_depth)
+# limit pile-up.
 
 def _karp_is_active() -> tuple[bool, str]:
-    """True if Claude has been queueing recently. Returns (is_active, reason)."""
+    """True iff there's a queued or running karp- run. Anything else is idle."""
     with connect() as c, c.cursor() as cur:
-        # Any queued/running karp = active
         cur.execute("""
             SELECT count(*) FROM runs
              WHERE project=%s AND label LIKE 'karp-%%'
                AND status IN ('queued','running')
         """, (PROJECT,))
         n_live = cur.fetchone()[0]
-        if n_live > 0:
-            return True, f"{n_live} karp- run(s) queued/running"
-
-        # Any karp- finished in the active window = active
-        cur.execute("""
-            SELECT count(*) FROM runs
-             WHERE project=%s AND label LIKE 'karp-%%'
-               AND finished_at >= now() - (%s * interval '1 minute')
-        """, (PROJECT, ACTIVE_WINDOW_MIN))
-        n_recent = cur.fetchone()[0]
-        if n_recent > 0:
-            return True, f"{n_recent} karp- run(s) finished in last {ACTIVE_WINDOW_MIN}min"
-
-    return False, "no karp- activity in window"
+    if n_live > 0:
+        return True, f"{n_live} karp- run(s) queued/running"
+    return False, "queue empty"
 
 
 def _clear_clutter() -> None:
