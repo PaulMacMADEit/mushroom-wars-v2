@@ -413,6 +413,37 @@ Elo crosses 1118. That's a deliberate one-variable test, not a
 hyperparam sweep — won't run it without Paul's say-so. Logging here so
 fire 11+ can pick it up.
 
+### Loop fire 11 — 2026-04-28 12:41 PT — gamma-mid done; queue full, skip queueing
+
+**State:** Worker + karp timer active. Champion Elo drifted 1147→1145
+(stochastic, unchanged identity `0952f5cc`).
+
+**Queue depth 4 (1 running + 3 queued)** — gamma-hi running, clip_coef
+sweep all queued behind it. Cap is 6; queueing 3 more would hit 7. **Skipped
+queueing per loop step-5.**
+
+**Updated gamma sweep table:**
+
+| run | gamma | updates | sps | rate | Elo | PFSP | bv n | promoted? |
+|---|---|---|---|---|---|---|---|---|
+| gamma-lo  | 0.95 | 66 | 3588 | 0.909 | **1095** | 0.545 | 10 | N |
+| gamma-mid | 0.97 | 66 | 3521 | 0.907 | 1080 | 0.579 | 10 | N |
+| gamma-hi  | 0.99 | — | — | — | — | — | — | running (12 min in) |
+
+**First axis where lo cleanly beats mid by >10 Elo** (95 vs 80, 15-point gap).
+All prior axes (rollout_steps, n_envs) had mid/lo within ~7 of each other.
+If gamma-hi continues the slope downward (≤1075), the directional finding
+is "lower gamma wins at this budget" — consistent with the rollout_steps
+finding (more frequent updates beat longer horizons).
+
+**Still opponent-bound.** Both gamma cells sit in the same ~1080-1107 band.
+Champion at 1145, karp ceiling untouched. Open question from fire 9-10
+unchanged.
+
+**Next fire:** gamma-hi should finish ~12:50 PT (started 12:29, 20-min
+budget). clip_coef sweep starts after. Fire 12 at 13:07 will likely have
+gamma-hi result + first clip_coef cell mid-flight.
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
