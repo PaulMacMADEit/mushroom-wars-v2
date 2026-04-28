@@ -495,6 +495,39 @@ depth now 5.
 this fire moved that. Skipping leaderboard_bias/latest_bias was the
 small-but-right call.
 
+### Loop fire 13 — 2026-04-28 13:41 PT — clip_coef-lo back-filled (false alarm); flat clip axis so far
+
+**State:** Worker + karp timer active. Champion drift 1145→**1134** (-11),
+same identity `0952f5cc`. Champion Elo is wandering as more karp- runs
+add bench match data — not a real ability change.
+
+**Correction to fire 12.** I flagged clip_coef-lo as unrated/bv=0 last
+fire. **It was not broken — bench_eval just hadn't run yet.** It
+back-filled by this fire to elo=**1085**, rated, bv=10, pfsp=0.545.
+Lesson: there's a non-trivial gap between training-finish and bench_eval-
+finish. Don't panic on a single "unrated" reading; wait one fire. Adding
+this to "Don'ts" — see [project_mushroom_wars_karp_loop.md] update
+needed.
+
+**clip_coef sweep — lo + mid done (hi running):**
+
+| run | clip_coef | updates | sps | rate | Elo | PFSP | bv n |
+|---|---|---|---|---|---|---|---|
+| clip_coef-lo  | 0.10 | 64 | 3491 | 0.909 | 1085 | 0.545 | 10 |
+| clip_coef-mid | 0.20 | 64 | 3462 | 0.909 | **1089** | 0.545 | 10 |
+| clip_coef-hi  | 0.30 | — | — | — | — | — | — running |
+
+**Within 4 Elo** between lo and mid — flat axis so far. PPO clip ratio
+matters less than gamma/rollout_steps at this budget. Will see hi.
+
+**Queue depth:** 1 running (clip_coef-hi) + 3 queued (entropy_coef sweep)
+= **4**. Adding 3 more would hit 7, exceeds cap 6. **Skipped queueing.**
+
+**Carry forward:** decision items from fire 12 still open —
+1. Drop baseline gamma 0.97 → 0.95?
+2. Comment out `leaderboard_bias` + `latest_bias` from round-robin until
+   self_play unlocks?
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
