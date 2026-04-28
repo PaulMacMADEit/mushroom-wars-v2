@@ -316,6 +316,63 @@ GPU should jump from 18% to ~70-80%.
 **Backstop now fires every 15 min** (was 30) and has zero grace window —
 empty queue = queue immediately. Eliminates idle gaps between sweeps.
 
+### Loop fire 9 — 2026-04-28 12:02 PT — caught up after silent backstop period
+
+**System running healthy without me.** Backstop (PaulLinux systemd timer)
+queued 2 sweeps autonomously while my Claude wakeups failed to fire. n_envs
+sweep + start of gamma sweep — no human intervention.
+
+**Speedup verified.** All runs since switching to `opponent_name=random_legal`
+hit 2700-4700 steps/sec (vs old 316). ~10-15× faster.
+
+**rollout_steps sweep:**
+
+| run | rollout_steps | updates | sps | rate | Elo | PFSP |
+|---|---|---|---|---|---|---|
+| rollout_steps-lo  | 32  | **105** | 2829 | 0.923 | **1107** | 0.551 |
+| rollout_steps-mid | 64  | 64      | 3472 | 0.905 | 1100 | 0.593 |
+| rollout_steps-hi  | 128 | 43      | 4520 | 0.863 | 1082 | 0.592 |
+
+**Finding:** lower rollout_steps wins. More frequent updates beat longer
+rollouts at this budget. Tradeoff: hi gets best raw sps (4520) but ⅓ the
+update count, and Elo suffers.
+
+**n_envs sweep:**
+
+| run | n_envs | updates | sps | rate | Elo | PFSP |
+|---|---|---|---|---|---|---|
+| n_envs-lo  | 512  | **102** | 2751 | 0.921 | 1083 | 0.609 |
+| n_envs-mid | 1024 | 67      | 3602 | 0.901 | 1087 | 0.577 |
+| n_envs-hi  | 2048 | 44      | 4691 | 0.855 | 1081 | 0.586 |
+
+**Finding:** **flat across n_envs** at 20-min budget. lo (512) edges hi
+(2048) but within noise. Same pattern as rollout_steps: more updates
+trumps bigger batches at this scale.
+
+**Both sweeps tell the same story:** for this game/model size, the
+update-count-vs-batch-size tradeoff favours "many small updates" over
+"few large ones". The 3070's GPU% was never going to be the lever —
+**update frequency** is what moves Elo.
+
+**No karp- runs promoted to champion yet.** All Elos sit ~1080-1107
+(above anchor 1000) but don't beat the live champion `0952f5cc` (Elo
+1118) in head-to-head ≥60%. The champion was trained vs another champion
+(self-play chain), karp- runs train vs random_legal — different ceiling.
+
+**Open question:** should we switch a karp axis to test "vs champion"
+(slower per-update) vs "vs random_legal" (faster, but capped Elo)?
+Right now we're stuck below the champion ceiling regardless of how many
+updates we do because the opponent distribution is too easy.
+
+**Possible next code change:** the b6 champion is `cdcc0826` (`med-00`,
+30-min budget). Karp runs are 20 min. To compete head-to-head we may
+need (a) longer runs, or (b) train vs champion path with the slow
+opponent. Worth a sweep on `cell_budget_seconds`.
+
+**Schedule update:** Claude-side `ScheduleWakeup` not reliably firing
+during active conversation. Server-side backstop is the actual loop
+driver. Will rely on it. I'll continue logging when prompted.
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
