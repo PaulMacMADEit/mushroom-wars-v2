@@ -185,6 +185,41 @@ This means: even if my Claude session dies entirely overnight, karp-
 runs keep flowing. I (Claude) become the analysis layer; the engine
 runs without me.
 
+### Loop fire 5 — 2026-04-28 07:41 PT — first successful sweep + lr queued
+
+**Entropy sweep complete.** All 3 ran cleanly (no crashes). Trained vs
+champion `cdcc0826` (Elo 1118) for 20 min each.
+
+| run | entropy_coef | training rate | PFSP | bv n | promoted? | Elo |
+|---|---|---|---|---|---|---|
+| karp-260428-0615-entropy_coef-lo  | 0.003 | 5.4% | 0.866 | 10 | N | 979 |
+| karp-260428-0615-entropy_coef-mid | 0.01  | 5.2% | 0.855 | 10 | N | 978 |
+| karp-260428-0615-entropy_coef-hi  | 0.03  | 5.2% | 0.775 | 10 | N | 991 |
+
+**Findings:**
+- **None promoted** — none beat the champion ≥60% over 16 games. Expected
+  for 20-min runs vs a 30-min-trained champion.
+- **Training rate ~5%** across all three — they won 5% of training games
+  vs the fixed champion. Tight clustering says entropy didn't move
+  training-game outcomes much at this budget.
+- **Hi (0.03) has best Elo (991), worst PFSP (0.775).** Reading: more
+  entropy = more diverse play = clearer wins/losses across the archive
+  (PFSP drops toward 0 when results are decisive, peaks at 50/50). So
+  hi entropy may have slightly better generalisation, but in the
+  noisier-vs-archive direction.
+- **Within noise** on n=8 bench games per archive member. 10 archive
+  members × 8 = 80 bench games each. Differences ≤ 13 Elo points.
+
+**Tentative read:** entropy_coef wasn't the bottleneck. The fact that
+nothing beat the champion at all says either (a) 20 min isn't enough
+training time, (b) the champion is already at a local plateau the
+sweep can't easily exit, or (c) we need a *different* axis to move
+the needle.
+
+**Queued next:** `karp-260428-0742-lr-{lo,mid,hi}` with lr ∈
+{1e-4, 3e-4, 1e-3}. Same baseline cfg, training vs same champion
+`cdcc0826`. Sweep finishes ~08:42 PT.
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
