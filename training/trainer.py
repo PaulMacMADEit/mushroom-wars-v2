@@ -66,6 +66,10 @@ class PPOConfig:
     # Default 0.3 gives roughly: 30% leaderboard, 56% latest own, 14% older own.
     leaderboard_bias:     float = 0.3
     leaderboard_top_k:    int   = 10
+    # Source for cross-lineage opponents. 'pfsp' (default) draws from the
+    # champion archive weighted by PFSP score (peak at 50% win-rate);
+    # 'elo' is the legacy top-K-Elo path kept for compatibility.
+    leaderboard_source:   str   = "pfsp"
     # Level
     # Static name (e.g. "crossroads_6") or dynamic "random_<min>_<max>".
     # Dynamic levels regenerate per reset so training sees varied geometry.
@@ -122,10 +126,24 @@ class PPOTrainer:
         if self.cfg.self_play:
             self.pool = OpponentPool(root=pool_root, max_size=self.cfg.pool_max_size)
 
-        # Cross-lineage leaderboard opponents. Each entry: (weights_path, obs_norm_path|None).
-        # Worker downloads top-K Elo snapshots before constructing us; when
-        # leaderboard_bias > 0 we sample from this list for a fraction of envs.
-        self._leaderboard: list[tuple] = list(leaderboard_paths or [])
+        # Cross-lineage opponents. Accepts both shapes:
+        #   (weights_path, obs_norm_path|None)            — uniform weight 1.0
+        #   (weights_path, obs_norm_path|None, weight)    — PFSP-weighted draw
+        # Normalised to (path, norm, weight) tuples; `_lb_weights` is a
+        # cached numpy probability vector matching `self._leaderboard`.
+        normalised: list[tuple] = []
+        for entry in (leaderboard_paths or []):
+            if len(entry) == 3:
+                normalised.append(entry)
+            else:
+                normalised.append((entry[0], entry[1], 1.0))
+        self._leaderboard: list[tuple] = normalised
+        if self._leaderboard:
+            raw = np.asarray([e[2] for e in self._leaderboard], dtype=np.float64)
+            total = raw.sum()
+            self._lb_weights = (raw / total) if total > 0 else None
+        else:
+            self._lb_weights = None
 
         # Initial opponent: simple name for the very first rollout. After
         # the first snapshot registers (every cfg.snapshot_every updates),
@@ -556,12 +574,16 @@ class PPOTrainer:
         specs: list[dict] = []
         for _ in range(self.cfg.n_envs):
             if use_lb and self._rng.random() < self.cfg.leaderboard_bias:
-                entry = lb[int(self._rng.integers(0, len(lb)))]
+                if self._lb_weights is not None:
+                    idx = int(self._rng.choice(len(lb), p=self._lb_weights))
+                else:
+                    idx = int(self._rng.integers(0, len(lb)))
+                w_path, n_path, _wt = lb[idx]
             else:
                 entry = self.pool.sample(self._rng, latest_bias=self.cfg.latest_bias)
                 if entry is None:
                     entry = (w, n)
-            w_path, n_path = entry
+                w_path, n_path = entry
             specs.append({
                 "weights_path":  str(w_path),
                 "obs_norm_path": str(n_path) if n_path else None,

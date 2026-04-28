@@ -586,14 +586,11 @@ def _resolve_opponent_kwargs(kw: dict) -> dict:
 
 
 def _download_leaderboard_opponents(run_id, top_k: int) -> list[tuple]:
-    """Download top-K Elo runs' weights+obs_norm to a local temp dir.
+    """LEGACY top-K Elo opponent downloader. Kept as a fallback for runs that
+    request it explicitly (cfg.leaderboard_source='elo'). Champions-archive
+    PFSP path is the new default — see _download_pfsp_champions.
 
-    Returns [(weights_path, obs_norm_path|None)] suitable for
-    PPOTrainer(leaderboard_paths=...). Excludes the current run, the
-    baseline pseudo-run, and anything without a weights_url.
-
-    Mixed net sizes are fine: opponents.make_neural_opponent infers
-    body_dim from the saved state_dict when the sub-env loads them.
+    Returns [(weights_path, obs_norm_path|None)] — uniform-sample shape.
     """
     import tempfile
 
@@ -609,8 +606,6 @@ def _download_leaderboard_opponents(run_id, top_k: int) -> list[tuple]:
             )
             rows = cur.fetchall()
 
-    # Persist once per run; the returned dir lives as long as the trainer
-    # (mkdtemp'd, cleaned up on worker restart, not per-snapshot).
     out_dir = Path(tempfile.mkdtemp(prefix="mw2-leaderboard-"))
     results: list[tuple] = []
     for rid, w_url, n_url in rows:
@@ -627,6 +622,76 @@ def _download_leaderboard_opponents(run_id, top_k: int) -> list[tuple]:
             print(f"[worker] leaderboard: skip {rid} — download failed: {exc}")
             continue
         results.append((w_path, n_path))
+    return results
+
+
+def _download_pfsp_champions(run_id) -> list[tuple]:
+    """Download every champion in the archive with PFSP sampling weights.
+
+    Returns [(weights_path, obs_norm_path|None, weight)]. `weight` is an
+    unnormalised PFSP score in [0, 1]: how informative is this opponent
+    based on the most-recent run that bench-eval'd it.
+
+    Heuristic: for each champion, pull the most-recent rated run that has a
+    bench_vector entry for it. weight = 1 - |wr - 0.5|. Defaults to 0.5
+    (mid-info) if no prior bench data exists yet.
+
+    Returns [] if the champions table is empty — caller falls back to pure
+    self-play.
+    """
+    import tempfile
+
+    with connect() as c:
+        with c.cursor() as cur:
+            cur.execute("""
+                SELECT id, source_run_id, weights_url, obs_norm_url, label
+                  FROM champions
+                 WHERE source_run_id <> %s
+                 ORDER BY archived_at DESC
+            """, (str(run_id),))
+            rows = cur.fetchall()
+
+    if not rows:
+        return []
+
+    # For each champion, find the most-recent bench_vector entry that scored it.
+    weights_by_champ: dict[str, float] = {}
+    with connect() as c:
+        with c.cursor() as cur:
+            for champ_id, _, _, _, _ in rows:
+                cur.execute("""
+                    SELECT (bench_vector ->> %s)::float AS wr
+                      FROM runs
+                     WHERE elo_status = 'rated'
+                       AND bench_vector ? %s
+                     ORDER BY finished_at DESC NULLS LAST
+                     LIMIT 1
+                """, (str(champ_id), str(champ_id)))
+                r = cur.fetchone()
+                if r and r[0] is not None:
+                    wr = float(r[0])
+                    weights_by_champ[str(champ_id)] = max(1.0 - abs(wr - 0.5), 1e-3)
+                else:
+                    weights_by_champ[str(champ_id)] = 0.5  # no data → mid-info default
+
+    out_dir = Path(tempfile.mkdtemp(prefix="mw2-pfsp-"))
+    results: list[tuple] = []
+    for champ_id, source_rid, w_url, n_url, label in rows:
+        if not w_url:
+            continue
+        w_path = out_dir / f"{str(champ_id)[:8]}-weights.pt"
+        n_path: Path | None = None
+        try:
+            urllib.request.urlretrieve(_public_url(w_url), w_path)
+            if n_url:
+                n_path = out_dir / f"{str(champ_id)[:8]}-obs_norm.pt"
+                urllib.request.urlretrieve(_public_url(n_url), n_path)
+        except Exception as exc:
+            print(f"[worker] pfsp: skip champion {label} — download failed: {exc}")
+            continue
+        weight = weights_by_champ[str(champ_id)]
+        results.append((w_path, n_path, weight))
+        print(f"[worker] pfsp opp '{label[:40]}' weight={weight:.3f}")
     return results
 
 
@@ -823,19 +888,28 @@ def run_training(
             print(f"[worker] loaded parent weights "
                   f"(params={sum(p.numel() for p in net.parameters()):,})")
 
-    # Fetch cross-lineage leaderboard opponents if requested. Must happen
-    # before PPOTrainer construction so trainer can mix them into envs.
+    # Fetch cross-lineage opponents. Default path is the champion archive with
+    # PFSP weights; legacy top-K-Elo path is available via
+    # cfg.leaderboard_source='elo' for back-compat / experiments.
     leaderboard_paths: list[tuple] = []
-    if cfg.leaderboard_bias > 0 and cfg.leaderboard_top_k > 0:
+    if cfg.leaderboard_bias > 0:
+        source = getattr(cfg, "leaderboard_source", "pfsp")
         try:
-            leaderboard_paths = _download_leaderboard_opponents(
-                run_id=job["id"],
-                top_k=cfg.leaderboard_top_k,
-            )
-            print(f"[worker] downloaded {len(leaderboard_paths)} leaderboard opponents "
-                  f"for cross-lineage self-play (bias={cfg.leaderboard_bias:.2f})")
+            if source == "elo":
+                lb_raw = _download_leaderboard_opponents(
+                    run_id=job["id"], top_k=cfg.leaderboard_top_k,
+                )
+                # Legacy path returns (w, n) — promote to (w, n, 1.0) so the trainer
+                # can treat both shapes uniformly.
+                leaderboard_paths = [(w, n, 1.0) for (w, n) in lb_raw]
+                print(f"[worker] downloaded {len(leaderboard_paths)} top-Elo opponents "
+                      f"(source=elo, bias={cfg.leaderboard_bias:.2f})")
+            else:
+                leaderboard_paths = _download_pfsp_champions(run_id=job["id"])
+                print(f"[worker] downloaded {len(leaderboard_paths)} PFSP-weighted "
+                      f"champions (source=pfsp, bias={cfg.leaderboard_bias:.2f})")
         except Exception as exc:
-            print(f"[worker] leaderboard download failed, falling back to pure self-play: {exc}")
+            print(f"[worker] opponent download failed ({source}); pure self-play: {exc}")
 
     agent = PPOAgent(net, device=device)
     trainer = PPOTrainer(
