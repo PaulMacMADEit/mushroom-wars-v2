@@ -237,6 +237,46 @@ legacy entropy_coef sweep had hinted (at 15-min budget that data showed
 lr=1e-4 barely beat random at 50%). New eval system is showing different
 signal.
 
+### Loop fire 7 — 2026-04-28 08:43 PT — lr-mid done; 10x speedup unlocked
+
+| run | lr | training rate | PFSP | bv n | Elo |
+|---|---|---|---|---|---|
+| karp-260428-0742-lr-lo  | 1e-4 | 5.3% | 0.840 | 10 | **1003** |
+| karp-260428-0742-lr-mid | 3e-4 | 4.9% | 0.706 | 10 | 938 |
+| karp-260428-0742-lr-hi  | 1e-3 | (running) | — | — | — |
+
+**lr-mid Elo 938 is the worst karp result yet.** Lower than lr-lo (1003)
+and worse PFSP (0.71 — meaning archive sweep was more decisive vs it).
+Tentative: lower lr (1e-4) is better than baseline (3e-4) at 20-min budget,
+maybe surprising vs Karpathy archive's "1e-3 wins at 15-min" finding.
+Wait for lr-hi to land before concluding.
+
+**🚀 GPU bottleneck investigated (Paul: "GPU only at 18%").**
+
+Per-update breakdown of every karp run so far (4 runs averaged):
+- **rollout: 98.7%** of update time
+- **env_step: 93.6%** (CPU-bound JAX sim step)
+- **learn: 1.3%** (the only GPU-bound bit)
+- **act_batch: 0.2%**
+
+Compare to cron-agent runs at SAME `n_envs=1024, rollout_steps=64`:
+- karp non-fused: **316 steps/sec, 17 games/sec, 6 updates/20-min**
+- cron fused:     **3087 steps/sec, 180 games/sec, 85 updates/20-min** (10x)
+
+**Root cause:** I had `fused_rollout: false` in the YAML based on an
+incorrect assumption that fused was incompatible with `opponent_name=neural`.
+Verified 2026-04-28: fused only blocks `self_play=true` (per-env neural
+opponents). With `self_play=false + opponent_name=neural` (our current
+path), fused works perfectly — cron uses it daily.
+
+**Fix (commit `28da48a`):** flipped YAML to `fused_rollout: true`,
+`action_repeat: 2`. Already pushed + pulled on PaulLinux. Next sweep will
+run fused. Existing lr-hi finishes on old non-fused cfg.
+
+Expected impact: karp runs go from 6 → ~85 updates per 20-min cell. The
+*signal* per run becomes much stronger. May lift Elo readings by enough
+to start producing promotion-eligible runs.
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
