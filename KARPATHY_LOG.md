@@ -24,7 +24,39 @@ as run under partial system.
 
 ## Sweeps run under new bench_eval (2026-04-27 →)
 
-*(none yet — first batch under the new system pending)*
+### Loop fire 1 — 2026-04-27 22:56 PT — observe-only (queue full)
+
+Queue depth 12 (3 running, 9 cron-agent queued ahead). Skipped queueing
+per loop step-3 stop rule.
+
+Observations from last 90 min (5 finished runs, all `cron-260428-0407-
+phase2_selfplay-short-NN`):
+
+| run | training rate | PFSP | bv n | promoted? | Elo |
+|---|---|---|---|---|---|
+| short-03 (072fe893) | 0.052 | 0.803 | 8 | **Y** | 1034 |
+| short-02 (5d177b07) | 0.050 | 0.818 | 7 | **Y** | 1009 |
+| short-01 (8c1fc31f) | 0.050 | 0.869 | 6 | **Y** | 1003 |
+| short-00 (2ee773c4) | 0.046 | 0.869 | 6 | **Y** | 1005 |
+| med-03 (491fdac9)   | 0.101 | 0.782 | 6 | **Y** | 1023 |
+
+**Champion archive: 9 entries, all era v9, all from the last 6 hours.**
+
+**Two flags:**
+1. *Every* recent run promoted. Either the 60% gate is too lax against the
+   tail-champion, or self-play training is genuinely stair-stepping. After
+   the queue drains, run a 16-game match between champion #1 (oldest
+   archived, `d53a2871` from 01:13) and champion #9 (newest, `02651ce3`
+   from 05:47) — if newest wins ≥75%, gate is calibrated; if ≤55%, the
+   archive is full of near-duplicates and PROMO_THRESHOLD should rise.
+2. *Training rate is 0.05-0.10* — meaning the agent only wins 5-10% of
+   training games. Expected under PFSP-weighted self-play (matched against
+   strong-but-informative opponents) but worth confirming once a non-cron
+   karp- run finishes — Karpathy axes will be fixed-opponent which should
+   show a higher rate.
+
+Next fire: re-check queue depth; if drained <5 runs, queue first axis
+sweep (entropy_coef: 0.003 / 0.01 / 0.03 against current champion).
 
 ---
 
