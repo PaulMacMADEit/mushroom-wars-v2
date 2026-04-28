@@ -698,6 +698,76 @@ ahead, no point piling on while bench_eval is healthy.
 
 **Carry forward:** open decisions unchanged from fire 15-16.
 
+### Loop fire 18 — 2026-04-28 16:11 PT — entropy_coef-hi underperforms; lr-lo done; loop has exhausted informative axes
+
+**State:** Worker healthy (2h 8min continuous uptime, RSS 5.78GB
+plateaued). Champion drift 1140→1140, identity unchanged.
+
+**Entropy_coef sweep complete:**
+
+| run | entropy_coef | updates | rate | Elo | PFSP |
+|---|---|---|---|---|---|
+| -lo  | 0.003 | 47 | 0.914 | 1057 | 0.588 |
+| -mid | 0.01  | 49 | 0.912 | 1058 | 0.607 |
+| -hi  | 0.03  | 54 | 0.901 | **1036** | 0.627 |
+
+**Finding revised:** entropy_coef IS a lever, but the wrong direction
+than I expected. Lo + mid are tied at ~1057 (plateau); **hi (0.03)
+under-trains by ~22 Elo**. Higher entropy bonus → more exploration
+under random_legal → fewer effective updates spent on exploiting.
+This is the second monotone axis (with gamma) where lower wins.
+PFSP weight (0.627) is highest for hi — confirming bench archive
+beat it more often.
+
+**Lr sweep — lo done, mid running, hi queued:**
+
+| run | lr | updates | rate | Elo | PFSP |
+|---|---|---|---|---|---|
+| -lo  | 1e-4 | 49 | 0.916 | **1073** | 0.562 |
+| -mid | 3e-4 | — running (1 min in) | — | — | — |
+| -hi  | 1e-3 | — queued | — | — | — |
+
+(Last lr sweep was fire 7-8, pre-random_legal, so this one's worth
+keeping.)
+
+**🛑 Loop status: all informative axes now swept under current config.**
+
+Axis ledger:
+| axis | status | finding |
+|---|---|---|
+| entropy_coef | ✅ swept | hi under-trains by 22 Elo; lo=mid plateau |
+| lr | 🟡 in flight | lo=1073 so far |
+| rollout_steps | ✅ (fire 9) | lower wins by ~12 Elo |
+| n_envs | ✅ (fire 9) | flat |
+| gamma | ✅ (fire 10-12) | **lower wins by 25 Elo** (strongest finding) |
+| clip_coef | ✅ (fires 12-13) | flat |
+| leaderboard_bias | ❌ skipped | no-op while self_play=false |
+| latest_bias | ❌ skipped | no-op while self_play=false |
+
+After lr-mid + lr-hi finish, **the loop has nothing new to learn under
+current config.** Round-robin will start cycling repeats. The
+opponent-bound ceiling (~1095 max karp Elo vs champion 1140) is the
+real wall — flagged since fire 9.
+
+**Strategic next moves to surface to Paul:**
+1. **Bake gamma 0.95** into baseline (strongest finding) and re-sweep
+   one or two axes to see if the absolute Elo lifts. Cheap.
+2. **Add an "opponent" axis** — sweep `random_legal` vs `neural`-vs-
+   champion, even though it'd be slow. Tests the ceiling-is-opponent-
+   bound hypothesis directly.
+3. **Bump cell_budget_seconds** from 20→30 min so karp matches the
+   30-min budget cron-agent uses for `phase2_selfplay-med`. Currently
+   the karp- ceiling could be partially budget-bound.
+4. **Coast** — round-robin keeps generating noise data; useful only
+   if we suspect Elo readings are unstable.
+
+**Skipped queueing this fire.** Queue 2 (1 running + 1 queued). Will
+let lr finish before deciding next move.
+
+**Carry forward:** the 3 fire-15 open decisions (worker death? gamma
+baseline? skip self_play-gated axes?) — this fire's strategic-next-
+moves list is in the same family.
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
