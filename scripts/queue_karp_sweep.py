@@ -31,20 +31,6 @@ from cli.loop_config import load
 _KARP_AXIS_RE = re.compile(r"^karp-\d{6}-\d{4}-([a-z_]+)-(?:lo|mid|hi)$")
 
 
-def _latest_champion() -> tuple[str, str] | None:
-    """Most-recent champion's (source_run_id, label). Used as training opponent
-    since per-env neural opponents aren't supported on the JAX backend yet."""
-    with connect() as c, c.cursor() as cur:
-        cur.execute("""
-            SELECT source_run_id, label
-              FROM champions
-             ORDER BY archived_at DESC
-             LIMIT 1
-        """)
-        r = cur.fetchone()
-    return (str(r[0]), r[1]) if r else None
-
-
 def _last_karp_axis() -> str | None:
     """Most-recent karp- run's axis (from labels), or None if no karp- runs yet."""
     with connect() as c, c.cursor() as cur:
@@ -99,21 +85,11 @@ def queue_sweep(axis: str | None, dry_run: bool, baseline_overrides: dict) -> No
     base_hp = {**cfg.baseline_hyperparams, **baseline_overrides}
     cells = axis_obj.cells
 
-    # Inject training opponent = most-recent champion (jax backend doesn't
-    # support per-env neural opponents yet; see trainer.py:210). Only inject
-    # when self_play is False — otherwise the trainer would fight us.
-    if not base_hp.get("self_play", False):
-        champ = _latest_champion()
-        if champ is None:
-            print("[karp] WARN: no champion in archive yet — falling back to random_legal opponent")
-        else:
-            champ_id, champ_label = champ
-            base_hp["opponent_name"] = "neural"
-            base_hp["opponent_kwargs"] = {
-                "device": "cuda",
-                "opponent_run_id": champ_id,
-            }
-            print(f"[karp] training opponent: {champ_label[:50]} ({champ_id[:8]})")
+    # Training opponent: random_legal is the JAX-fast on-device path.
+    # opponent_name=neural forces a slow per-env CPU loop (fused_rollout.py:188)
+    # that loses the ~10x speedup. The cron-agent's working pattern uses
+    # random_legal for rollouts; bench_eval handles champion comparison after.
+    base_hp.setdefault("opponent_name", "random_legal")
 
     stamp = datetime.now().strftime("%y%m%d-%H%M")
     budget_ms = int(cfg.schedule["cell_budget_seconds"]) * 1000
