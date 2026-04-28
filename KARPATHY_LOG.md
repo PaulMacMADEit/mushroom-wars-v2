@@ -768,6 +768,53 @@ let lr finish before deciding next move.
 baseline? skip self_play-gated axes?) — this fire's strategic-next-
 moves list is in the same family.
 
+### Loop fire 19 — 2026-04-28 16:41 PT — lr signal: lo wins by 37 Elo over mid; let backstop coast
+
+**State:** Worker healthy (2h 38min continuous, RSS 5.79GB plateau).
+Champion drift 1140→**1145** (+5, identity unchanged).
+
+**Lr sweep — lo + mid done, hi running:**
+
+| run | lr | updates | rate | Elo | PFSP |
+|---|---|---|---|---|---|
+| -lo  | 1e-4 | 49 | 0.916 | **1073** | 0.562 |
+| -mid | 3e-4 | 51 | 0.912 | 1036 | 0.625 |
+| -hi  | 1e-3 | — | — | — running (9 min in) | — |
+
+**lr-lo (1e-4) beats lr-mid (3e-4) by 37 Elo.** Third strong signal of
+the loop (after gamma and entropy_coef hi-underperform). Lower lr
+trains more cautiously; given that **most axes prefer "more updates"**
+(rollout_steps lower, gamma lower, entropy lower), lower lr fits the
+same theme — slower, more conservative learning produces a better
+final policy at this 20-min budget.
+
+**Three monotone-lower-wins findings:**
+| axis | lo | hi | gap |
+|---|---|---|---|
+| gamma | 1095 | 1070 | -25 Elo |
+| entropy_coef | 1057 | 1036 | -22 Elo |
+| **lr** | **1073** | **1036 (mid)** | **-37 Elo** |
+
+Plus rollout_steps (-12 Elo), n_envs (~flat), clip_coef (~flat).
+Pattern is robust: the karp config wants smaller, more frequent updates.
+
+**No autonomous config changes.** All strategic next moves from fire
+18 require Paul's call (bake gamma 0.95? change cell budget? add
+opponent axis?). Loop is now in repeat-cycles mode.
+
+**Skipped queueing.** After lr-hi finishes (~16:52 PT), backstop's
+15-min timer will pick `rollout_steps` (round-robin from `lr`) and
+start the second cycle. Generates noise estimates for Elo stability.
+
+**Worker memory footprint sanity check:**
+- Fire 15→16: +0.4GB
+- Fire 16→17: +0.04GB
+- Fire 17→18: +0.04GB
+- Fire 18→19: +0.01GB
+Plateau confirmed. Original worker died at peak 9.0GB after 5h+ CPU
+time; current process at 2h 38min / 5.79GB is well below that
+trajectory, but worth a flag if it continues climbing past ~7GB.
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
