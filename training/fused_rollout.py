@@ -191,8 +191,9 @@ def collect_rollout_fused(
 
         # Run K env ticks fused.
         result = vec_env.step_chunk(a_batch, K=K)
-        rewards    = result["rewards"]
-        terminated = result["dones"]
+        rewards        = result["rewards"]
+        terminated     = result["dones"]
+        terminal_phase = result.get("terminal_phase")  # (n_envs,) int8: 1=P1, 2=P2, 3=DRAW
 
         # Encode + masks for the post-chunk state (all on device).
         next_obs_dev, next_p1_mask_dev, next_p2_mask_dev = _encode_and_masks(vec_env)
@@ -206,12 +207,16 @@ def collect_rollout_fused(
         rew_buf[t]  = rewards
         done_buf[t] = terminated.astype(np.float32)
 
-        # Per-env episode bookkeeping.
+        # Per-env episode bookkeeping. Prefer the literal terminal_phase
+        # signal (1 = P1_WINS) over the reward-sum proxy when available.
         ep_return += rewards
         ep_length += K
         for i in range(N):
             if terminated[i]:
-                won = bool(ep_return[i] > 0.5)
+                if terminal_phase is not None:
+                    won = bool(int(terminal_phase[i]) == 1)
+                else:
+                    won = bool(ep_return[i] > 0.5)
                 completed.append((float(ep_return[i]), int(ep_length[i]), won))
                 ep_return[i] = 0.0
                 ep_length[i] = 0

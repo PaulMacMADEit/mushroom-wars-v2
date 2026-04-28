@@ -200,11 +200,12 @@ class JaxVecStepResult:
     (encoder-as-trainer rule in ARCHITECTURE §9); callers that need the
     gym-dict obs can grab it from `env.snapshot_numpy_states()`.
     """
-    rewards:    np.ndarray     # (n_envs,) float32 — P1 rewards
-    rewards_p2: np.ndarray     # (n_envs,) float32 — P2 rewards
-    terminated: np.ndarray     # (n_envs,) bool
-    truncated:  np.ndarray     # (n_envs,) bool — always False (no time limit beyond done)
-    infos:      Any            # list-like of per-env {phase, tick} — lazily materialised
+    rewards:        np.ndarray     # (n_envs,) float32 — P1 rewards
+    rewards_p2:     np.ndarray     # (n_envs,) float32 — P2 rewards
+    terminated:     np.ndarray     # (n_envs,) bool
+    truncated:      np.ndarray     # (n_envs,) bool — always False (no time limit beyond done)
+    terminal_phase: np.ndarray     # (n_envs,) int8 — 0=ongoing, 1=P1_WINS, 2=P2_WINS, 3=DRAW
+    infos:          Any            # list-like of per-env {phase, tick} — lazily materialised
 
 
 class JaxVecEnv:
@@ -272,10 +273,13 @@ class JaxVecEnv:
         self.state, r1, r2, done = _step_batched(self.state, a1, a2)
 
         # Bring reward/done to host for the trainer boundary. One sync per
-        # call each — bulk copies, not per-env scalar pulls.
-        r1_np   = np.asarray(r1)
-        r2_np   = np.asarray(r2)
-        done_np = np.asarray(done)
+        # call each — bulk copies, not per-env scalar pulls. Capture the
+        # terminal phase BEFORE auto-reset overwrites it so callers can
+        # tell winner from loser without reading the noisy reward proxy.
+        r1_np      = np.asarray(r1)
+        r2_np      = np.asarray(r2)
+        done_np    = np.asarray(done)
+        phase_np   = np.asarray(self.state.phase)  # 1=P1_WINS, 2=P2_WINS, 3=DRAW, 0=mid-game
 
         # Vectorised auto-reset.
         if done_np.any():
@@ -286,11 +290,12 @@ class JaxVecEnv:
         # of vmap. Build the list lazily so callers that don't read `infos`
         # (our bench, PPO rollout) pay nothing.
         return JaxVecStepResult(
-            rewards    = r1_np.astype(np.float32),
-            rewards_p2 = r2_np.astype(np.float32),
-            terminated = done_np,
-            truncated  = np.zeros(self.n_envs, dtype=bool),
-            infos      = _LazyInfos(self.state, self.n_envs),
+            rewards         = r1_np.astype(np.float32),
+            rewards_p2      = r2_np.astype(np.float32),
+            terminated      = done_np,
+            truncated       = np.zeros(self.n_envs, dtype=bool),
+            terminal_phase  = phase_np.astype(np.int8),
+            infos           = _LazyInfos(self.state, self.n_envs),
         )
 
     def step_many(self, actions: np.ndarray) -> dict:
@@ -364,19 +369,22 @@ class JaxVecEnv:
         self.state, r1, r2, done = _step_chunk_batched(
             self.state, a1, a2, K,
         )
-        r1_np   = np.asarray(r1)
-        r2_np   = np.asarray(r2)
-        done_np = np.asarray(done)
+        r1_np    = np.asarray(r1)
+        r2_np    = np.asarray(r2)
+        done_np  = np.asarray(done)
+        # Capture terminal phase BEFORE auto-reset (parity with .step()).
+        phase_np = np.asarray(self.state.phase).astype(np.int8)
 
         # Auto-reset on done (same path as `.step()`).
         if done_np.any():
             self._auto_reset(done_np)
 
         return {
-            "rewards":    r1_np.astype(np.float32),
-            "rewards_p2": r2_np.astype(np.float32),
-            "dones":      done_np,
-            "K":          K,
+            "rewards":        r1_np.astype(np.float32),
+            "rewards_p2":     r2_np.astype(np.float32),
+            "dones":          done_np,
+            "terminal_phase": phase_np,
+            "K":              K,
         }
 
     def close(self) -> None:

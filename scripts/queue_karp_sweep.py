@@ -85,11 +85,28 @@ def queue_sweep(axis: str | None, dry_run: bool, baseline_overrides: dict) -> No
     base_hp = {**cfg.baseline_hyperparams, **baseline_overrides}
     cells = axis_obj.cells
 
-    # Training opponent: random_legal is the JAX-fast on-device path.
-    # opponent_name=neural forces a slow per-env CPU loop (fused_rollout.py:188)
-    # that loses the ~10x speedup. The cron-agent's working pattern uses
-    # random_legal for rollouts; bench_eval handles champion comparison after.
-    base_hp.setdefault("opponent_name", "random_legal")
+    # Training opponent: read from configs/karpathy_loop.yaml `training_opponent`
+    # block. Sugar: name='latest_champion' resolves to opponent_name=neural with
+    # the most-recent champion's source_run_id injected.
+    opp = dict(cfg.training_opponent or {})
+    name = opp.get("name", "random_legal")
+    kwargs = dict(opp.get("kwargs", {}) or {})
+    if name == "latest_champion":
+        with connect() as c, c.cursor() as cur:
+            cur.execute("SELECT source_run_id, label FROM champions ORDER BY archived_at DESC LIMIT 1")
+            row = cur.fetchone()
+        if row:
+            name = "neural"
+            kwargs = {"device": "cuda", "opponent_run_id": str(row[0]), **kwargs}
+            print(f"[karp] training_opponent=latest_champion → {row[1]} ({str(row[0])[:8]})")
+        else:
+            print("[karp] training_opponent=latest_champion but no champions yet → random_legal")
+            name = "random_legal"
+            kwargs = {}
+    base_hp["opponent_name"] = name
+    if kwargs:
+        base_hp["opponent_kwargs"] = kwargs
+    print(f"[karp] training opponent: name={name} kwargs={kwargs}")
 
     stamp = datetime.now().strftime("%y%m%d-%H%M")
     budget_ms = int(cfg.schedule["cell_budget_seconds"]) * 1000

@@ -1,96 +1,129 @@
 # Karpathy loop configuration
 #
 # Single source of truth for everything the hourly Karpathy loop reads:
-#   - baseline training hyperparams (the fixed cfg around which we sweep)
-#   - level distribution (what maps the agent trains on)
-#   - sweep axes + cell values (one variable at a time, 3 cells, ~60min)
 #   - schedule + queue policy
+#   - baseline training hyperparams (every PPOConfig field; the cfg around
+#     which we sweep)
+#   - level distribution (what maps the agent trains on)
+#   - opponent selection (what the agent plays against in training rollouts)
+#   - sweep axes + cell values (one variable at a time, 3 cells, ~60min)
 #
-# Edit this file (not Python) when you want to change loop behaviour.
+# Edit this file (NOT Python) when you want to change loop behaviour.
 # scripts/queue_karp_sweep.py reads it; the loop prompt references it.
-#
 # Reload cost: zero — every fire reads fresh from disk.
+#
+# Field-name rule: every key under baseline_hyperparams: must match a field
+# on training/trainer.py:PPOConfig — workers/worker.py:855 filters out
+# unknown keys silently, so a typo = silent no-op (caught 2026-04-28
+# with `clip_coef` vs the real `clip_range`).
 
+# ---------------------------------------------------------------------------
+# Loop schedule (when fires happen, how long each cell runs)
+# ---------------------------------------------------------------------------
 schedule:
-  # Seconds between loop fires. 30min was chosen 2026-04-28 after a 5.5h
-  # gap (loop chain broke; one missed wakeup = no recovery). Smaller
-  # intervals = faster recovery from a broken chain.
-  fire_interval_seconds: 1800
-  # Each axis cell gets this much wall time. 3 cells × 20min = 60min/sweep.
-  cell_budget_seconds: 1200
-  # If queue is non-empty with >= this many karp-* runs ahead, skip queueing
-  # this fire (don't pile up). 0 disables.
-  max_karp_queue_depth: 6
-  # Stop the loop after this many consecutive fires with no signal change
-  # (no new champions, no axis movement). 0 = never stop on idleness.
-  idle_fires_before_stop: 0
+  fire_interval_seconds: 1800     # 30min between Claude-side wakeups
+  cell_budget_seconds:   1200     # per-cell wall-time → 3 cells × 20min = 60min/sweep
+  max_karp_queue_depth:  6        # skip queueing if >= this many karp-* are pending
+  idle_fires_before_stop: 0       # 0 = never stop on idleness
 
+# ---------------------------------------------------------------------------
+# Queue housekeeping (what the loop cleans up each fire)
+# ---------------------------------------------------------------------------
 queue_policy:
-  # On each fire, mark stale-running runs as failed if started_at older than this.
-  stale_running_minutes: 90
-  # On each fire, discard queued runs that don't match this label prefix.
-  protected_label_prefix: "karp-"
-  # Don't ever cancel runs whose label matches any of these (regex).
-  protected_label_patterns: []
+  stale_running_minutes:    90    # 'running' for longer than this → mark failed
+  protected_label_prefix:   "karp-"  # only these survive non-karp purge
+  protected_label_patterns: []    # additional regexes never to cancel
 
+# ---------------------------------------------------------------------------
+# Model + simulator IDs (rarely change)
+# ---------------------------------------------------------------------------
 model:
-  # Defaults match the b6 phase1_full_mix champion. Override per-axis if needed.
-  model_id: "v9.0-1024"
+  model_id:     "v9.0-1024"      # body width 1024, factored heads
   simulator_id: "sim-v1.3"
 
-# Baseline training hyperparams. The 3-cell sweep keeps everything in this
-# block fixed and varies ONE field (the swept axis).
+# ---------------------------------------------------------------------------
+# Training opponent — who does the agent play against during rollouts?
+# ---------------------------------------------------------------------------
+# `name` ∈ {random_legal, neural, noop, latest_champion}
+#   random_legal     — fast on-device JAX path; uniform-random over legal moves
+#   neural           — fixed neural opponent loaded at run start (slow w/ fused)
+#   noop             — opponent does nothing
+#   latest_champion  — sugar; queue_karp_sweep.py resolves to opponent_name=neural
+#                      with opponent_kwargs.opponent_run_id = champions[0].source_run_id
+training_opponent:
+  name: "random_legal"
+  kwargs: {}                      # e.g. for neural: {device: cuda, opponent_run_id: <uuid>}
+
+# ---------------------------------------------------------------------------
+# Baseline PPO hyperparameters
 #
-# Training opponent: queue_karp_sweep.py looks up the most-recent champion
-# at queue time and injects `opponent_name=neural` +
-# `opponent_kwargs.opponent_run_id=<champion source_run_id>`. The PFSP
-# benefit happens at bench_eval time (archive sweep + PFSP weight). Per-env
-# self_play opponent specs aren't supported on the JAX backend yet — see
-# trainer.py:210. Once that's lifted, set `self_play: true` here and drop
-# the auto-injection.
+# Every key here passes through to training/trainer.py:PPOConfig. Sweeps
+# overlay one key per cell on top of this. Add a key here to make it
+# sweepable later without code changes.
+# ---------------------------------------------------------------------------
 baseline_hyperparams:
-  self_play: false
-  # PFSP archive draws still happen at the bench step. Trainer-time
-  # leaderboard_bias only matters when self_play=true; keeping it for
-  # forward-compat once jax+self_play is supported.
-  leaderboard_bias: 0.30
-  leaderboard_source: "pfsp"
-  # Engine — JAX backend with fused rollout. fused only blocks self_play=true
-  # (per-env neural opponents); opponent_name=neural with a fixed champion is
-  # supported. ~10x throughput vs non-fused (verified 2026-04-28: cron runs
-  # at 3087 steps/sec vs karp non-fused at 316 steps/sec).
-  sim_backend: "jax"
-  vec_mode: "sync"
-  fused_rollout: true
-  action_repeat: 2                # K=2 matches the b6 phase2_selfplay champion
-  rollout_steps: 64
-  n_envs: 1024
-  # Optimisation
-  gamma: 0.97
-  entropy_coef: 0.01
-  lr: 3.0e-4
-  clip_coef: 0.2
-  # Reward
+  # ----- Rollout shape -----
+  n_envs:        1024              # parallel envs in the vec env
+  vec_mode:      "sync"            # sync (in-process) or async (subprocs)
+  rollout_steps: 64                # per-env steps per update; total samples = n_envs*rollout_steps
+
+  # ----- Engine -----
+  sim_backend:   "jax"             # jax (fast) | numpy (only path for self_play=true per-env opponents)
+  fused_rollout: true              # only valid when self_play=false
+  action_repeat: 2                 # K: env ticks per agent decision under fused
+
+  # ----- PPO update -----
+  update_epochs:  4                # PPO inner-loop passes over the rollout buffer
+  minibatch_size: 512              # samples per SGD step
+  lr:             3.0e-4
+  gamma:          0.97             # discount factor
+  gae_lambda:     0.95             # GAE smoothing
+  clip_range:     0.2              # PPO clipped-surrogate epsilon
+  value_coef:     0.5              # weight on critic MSE
+  entropy_coef:   0.01             # exploration bonus
+  max_grad_norm:  0.5              # gradient clipping
+
+  # ----- Observation normalisation -----
+  normalize_obs:  true             # Welford running mean/std on obs
+  obs_clip:       10.0             # clip normalized obs at ±this; null disables
+
+  # ----- Self-play (mutually exclusive with sim_backend=jax + fused) -----
+  self_play:        false
+  snapshot_every:   10             # update count between pool snapshots
+  pool_max_size:    20             # evict oldest beyond this
+  latest_bias:      0.8            # P(env samples latest snapshot) when self_play=true
+  initial_opponent: "random_legal"
+
+  # ----- Cross-lineage / PFSP archive sampling (training-time) -----
+  # Only consulted when self_play=true. Bench-eval-time PFSP is independent.
+  leaderboard_bias:   0.30          # P(env draws from champion archive per snapshot)
+  leaderboard_source: "pfsp"        # "pfsp" | "elo" (legacy)
+  leaderboard_top_k:  10
+
+  # ----- Reward shape -----
+  # See sim/config.py REWARD_*_BY_VERSION for the table. v1.3 = 5x WIN/LOSE,
+  # halved capture, draw -0.5, 4x speed bonus.
   reward_v13: true
-  # Level distribution (per-env sampling each reset)
+
+  # ----- Level distribution (per-env sampling on each reset) -----
   level_name: "random_full_mix"
   level_mix:
-    random_4_8:   0.20
-    random_6_10:  0.20
-    random_8_16:  0.30
-    random_16_24: 0.30
+    random_4_8:   0.50              # easy maps; biased here per Paul 2026-04-28
+    random_6_10:  0.40
+    random_8_16:  0.10
+    random_16_24: 0.00              # zeroed out; bring back if generalist matters
 
-# Sweep axes. Loop cycles through this list (round-robin); never repeats the
-# same axis two fires in a row. Each axis declares its 3 cells.
-#
-# Add or remove axes here. Cells are (label, value) pairs; the label appears
-# in run labels (karp-YYMMDD-HHMM-<axis>-<cell_label>).
+# ---------------------------------------------------------------------------
+# Sweep axes (round-robin, one per fire)
+# ---------------------------------------------------------------------------
+# Each axis name MUST be a key under baseline_hyperparams above (or a
+# nested path the loader handles). Cell values overlay the baseline.
 sweep_axes:
   - axis: "entropy_coef"
     cells:
       - { label: "lo",  value: 0.003 }
-      - { label: "mid", value: 0.01 }
-      - { label: "hi",  value: 0.03 }
+      - { label: "mid", value: 0.01  }
+      - { label: "hi",  value: 0.03  }
 
   - axis: "lr"
     cells:
@@ -100,13 +133,13 @@ sweep_axes:
 
   - axis: "rollout_steps"
     cells:
-      - { label: "lo",  value: 32 }
-      - { label: "mid", value: 64 }
+      - { label: "lo",  value: 32  }
+      - { label: "mid", value: 64  }
       - { label: "hi",  value: 128 }
 
   - axis: "n_envs"
     cells:
-      - { label: "lo",  value: 512 }
+      - { label: "lo",  value: 512  }
       - { label: "mid", value: 1024 }
       - { label: "hi",  value: 2048 }
 
@@ -116,23 +149,38 @@ sweep_axes:
       - { label: "mid", value: 0.97 }
       - { label: "hi",  value: 0.99 }
 
-  - axis: "clip_coef"
+  - axis: "gae_lambda"
+    cells:
+      - { label: "lo",  value: 0.90 }
+      - { label: "mid", value: 0.95 }
+      - { label: "hi",  value: 0.98 }
+
+  - axis: "clip_range"               # was wrongly named clip_coef; PPOConfig uses clip_range
     cells:
       - { label: "lo",  value: 0.10 }
       - { label: "mid", value: 0.20 }
       - { label: "hi",  value: 0.30 }
 
-  - axis: "leaderboard_bias"
+  - axis: "update_epochs"
     cells:
-      - { label: "lo",  value: 0.10 }
-      - { label: "mid", value: 0.30 }
-      - { label: "hi",  value: 0.50 }
+      - { label: "lo",  value: 2 }
+      - { label: "mid", value: 4 }
+      - { label: "hi",  value: 8 }
 
-  - axis: "latest_bias"
+  - axis: "minibatch_size"
     cells:
-      - { label: "lo",  value: 0.50 }
-      - { label: "mid", value: 0.80 }
-      - { label: "hi",  value: 0.95 }
-    # within self-play pool, P(latest snapshot) vs older. PFSP archive
-    # mixing is independent (controlled by leaderboard_bias). Tests how
-    # much "freshness" matters vs older snapshots.
+      - { label: "lo",  value: 256  }
+      - { label: "mid", value: 512  }
+      - { label: "hi",  value: 1024 }
+
+  - axis: "value_coef"
+    cells:
+      - { label: "lo",  value: 0.25 }
+      - { label: "mid", value: 0.50 }
+      - { label: "hi",  value: 1.00 }
+
+  - axis: "max_grad_norm"
+    cells:
+      - { label: "lo",  value: 0.25 }
+      - { label: "mid", value: 0.50 }
+      - { label: "hi",  value: 1.00 }

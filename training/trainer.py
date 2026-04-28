@@ -330,15 +330,21 @@ class PPOTrainer:
             rew_buf[t]  = rewards
             done_buf[t] = done.astype(np.float32)
 
-            # Per-env episode bookkeeping. `won` proxy: REWARD_WIN=+1 and
-            # REWARD_LOSE=-1 dominate the per-episode return; any total >0.5
-            # is effectively a win (captures alone can't cross that threshold
-            # without the win bonus). Good enough for the training metric.
+            # Per-env episode bookkeeping. We prefer the literal terminal_phase
+            # signal (1 = P1_WINS, 2 = P2_WINS, 3 = DRAW) when the env exposes
+            # it; the JaxVecEnv path threads it through `infos`. Falls back to
+            # the reward-sum proxy (return > 0.5) for envs that don't.
+            terminal_phase = None
+            if isinstance(infos, dict):
+                terminal_phase = infos.get("terminal_phase")
             self._ep_return += rewards
             self._ep_length += 1
             for i in range(N):
                 if done[i]:
-                    won = bool(self._ep_return[i] > 0.5)
+                    if terminal_phase is not None:
+                        won = bool(int(terminal_phase[i]) == 1)
+                    else:
+                        won = bool(self._ep_return[i] > 0.5)
                     self._completed_episodes.append((
                         float(self._ep_return[i]),
                         int(self._ep_length[i]),

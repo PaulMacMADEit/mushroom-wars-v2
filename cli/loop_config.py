@@ -30,6 +30,7 @@ class LoopConfig:
     schedule:           dict
     queue_policy:       dict
     model:              dict
+    training_opponent:  dict   # {name: str, kwargs: dict}
     baseline_hyperparams: dict
     sweep_axes:         list[SweepAxis]
     raw:                dict
@@ -61,6 +62,7 @@ def load(path: Path | str | None = None) -> LoopConfig:
         schedule=raw.get("schedule", {}),
         queue_policy=raw.get("queue_policy", {}),
         model=raw.get("model", {}),
+        training_opponent=dict(raw.get("training_opponent", {"name": "random_legal", "kwargs": {}})),
         baseline_hyperparams=dict(raw.get("baseline_hyperparams", {})),
         sweep_axes=axes,
         raw=raw,

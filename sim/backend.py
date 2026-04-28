@@ -258,7 +258,9 @@ class _JaxVecAdapter:
         rewards   = result.rewards                       # (n_envs,) float32
         terminated = result.terminated                   # (n_envs,) bool
         truncated  = result.truncated                    # (n_envs,) bool
-        infos: dict[str, Any] = {}
+        # Pass the terminal phase up so the trainer can compute literal P1-win
+        # rate (1 = P1_WINS, 2 = P2_WINS, 3 = DRAW, 0 = ongoing).
+        infos: dict[str, Any] = {"terminal_phase": result.terminal_phase}
         return obs_batch, rewards, terminated, truncated, infos
 
     def close(self) -> None:
