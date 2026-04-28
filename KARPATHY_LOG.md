@@ -91,6 +91,35 @@ from the 9-deep champion archive, weighted by PFSP).
 
 Sweep finishes around 00:55 PT (after the live cron run drains).
 
+## Code changes during loop
+
+### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
+
+Paul: "anything that we can configure (eg the training composition, level
+selection, etc) should be defined in a config file." Done in one commit
+(90b3568):
+
+- **`configs/karpathy_loop.yaml`** — single source of truth: schedule
+  (fire interval, cell budget, max queue depth), queue policy (stale
+  threshold, protected label prefix), model (id + sim id), baseline
+  hyperparams (incl. self_play=true, leaderboard_bias=0.3, level_mix),
+  and 8 sweep axes (entropy_coef / lr / rollout_steps / n_envs / gamma /
+  clip_coef / leaderboard_bias / action_repeat) with 3 cells each.
+- **`cli/loop_config.py`** — typed loader; `load()` returns a `LoopConfig`
+  with `.next_axis(last_used)` for round-robin pick.
+- **`scripts/queue_karp_sweep.py`** — replaces inline-Python INSERTs in
+  the loop prompt. CLI: `--axis lr` to force, `--override 'n_envs=512'`
+  to bake into baseline before sweeping, `--dry-run` for preview. Reads
+  most-recent karp- run's axis from labels and round-robins to the next.
+- Loop prompt simplified: future fires call `python scripts/queue_karp_sweep.py`
+  instead of crafting INSERT statements. Hyperparams no longer embedded
+  in two places (prompt + scripts/queue_b5.py).
+
+Knock-on: my first sweep used label `karp-...-entropy-{lo,mid,hi}` with
+the axis name truncated. The new script uses the full axis name
+(`entropy_coef`), so future round-robin picks will work cleanly. The
+3 in-flight runs are unaffected — they just have shorter labels.
+
 ---
 
 ## Archive (legacy axes — pre-2026-04-27, random_legal anchor)
