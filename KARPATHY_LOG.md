@@ -528,6 +528,56 @@ matters less than gamma/rollout_steps at this budget. Will see hi.
 2. Comment out `leaderboard_bias` + `latest_bias` from round-robin until
    self_play unlocks?
 
+### Loop fire 14 — 2026-04-28 14:11 PT — concurrency change detected; clip_coef-hi stuck unrated 77 min; skipped queueing
+
+**🚩 Worker concurrency changed since last fire.** All 3 entropy_coef
+runs are training **in parallel**:
+
+| label | started (UTC) | minutes in |
+|---|---|---|
+| entropy_coef-lo  | 20:55:30 | ~16 |
+| entropy_coef-mid | 21:03:18 | ~8 |
+| entropy_coef-hi  | 21:03:21 | ~8 |
+
+Mid and hi started 3 seconds apart. Previously runs were strictly
+serial. **I didn't make this change** — worker config or backstop must
+have been touched. Surfacing to Paul rather than digging — could be
+intentional (more throughput) or accidental (multi-launch race).
+
+**clip_coef-hi stuck unrated 77 minutes after finishing.** For
+comparison:
+- clip_coef-lo: finished 20:11 UTC, rated by ~20:41 (≤30 min)
+- clip_coef-mid: finished 20:32 UTC, rated by ~20:41 (≤10 min)
+- clip_coef-hi: finished **20:54 UTC, still unrated at 22:11** — 77 min
+
+**Hypothesis:** bench_eval is being starved by the 3 parallel training
+runs. No GPU slack for it. (Alternative: bench_eval errored silently.)
+
+**Updated clip_coef sweep — incomplete (hi unrated):**
+
+| run | clip_coef | rate | Elo | bv n | st |
+|---|---|---|---|---|---|
+| clip_coef-lo  | 0.10 | 0.909 | 1085 | 10 | rated |
+| clip_coef-mid | 0.20 | 0.909 | 1089 | 10 | rated |
+| clip_coef-hi  | 0.30 | 0.904 | — | 0 | **unrated** ← stuck |
+
+Lo + mid still flat (~4 Elo apart). If hi back-fills similar, this is a
+genuinely flat axis.
+
+**Champion identity unchanged.** Champ Elo holding at 1134 (random walk
+from 1147 over the last 90 min — Elo-system noise as bench corpus grows).
+
+**Skipped queueing.** Queue 3 running + 0 queued = 3. Adding 3 more
+would max the cap at 6 AND pile on the bench_eval starvation. Wait one
+fire to see if entropy-lo finishes cleanly first.
+
+**Open ask for Paul:**
+1. Did you intentionally enable parallel worker execution? If so, expect
+   bench_eval to lag (or break). If not, single-process worker may have
+   been duplicated by a stale backstop launch.
+2. Same fire-12 questions still open (gamma 0.95 baseline? skip
+   self_play-gated axes?).
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
