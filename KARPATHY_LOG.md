@@ -373,6 +373,46 @@ opponent. Worth a sweep on `cell_budget_seconds`.
 during active conversation. Server-side backstop is the actual loop
 driver. Will rely on it. I'll continue logging when prompted.
 
+### Loop fire 10 — 2026-04-28 12:16 PT — gamma-lo done; queued clip_coef
+
+**Driver:** First fire under new `/loop 30m` mechanism (cron `7,37 * * * *`,
+job `4b393dc4`). PaulLinux backstop still primary; this is bonus.
+
+**State:** Worker + karp timer both active. Live champion still
+`cron-260428-0407-phase2_selfplay-med-00` at Elo **1147** (advanced from
+1118 in handoff). No karp- runs promoted yet.
+
+**Gamma sweep — only `lo` finished (mid running, hi queued):**
+
+| run | gamma | updates | sps | rate | Elo | PFSP | bv n | promoted? |
+|---|---|---|---|---|---|---|---|---|
+| gamma-lo  | 0.95 | 66 | 3588 | 0.909 | **1095** | 0.545 | 10 | N |
+| gamma-mid | 0.97 | — | — | — | — | — | — | running |
+| gamma-hi  | 0.99 | — | — | — | — | — | — | queued |
+
+gamma-lo Elo 1095 sits inside the same ~1080-1107 band the rollout_steps
+and n_envs sweeps produced. **Still opponent-bound, not hyperparam-bound.**
+Mid + hi will tell us the gamma curve, but I'd be surprised if any cell
+clears ~1110.
+
+**No clutter to clear.** Queue: 1 running + 1 queued (depth 2 < cap 6).
+
+**Queued next axis — clip_coef** (round-robin from gamma):
+
+| label | clip_coef |
+|---|---|
+| karp-260428-1216-clip_coef-lo  | 0.1 |
+| karp-260428-1216-clip_coef-mid | 0.2 (baseline) |
+| karp-260428-1216-clip_coef-hi  | 0.3 |
+
+**Open question carried from fire 9:** opponent-bound ceiling. Six axes
+sampled (entropy, latest_bias, lr, rollout_steps, n_envs, gamma) all sit
+~1080-1107. The cheapest test of "is this opponent-bound?" is to swap
+ONE karp axis to `opponent_name=neural` (train-vs-champion) and see if
+Elo crosses 1118. That's a deliberate one-variable test, not a
+hyperparam sweep — won't run it without Paul's say-so. Logging here so
+fire 11+ can pick it up.
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
