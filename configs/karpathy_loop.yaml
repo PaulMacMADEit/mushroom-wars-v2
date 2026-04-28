@@ -55,12 +55,14 @@ baseline_hyperparams:
   # forward-compat once jax+self_play is supported.
   leaderboard_bias: 0.30
   leaderboard_source: "pfsp"
-  # Engine — JAX backend (fast). fused_rollout off (incompatible with
-  # PFSP/self-play; we don't use it here, but action_repeat default = 1).
+  # Engine — JAX backend with fused rollout. fused only blocks self_play=true
+  # (per-env neural opponents); opponent_name=neural with a fixed champion is
+  # supported. ~10x throughput vs non-fused (verified 2026-04-28: cron runs
+  # at 3087 steps/sec vs karp non-fused at 316 steps/sec).
   sim_backend: "jax"
   vec_mode: "sync"
-  fused_rollout: false
-  action_repeat: 1
+  fused_rollout: true
+  action_repeat: 2                # K=2 matches the b6 phase2_selfplay champion
   rollout_steps: 64
   n_envs: 1024
   # Optimisation
