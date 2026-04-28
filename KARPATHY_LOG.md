@@ -158,6 +158,33 @@ training vs champion `cdcc0826` (`cron-260428-0407-phase2_selfplay-med-00`,
 the live Elo 1118 model). `-lo` started cleanly at 13:15 UTC, past the
 prior failure point. Should finish ~06:35 PT (lo) → ~07:15 PT (full sweep).
 
+### Loop resilience fix — 2026-04-28 06:30 PT — chain broke for 5.5h overnight
+
+**Problem.** Between fires 3 (00:38 PT) and 4 (06:23 PT, user-poked), no
+autonomous fires happened — should have been ~5. Root cause: the loop
+chain depends on a single `ScheduleWakeup` per fire. If that fire fails
+to *complete* (mid-fire crash, prompt timeout, session loss), the chain
+dies and no recovery exists.
+
+**Three fixes:**
+1. **30-min cadence** instead of 60-min. `configs/karpathy_loop.yaml`:
+   `fire_interval_seconds: 1800`. Smaller interval = faster recovery.
+2. **Reschedule-first policy.** Loop prompt now mandates step 1 of
+   every fire is `ScheduleWakeup(...)`. If a later step crashes, the
+   next fire still happens.
+3. **PaulLinux server-side backstop.** `scripts/karp_backstop.py` +
+   `mushroom-karp.timer` (every 30 min at :15/:45). Detects "no karp-
+   run queued/running/recently-finished" and queues one. Idempotent —
+   no-ops when Claude is keeping up.
+
+Backstop installed: `mushroom-karp.timer` active, next fire 07:15 PT.
+First test fire (07:12 PT) saw the running entropy sweep and no-op'd
+correctly.
+
+This means: even if my Claude session dies entirely overnight, karp-
+runs keep flowing. I (Claude) become the analysis layer; the engine
+runs without me.
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
