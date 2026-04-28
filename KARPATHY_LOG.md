@@ -578,6 +578,58 @@ fire to see if entropy-lo finishes cleanly first.
 2. Same fire-12 questions still open (gamma 0.95 baseline? skip
    self_play-gated axes?).
 
+### Loop fire 15 — 2026-04-28 14:41 PT — worker restarted, killed 2 zombies, re-queued entropy_coef
+
+**Self-correction on fire 14.** I claimed "3 entropy_coef runs in
+parallel" + "concurrency change". Wrong on both counts.
+
+**What actually happened:**
+- The original worker (running since 09:25 PDT, 5h+ CPU time) **died/restarted ~14:03 PT.**
+- At restart, the DB had `entropy_coef-lo` (started 13:55) and
+  `entropy_coef-mid` (started 14:03) listed as `running` — they were
+  running in the *old* process. New process picks up `entropy_coef-hi`,
+  trains it, completes with elo=1061/rated/bv=10.
+- lo and mid never got re-picked-up — DB rows stayed `running` forever.
+- Current state: 1 worker process (PID 3680495), GPU at 0%, 5.3GB RSS,
+  stuck idle because the DB still shows in-flight work.
+
+**The fire-14 "parallel runs" reading was a DB artifact — three rows
+showing `running` simultaneously, but only one process actually ran any
+of them.** No worker code or concurrency change. PaulLinux git is at
+0910708, worker.py last modified 2026-04-27.
+
+**Action this fire:**
+1. **Marked `entropy_coef-lo` and `entropy_coef-mid` as `failed`** with
+   error message identifying them as zombies. Standard "stale running
+   → failed" cleanup per loop procedure.
+2. **Re-queued entropy_coef** (`karp-260428-1443-entropy_coef-{lo,mid,hi}`)
+   to recover the data we lost AND preempt the backstop from auto-
+   picking the next round-robin axis (which would be `latest_bias`
+   — self_play-gated, wasted compute).
+3. **Did NOT investigate why the original worker died.** It had 5h+ CPU
+   time, peaked at 9.0G memory; possibly OOM, possibly the systemd
+   restart on memory pressure. Surfacing to Paul rather than digging.
+
+**clip_coef-hi still unrated 105 min after finishing.** The bench_eval
+backlog must have been wiped by the worker restart. That run is now
+permanently unrated unless we manually re-rate it.
+
+**Updated entropy_coef sweep — only -hi has data:**
+
+| run | entropy_coef | updates | sps | rate | Elo | PFSP |
+|---|---|---|---|---|---|---|
+| -lo  | 0.003 | — | — | — | failed (zombie) | — |
+| -mid | 0.01  | — | — | — | failed (zombie) | — |
+| -hi  | 0.03  | 80 | 4358 | **0.863** | 1061 | 0.577 |
+
+**Worth flagging:** -hi's rate (0.863) is the lowest of any karp- run
+this whole loop (others 0.89-0.92). Higher entropy bonus → more
+exploration → lower training-time win rate. Expected directionally; a
+data point we want repeated in the re-run.
+
+**No karp- promotions yet.** Champion `0952f5cc` holding at Elo 1140
+(drift continues, identity unchanged).
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
