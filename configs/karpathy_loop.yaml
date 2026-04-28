@@ -38,17 +38,25 @@ model:
 
 # Baseline training hyperparams. The 3-cell sweep keeps everything in this
 # block fixed and varies ONE field (the swept axis).
+#
+# Training opponent: queue_karp_sweep.py looks up the most-recent champion
+# at queue time and injects `opponent_name=neural` +
+# `opponent_kwargs.opponent_run_id=<champion source_run_id>`. The PFSP
+# benefit happens at bench_eval time (archive sweep + PFSP weight). Per-env
+# self_play opponent specs aren't supported on the JAX backend yet — see
+# trainer.py:210. Once that's lifted, set `self_play: true` here and drop
+# the auto-injection.
 baseline_hyperparams:
-  # Self-play + PFSP archive draws (the new bench_eval pipeline).
-  self_play: true
-  leaderboard_bias: 0.30          # P(env draws from champion archive)
-  leaderboard_source: "pfsp"      # 'pfsp' | 'elo' (legacy)
-  # Engine
+  self_play: false
+  # PFSP archive draws still happen at the bench step. Trainer-time
+  # leaderboard_bias only matters when self_play=true; keeping it for
+  # forward-compat once jax+self_play is supported.
+  leaderboard_bias: 0.30
+  leaderboard_source: "pfsp"
+  # Engine — JAX backend (fast). fused_rollout off (incompatible with
+  # PFSP/self-play; we don't use it here, but action_repeat default = 1).
   sim_backend: "jax"
   vec_mode: "sync"
-  # fused_rollout is mutually exclusive with self_play (NotImplementedError
-  # in trainer._collect_rollout_fused). Loop runs are PFSP-self-play, so
-  # fused stays off. action_repeat is only meaningful under fused.
   fused_rollout: false
   action_repeat: 1
   rollout_steps: 64

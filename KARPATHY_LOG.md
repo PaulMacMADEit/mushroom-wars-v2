@@ -128,6 +128,36 @@ hasn't been ported to handle self-play opponent specs yet.
 
 Sweep finishes ~01:24 PT.
 
+### Loop fire 3 — 2026-04-28 06:15 PT — second crash, root caused, third try succeeds
+
+**Both 00:22 retry runs failed again:**
+> `NotImplementedError: SIM_BACKEND=jax doesn't yet support per-env neural opponents.
+>  Set self_play=False, or run numpy backend.` (`trainer.py:210`)
+
+So the JAX backend **also** can't service per-env self-play opponent specs. Two trainer constraints now stacked:
+1. `fused_rollout` ≠ `self_play` (caught fire 2)
+2. `sim_backend=jax` ≠ `self_play` per-env opponents (caught fire 3)
+
+To use the PFSP self-play path I built, we'd need to switch to the numpy
+AsyncVectorEnv backend — which is materially slower at n_envs=1024.
+
+**Pivot:** ship a working sweep first, port jax+self_play later.
+
+- YAML now defaults `self_play: false` (with explicit comment).
+- `scripts/queue_karp_sweep.py` looks up the most-recent champion at queue
+  time and injects `opponent_name=neural` + `opponent_kwargs.opponent_run_id=<src>`
+  so the run trains against the strongest known model, not random_legal.
+- The PFSP benefit still lives at bench_eval time (archive sweep + PFSP
+  weight write). Just not during training-rollout.
+
+Also hit a transient Supabase pooler "consuming input failed: server closed"
+on first 2 INSERT attempts; third attempt at 06:15 went through cleanly.
+
+**Queued (third attempt):** `karp-260428-0615-entropy_coef-{lo,mid,hi}`,
+training vs champion `cdcc0826` (`cron-260428-0407-phase2_selfplay-med-00`,
+the live Elo 1118 model). `-lo` started cleanly at 13:15 UTC, past the
+prior failure point. Should finish ~06:35 PT (lo) → ~07:15 PT (full sweep).
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
