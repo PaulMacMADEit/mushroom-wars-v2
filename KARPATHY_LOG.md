@@ -1472,6 +1472,52 @@ next step remains v14 next-step decision.
 
 **Queue:** 1 running + 2 queued = 3. Skipped queueing.
 
+### Loop fire 31 — 2026-04-28 22:11 PT — first 25%-send in WIN sample; rollout_steps cycle-3 deflating
+
+**State.** Worker PID 4019322, 4h 49min uptime, RSS 5.80GB plateau
+holding (~+0.01 since fire 30). Champion drift 1172→1169.
+
+**rollout_steps cycle progression:**
+
+| run | cycle 1 | cycle 2 | cycle 3 |
+|---|---|---|---|
+| -lo (32)  | 1107 | unrated (lost) | **1033** |
+| -mid (64) | 1100 | 1053 | running |
+| -hi (128) | 1082 | 1048 | queued |
+
+cycle 1 → cycle 3 lo deflation: **-74 Elo**. The bench corpus has
+hardened significantly across the day.
+
+**🟢 First 25%-send detected in a WIN sample.**
+
+Game review on rollout_steps-lo cycle-3:
+- WIN: 45 ticks, 52% noop, **noop=52% / 100%=43% / 25%=4%**
+- LOSS: 52 ticks, 50% noop, noop=50% / 100%=38% / 75%=8%
+
+The 25%-send (small action) appears in the WIN sample for the first
+time across 30+ fires. Previously 25%-sends only showed up in losses.
+**The agent finally used the full 4-tier send vocabulary in a victory.**
+
+**Send-vocabulary breadth across cycle-2/3 runs:**
+
+| run | sends seen in WIN | Elo |
+|---|---|---|
+| entropy_coef-lo cycle-2 | noop, 100%, 75% | 1048 |
+| reward_version-lo (v13) | noop, 100%, 75% | 1052 |
+| **rollout_steps-lo cycle-3** | **noop, 100%, 25%** | 1033 |
+| rollout_steps-hi cycle-2 | noop, 100%, 75%, 50% | 1048 |
+| lr-mid cycle-2 (type-collapse) | 100%, noop only | 1045 |
+| lr-hi cycle-2 | 100%, noop, 50% | 954 |
+| **reward_version-hi (v14)** | **100%, 75%, 50%** | **1040** |
+
+**v14 is still the only run with non-noop-dominant + 3 send sizes** in
+a WIN. Vocabulary breadth weakly correlates with Elo but isn't sufficient.
+
+**Queue:** 1 running + 1 queued = 2. Skipped queueing.
+
+**v14 next-step still pending Paul** (5 options from fire 25 + fire 27's
+v14+entropy compound idea + fire 28's per-game-opponent-Elo recommendation).
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
