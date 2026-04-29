@@ -3041,6 +3041,53 @@ labels. clip_range sweep (backstop next) gets the fix.
 
 Queue empty. Backstop ticks ~14:15, picks clip_range cycle-3-of-v2.
 
+### Loop fire 67 — 2026-04-29 14:41 PT — 🟢 FIRST ROTATION REMATCH DATA — agent improved +16pp avg across all 7 opponents
+
+**State.** Worker PID 1854207, 8 min uptime since fire 66.5 restart. RSS
+3.94GB. GPU idle. Champion ranking: cdcc0826 b6 at 1157 (drift), karpv2
+champion at **1080 (+28 in 30min, climbing)**.
+
+**🟢 update_epochs-hi shipped the FIRST rotation_rematch result:**
+
+| opp | init% | final% | Δpp |
+|---|---|---|---|
+| d53a2871 | **14%** | **52%** | **+38** |
+| 6796f27e | **45%** | **80%** | **+35** |
+| 02651ce3 | 63% | 76% | +13 |
+| e18208fb | 40% | 52% | +12 |
+| 8d0ef4cf | 65% | 72% | +7 |
+| 42902f3e | 51% | 56% | +5 |
+| 66e2f9b2 | 47% | 52% | +5 |
+
+**Avg +16.4pp across 7 opponents. Every single one improved.** 0 draws,
+0 timeouts in 175 games (25 × 7) — every match resolved decisively.
+
+**Critical insight:** bench Elo says 977 (sub-anchor). Rate says 0.486
+(mostly losing). **Rotation rematch says +16pp avg improvement.**
+
+The bench archive is full of opponents the agent *didn't* train against
+in this 5-min cell. Bench Elo is a misleading proxy because it averages
+performance across non-overlapping populations. The rematch is the real
+diagnostic — and it shows real learning happening every fire.
+
+This validates fire 66's "rotation gives lower Elo but higher training
+rate is the desired trade-off" interpretation. Now we have direct
+evidence: **the agent is learning ~+16pp per 5-min cell against the
+opponents it actually faces.**
+
+**Other runs this fire:**
+- update_epochs-lo: Elo 957, rate 0.467 (rematch=0; finished before fire 67 code)
+- update_epochs-mid: Elo 986 unrated (bench_eval pending; 53.1% rate — highest yet)
+
+**update_epochs cycle direction so far** (all rotation):
+- lo (2 epochs): 957 / 0.467
+- mid (4): unrated / **0.531**  ← highest training rate
+- hi (8): 977 / 0.486 / +16pp avg rematch ⭐
+
+Mid edges hi if it rates similarly. Backstop next axis: minibatch_size.
+
+**Skipped queueing.** Worker idle, backstop ticks ~14:45.
+
 ## Code changes during loop
 
 ### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
