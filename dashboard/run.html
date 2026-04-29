@@ -4,6 +4,39 @@
   <meta charset="utf-8">
   <title>Run — Mushroom Wars v2</title>
   <link rel="stylesheet" href="lib/style.css">
+  <style>
+    /* Feature-importance panel */
+    .fi-list   { display:flex; flex-direction:column; gap:3px; }
+    .fi-header,
+    .fi-row    {
+      display:grid;
+      grid-template-columns: 78px 180px 1fr 64px 64px 56px;
+      align-items:center;
+      gap:10px;
+      font-size:12px;
+      padding:3px 4px;
+    }
+    .fi-row    { border-bottom:1px dashed var(--border); }
+    .fi-row:last-child { border-bottom:none; }
+    .fi-header { color:var(--fg-muted); font-weight:600; padding-bottom:6px;
+                 border-bottom:1px solid var(--border); margin-bottom:4px; }
+    .fi-tag    {
+      display:inline-block; font-size:10px; padding:2px 6px;
+      border-radius:4px; font-weight:600; text-transform:uppercase;
+      letter-spacing:.4px; text-align:center;
+    }
+    .fi-name   { font-family:var(--mono); }
+    .fi-bar    { background:rgba(255,255,255,0.04); border-radius:3px; height:10px; overflow:hidden; }
+    .fi-bar-fill { height:100%; transition:width .2s; }
+    .fi-num    { font-family:var(--mono); text-align:right; }
+    .fi-help   { color:var(--fg-muted); font-size:12px; line-height:1.5; margin-bottom:12px; }
+    .fi-help strong { color:var(--fg); }
+    @media (max-width: 700px) {
+      .fi-header, .fi-row { grid-template-columns: 64px 130px 1fr 50px 50px; }
+      .fi-row .fi-num.wl2-col { display:none; }
+      .fi-header span:nth-child(6) { display:none; }
+    }
+  </style>
 </head>
 <body>
   <header>
@@ -226,6 +259,9 @@
           <div class="muted">no level data recorded yet.</div>
         </div>
 
+        <h2>Feature importance</h2>
+        <div class="card" id="feature-importance"><div class="muted">Loading attributions…</div></div>
+
         <h2>Matchups (post-run evaluation)</h2>
         <div class="card" id="matchups"><div class="muted">Loading matchups…</div></div>
 
@@ -250,6 +286,12 @@
       // same `games` table the Elo page does, but filtered to this run.
       loadMatchups(run.id).catch(e => {
         const el = document.getElementById('matchups');
+        if (el) el.innerHTML = `<div class="error">${esc(e.message)}</div>`;
+      });
+
+      // Feature importance — populated offline by scripts/compute_attributions.py.
+      loadFeatureImportance(run.id).catch(e => {
+        const el = document.getElementById('feature-importance');
         if (el) el.innerHTML = `<div class="error">${esc(e.message)}</div>`;
       });
 
@@ -1183,6 +1225,63 @@
         <div class="muted small" style="margin-top:8px;">
           Sorted by win rate. "Share" = % of this run's eval games against that opponent.
         </div>
+      `;
+    }
+
+    async function loadFeatureImportance(runId) {
+      const $panel = document.getElementById('feature-importance');
+      if (!$panel) return;
+
+      const { data, error } = await sb
+        .from('run_feature_importance')
+        .select('feature_block, feature_index, feature_name, ig_mean_abs, ig_mean_signed, ig_std, weight_l2, n_states')
+        .eq('run_id', runId)
+        .order('ig_mean_abs', { ascending: false });
+      if (error) { $panel.innerHTML = `<div class="error">${esc(error.message)}</div>`; return; }
+      if (!data || data.length === 0) {
+        $panel.innerHTML = `
+          <div class="muted">
+            no attributions computed yet — run<br>
+            <span class="inline-code">python scripts/compute_attributions.py --run-id ${esc(runId)}</span>
+          </div>`;
+        return;
+      }
+
+      const blockColor = { globals: '#60a5fa', building: '#34d399', group: '#a78bfa' };
+      const maxAbs = Math.max(...data.map(r => r.ig_mean_abs));
+      const nStates = data[0].n_states;
+
+      const rows = data.map(r => {
+        const pct = maxAbs > 0 ? (r.ig_mean_abs / maxAbs) * 100 : 0;
+        const sign = r.ig_mean_signed >= 0 ? '+' : '';
+        const color = blockColor[r.feature_block] || '#888';
+        return `
+          <div class="fi-row">
+            <span class="fi-tag" style="background:${color}22;color:${color}">${esc(r.feature_block)}</span>
+            <span class="fi-name">${esc(r.feature_name)}</span>
+            <div class="fi-bar"><div class="fi-bar-fill" style="width:${pct.toFixed(1)}%;background:${color}"></div></div>
+            <span class="fi-num">${r.ig_mean_abs.toFixed(3)}</span>
+            <span class="fi-num muted">${sign}${r.ig_mean_signed.toFixed(3)}</span>
+            <span class="fi-num muted wl2-col">${r.weight_l2.toFixed(2)}</span>
+          </div>`;
+      }).join('');
+
+      $panel.innerHTML = `
+        <div class="fi-help">
+          What drives this run's <strong>value head</strong> — the agent's expected-return estimate.
+          <strong>Mean |IG|</strong> is the Integrated-Gradients attribution averaged over
+          ${nStates} sampled decision states (policy vs random_legal on this run's training level).
+          Building/group features are summed across the 32 slots.
+          <strong>Signed</strong> shows direction (+ raises value, − lowers).
+          <strong>wL2</strong> = layer-1 column norm — capacity to use a feature, not actual use; often disagrees with |IG|.
+        </div>
+        <div class="fi-header">
+          <span>block</span><span>feature</span><span></span>
+          <span class="fi-num">|IG|</span>
+          <span class="fi-num">signed</span>
+          <span class="fi-num wl2-col">wL2</span>
+        </div>
+        <div class="fi-list">${rows}</div>
       `;
     }
 
