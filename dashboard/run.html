@@ -171,6 +171,11 @@
           <div style="position:relative; height:220px;"><canvas id="chart-signal"></canvas></div>
         </div>
 
+        <h2>Win rate progression (10% buckets)</h2>
+        <div class="card" id="win-rate-progression">
+          <div class="muted">no data yet — populated once a few training updates have completed.</div>
+        </div>
+
         <h2>Stability + critic</h2>
         <div class="card">
           <div class="stat-label">PPO stability (clip fraction high = step too large; grad norm spikes = instability)</div>
@@ -209,11 +214,6 @@
         <h2>Training opponent over time</h2>
         <div class="card" id="training-opp">
           <div class="muted">no opponent labels recorded yet.</div>
-        </div>
-
-        <h2>Win rate progression (10% buckets)</h2>
-        <div class="card" id="win-rate-progression">
-          <div class="muted">no data yet — populated once a few training updates have completed.</div>
         </div>
 
         <h2>Level distribution</h2>
@@ -560,7 +560,54 @@
 
     /** Hyperparameters panel — groups PPOConfig fields by purpose so it's
      * skimmable instead of a wall of JSON. Unknown keys (anything not in a
-     * known group) get dumped into a "misc" footer so we never lose info. */
+     * known group) get dumped into a "misc" footer so we never lose info.
+     * Each known key gets a third column explaining what it controls. */
+    const HP_DESCRIPTIONS = {
+      // Rollout
+      n_envs:         'Parallel sim envs per rollout. Higher = more samples per update, more GPU pressure.',
+      rollout_steps:  'Steps per env per rollout. Total samples per update = n_envs × rollout_steps.',
+      fused_rollout:  'Single XLA-batched rollout (jax backend) instead of per-tick Python loop. Big throughput win.',
+      action_repeat:  'K env ticks per agent decision under fused rollout. K>1 = cheaper, less reactive.',
+      vec_mode:       'Vec env backend: "async" (subprocess per env) or "sync" (in-process loop).',
+      // PPO
+      lr:             'Adam learning rate. Too high → policy collapse; too low → no progress.',
+      gamma:          'Discount factor for future rewards. Closer to 1 = more long-horizon credit assignment.',
+      gae_lambda:     'GAE bias/variance tradeoff. 1.0 = unbiased Monte Carlo; 0.0 = pure TD bootstrap.',
+      clip_range:     'PPO ratio clip ε. Limits per-update policy change; smaller = more conservative.',
+      value_coef:     'Weight on the value (critic) loss in the joint objective.',
+      entropy_coef:   'Bonus on policy entropy. Higher = more exploration; too high = won’t commit to anything.',
+      max_grad_norm:  'Global gradient-norm clip. Caps a single update’s magnitude during instability.',
+      minibatch_size: 'Samples per SGD step inside an update. Smaller = more steps per epoch, more noise.',
+      update_epochs:  'Passes over the rollout buffer per update. More = more squeeze per sample, more risk of overfitting that batch.',
+      // Reward + obs
+      reward_v13:        'Legacy boolean: True → reward v1.3, False → v1.2. Overridden by reward_version when set.',
+      reward_version:    'Reward scheme version. -1=unset (use reward_v13). 0=v1.2, 1=v1.3, 2=v1.4 (per-tick shaping on buildings + units).',
+      normalize_obs:     'Welford running mean/std normalisation on obs. True = stabler critic.',
+      obs_clip:          'Clip normalised obs to ±this value (None disables). Guards against early-training outliers.',
+      // Self-play
+      self_play:         'If false, opponent stays random_legal forever. If true, snapshots feed the opponent pool.',
+      snapshot_every:    'Updates between adding the current policy to the self-play pool.',
+      pool_max_size:     'Max snapshots in the pool. Older snapshots evicted FIFO once exceeded.',
+      latest_bias:       'P(env samples the latest snapshot). Remainder draws uniformly from older snapshots.',
+      initial_opponent:  'Opponent used before the first self-play snapshot registers.',
+      leaderboard_bias:  'P(env uses a cross-lineage champion instead of own pool). 0.3 ≈ 30% leaderboard, 70% own.',
+      leaderboard_top_k: 'How many top champions to draw from when leaderboard slot fires.',
+      leaderboard_source:'"pfsp" (default, peak at 50% win-rate) or "elo" (legacy top-K-Elo).',
+      // Archive eval
+      archive_eval_every:    'Updates between archive eval rounds. Rounds the curve in the dashboard.',
+      archive_eval_top_n:    'How many top-Elo champions are evaluated each round.',
+      archive_eval_games:    'Games played per opponent per eval round.',
+      archive_eval_level:    'Level used for archive eval. None = same as training level (apples-to-apples).',
+      archive_eval_min_pool: 'Skip archive eval until this many champions exist.',
+      archive_eval_max_ticks:'Per-game tick cap during archive eval. Prevents stuck games eating wall time.',
+      // Opponent
+      opponent_name:   'Initial opponent type ("random_legal", "neural", etc.). Self-play replaces this after first snapshot.',
+      opponent_kwargs: 'Extra kwargs for the initial opponent. Used when opponent_name="neural" with a fixed weight path.',
+      // Level
+      level_name:      'Training level. "random_<min>_<max>" regenerates per reset; static names reuse the same map.',
+      level_mix:       'List of (level_name, weight) pairs sampled per env reset. Overrides level_name when set.',
+    };
+
     function renderHyperparams(hp) {
       const $card = document.getElementById('hyperparams-panel');
       if (!$card) return;
@@ -585,6 +632,11 @@
 
       const seen = new Set();
       let html = '';
+      const renderRow = (k, v) => `<tr>
+        <td style="width:200px; vertical-align:top;"><span class="mono small muted">${esc(k)}</span></td>
+        <td style="width:240px; vertical-align:top;"><span class="mono">${esc(formatHpValue(v))}</span></td>
+        <td style="vertical-align:top;"><span class="muted small">${esc(HP_DESCRIPTIONS[k] ?? '')}</span></td>
+      </tr>`;
       for (const [title, keys] of GROUPS) {
         const rows = keys
           .filter(k => Object.prototype.hasOwnProperty.call(hp, k))
@@ -593,12 +645,12 @@
         html += `
           <div class="stat-label" style="margin:6px 0 4px;">${esc(title)}</div>
           <table style="margin-bottom:12px;">
-            <tbody>
-              ${rows.map(([k, v]) => `<tr>
-                <td style="width:200px;"><span class="mono small muted">${esc(k)}</span></td>
-                <td><span class="mono">${esc(formatHpValue(v))}</span></td>
-              </tr>`).join('')}
-            </tbody>
+            <thead><tr>
+              <th style="width:200px;">key</th>
+              <th style="width:240px;">value</th>
+              <th>meaning</th>
+            </tr></thead>
+            <tbody>${rows.map(([k, v]) => renderRow(k, v)).join('')}</tbody>
           </table>
         `;
       }
@@ -608,15 +660,25 @@
         html += `
           <div class="stat-label" style="margin:6px 0 4px;">Other</div>
           <table>
-            <tbody>
-              ${misc.map(([k, v]) => `<tr>
-                <td style="width:200px;"><span class="mono small muted">${esc(k)}</span></td>
-                <td><span class="mono">${esc(formatHpValue(v))}</span></td>
-              </tr>`).join('')}
-            </tbody>
+            <thead><tr>
+              <th style="width:200px;">key</th>
+              <th style="width:240px;">value</th>
+              <th>meaning</th>
+            </tr></thead>
+            <tbody>${misc.map(([k, v]) => renderRow(k, v)).join('')}</tbody>
           </table>
         `;
       }
+
+      // Full raw config — open by default so the run is fully self-describing.
+      // Catches any new fields (rewards, experimental flags) without needing
+      // a code change in this file.
+      html += `
+        <details open style="margin-top:16px;">
+          <summary class="stat-label" style="cursor:pointer;">Full configuration (raw JSON)</summary>
+          <pre style="margin-top:8px;">${esc(JSON.stringify(hp, null, 2))}</pre>
+        </details>
+      `;
 
       $card.innerHTML = html;
     }
@@ -693,13 +755,14 @@
         }
       });
 
+      // Red (0°) → yellow (60°) → green (120°). HSL ramp: 0% → red, 50% → yellow, 100% → green.
+      // Saturation 65% / lightness 42% reads cleanly on the dark theme; alpha 0.55 keeps
+      // the cell text legible on top.
       const cellColor = (wr) => {
         if (wr == null) return 'transparent';
-        // Green-ish for high win rate, red-ish for low. Diverges at 50%.
         const t = Math.max(0, Math.min(1, wr));
-        const r = Math.round(220 * (1 - t));
-        const g = Math.round(180 * t);
-        return `rgba(${r},${g},120,0.35)`;
+        const hue = Math.round(120 * t);
+        return `hsla(${hue}, 65%, 42%, 0.55)`;
       };
       const fmtRate = (wr, n) => wr == null
         ? '<span class="muted small">—</span>'
@@ -708,15 +771,13 @@
              <div class="muted" style="font-size:9px;">n=${n}</div>
            </div>`;
 
-      let html = '';
-
-      // ---- (B) Training-rollout table -------------------------------------
+      // ---- (B) Training-rollout table HTML --------------------------------
+      let trainHtml = '';
       if (anyTrain) {
         const opps = Array.from(trainOpps);
-        html += `
+        trainHtml = `
           <div class="stat-label" style="margin-bottom:8px;">
-            (B) Training rollouts — win rate vs the opponent the agent played each update.
-            Buckets weighted by episodes completed.
+            Win rate vs the opponent the agent played each update. Buckets are 10% slices of training (by update index). Weighted by episodes completed; <span class="mono">n=</span> is total episodes in the bucket.
           </div>
           <div style="overflow-x:auto;">
           <table>
@@ -738,11 +799,13 @@
           </table>
           </div>
         `;
+      } else {
+        trainHtml = '<div class="muted">no training-rollout win rate data yet.</div>';
       }
 
-      // ---- (A) Eval-match table -------------------------------------------
+      // ---- (A) Eval-match table HTML --------------------------------------
+      let evalHtml = '';
       if (anyEval) {
-        // Determine the union of opponents across buckets, sorted by Elo desc.
         const oppMeta = {};
         for (const b of evalBuckets) {
           for (const [k, v] of Object.entries(b)) {
@@ -753,10 +816,9 @@
         }
         const opps = Object.values(oppMeta)
           .sort((a, b) => (b.elo ?? -1e9) - (a.elo ?? -1e9));
-        html += `
-          <div class="stat-label" style="margin:14px 0 8px;">
-            (A) Archive eval — win rate vs each top-Elo champion, bucketed.
-            Sparse: only buckets containing eval updates light up.
+        evalHtml = `
+          <div class="stat-label" style="margin-bottom:8px;">
+            Win rate vs each top-Elo champion in the archive, bucketed by 10% slices of training. Sparse — only buckets with eval updates light up. <span class="mono">n=</span> is games played that bucket.
           </div>
           <div style="overflow-x:auto;">
           <table>
@@ -782,13 +844,36 @@
           </table>
           </div>
         `;
+      } else {
+        evalHtml = '<div class="muted">no archive-eval data yet — populated once <span class="mono">archive_eval_every</span> triggers.</div>';
       }
 
       if (!anyTrain && !anyEval) {
-        html = '<div class="muted">no win rate data yet — populated as the run produces metrics.</div>';
+        $card.innerHTML = '<div class="muted">no win rate data yet — populated as the run produces metrics.</div>';
+        return;
       }
 
-      $card.innerHTML = html;
+      // Render with tab strip. Default tab = training (always populated first).
+      $card.innerHTML = `
+        <div class="wrp-tabs" style="display:flex; gap:0; border-bottom:1px solid #2a2f3d; margin-bottom:14px;">
+          <button data-tab="train" class="wrp-tab" style="padding:8px 14px; background:transparent; border:0; border-bottom:2px solid transparent; color:#aab; cursor:pointer; font:inherit;">Training rollouts</button>
+          <button data-tab="eval"  class="wrp-tab" style="padding:8px 14px; background:transparent; border:0; border-bottom:2px solid transparent; color:#aab; cursor:pointer; font:inherit;">Archive eval</button>
+        </div>
+        <div class="wrp-pane" data-pane="train">${trainHtml}</div>
+        <div class="wrp-pane" data-pane="eval" style="display:none;">${evalHtml}</div>
+      `;
+      const tabs = $card.querySelectorAll('.wrp-tab');
+      const panes = $card.querySelectorAll('.wrp-pane');
+      const activate = (name) => {
+        tabs.forEach(t => {
+          const on = t.dataset.tab === name;
+          t.style.color = on ? '#fff' : '#aab';
+          t.style.borderBottomColor = on ? '#a78bfa' : 'transparent';
+        });
+        panes.forEach(p => { p.style.display = p.dataset.pane === name ? '' : 'none'; });
+      };
+      tabs.forEach(t => t.addEventListener('click', () => activate(t.dataset.tab)));
+      activate('train');
     }
 
     /** Render one mini line chart per level seen in `win_rate_by_level`.
