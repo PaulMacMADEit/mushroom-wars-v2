@@ -1066,6 +1066,39 @@ keep watching for the 9GB ceiling that killed the previous worker.
 
 **Queue:** 1 running + 3 queued = 4. Skipped queueing.
 
+### Loop fire 23 — 2026-04-28 18:11 PT — reward_version-lo running; champion +10 Elo
+
+**State.** Worker PID 4019322, 49:39 elapsed, RSS 5.73GB (+0.16 since
+fire 22; growth slower than first 30 min, looks plateau-bound around
+6GB). GPU 3% between iters.
+
+**Champion bumped +10 Elo to 1165** — second-largest single-fire jump
+(after fire-20's +10). Identity unchanged (`cron-260428-0407-phase2_
+selfplay-med-00`). Just bench-corpus updates from new karp- runs being
+graded against it.
+
+**🟢 Reward_version A/B is LIVE:**
+- `reward_version-lo` (v13 control) **running**, started 18:05 PT,
+  ~6 min in. Will finish ~18:25 PT.
+- `reward_version-hi` (v14 treatment) queued next.
+
+**Game review unchanged.** Latest rated is still rollout_steps-hi
+(Elo 1048, 50%-send novel behavior — analyzed in fire 22 correction).
+No new rated runs since.
+
+**Queue depth 2** (1 running + 1 queued). Cap 6, room for 4.
+**Skipped queueing** — v13/v14 A/B is the highest-value experiment
+running; queueing more would push v14 results further back. Wait
+until reward_version-hi completes before adding cycle-2 axes.
+
+**Worker memory.** RSS trajectory:
+- Restart: 4.4GB
+- 19 min: 5.57GB
+- 49 min: 5.73GB
+
+Slope flattening. JAX cache warming up the same way the previous
+worker did. No OOM concern at this rate.
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
