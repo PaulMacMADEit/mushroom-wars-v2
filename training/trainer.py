@@ -92,6 +92,17 @@ class PPOConfig:
     # samples from this mix. Only honoured by SIM_BACKEND=jax — the numpy
     # AsyncVectorEnv path uses level_name per factory.
     level_mix: list | None = None
+    # Archive eval — periodic measurement of current policy vs top-N champions.
+    # Cheap signal that actually moves with strength (unlike vs random_legal which
+    # saturates at ~95% in <100 updates). Runs `archive_eval_games` games against
+    # each of the top-`archive_eval_top_n` champions every `archive_eval_every`
+    # updates. Skipped if the archive has fewer than `archive_eval_min_pool` entries.
+    archive_eval_every:    int  = 15
+    archive_eval_top_n:    int  = 10
+    archive_eval_games:    int  = 2
+    archive_eval_level:    str  = "random_4_6"
+    archive_eval_min_pool: int  = 3
+    archive_eval_max_ticks: int = 200
 
 
 class PPOTrainer:
@@ -481,7 +492,7 @@ class PPOTrainer:
 
         adv_t = (adv_t - adv_t.mean()) / (adv_t.std() + 1e-8)
 
-        pol_losses, val_losses, ent_losses, approx_kls, clip_fracs = [], [], [], [], []
+        pol_losses, val_losses, ent_losses, approx_kls, clip_fracs, grad_norms = [], [], [], [], [], []
         idx = np.arange(B)
         mb_size = min(self.cfg.minibatch_size, B)
         for _ in range(self.cfg.update_epochs):
@@ -504,7 +515,9 @@ class PPOTrainer:
 
                 self.optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(
+                # clip_grad_norm_ returns the pre-clip total norm — capture it
+                # so we can chart instability spikes that a clipped post-norm hides.
+                gn = torch.nn.utils.clip_grad_norm_(
                     self.agent.net.parameters(), self.cfg.max_grad_norm
                 )
                 self.optimizer.step()
@@ -518,22 +531,51 @@ class PPOTrainer:
                 ent_losses.append(entropy_loss.item())
                 approx_kls.append(approx_kl)
                 clip_fracs.append(clip_frac)
+                grad_norms.append(float(gn))
+
+        # Critic honesty: 1 - Var[returns - values] / Var[returns].
+        # Computed once per update from the rollout's pre-update predictions
+        # vs the GAE returns. ~1.0 = perfect critic; ~0 = no better than mean;
+        # <0 = worse than mean (silent fail mode worth catching).
+        ret_arr = np.asarray(batch["return"], dtype=np.float64)
+        val_arr = np.asarray(batch["value"],  dtype=np.float64)
+        ret_var = float(ret_arr.var())
+        ev = float(1.0 - ((ret_arr - val_arr).var() / ret_var)) if ret_var > 1e-12 else 0.0
 
         metrics = {
-            "policy_loss":   float(np.mean(pol_losses)),
-            "value_loss":    float(np.mean(val_losses)),
-            "entropy_loss":  float(np.mean(ent_losses)),
-            "approx_kl":     float(np.mean(approx_kls)),
-            "clip_fraction": float(np.mean(clip_fracs)),
-            "mean_reward":   float(batch["reward"].mean()),
+            "policy_loss":        float(np.mean(pol_losses)),
+            "value_loss":         float(np.mean(val_losses)),
+            "entropy_loss":       float(np.mean(ent_losses)),
+            "approx_kl":          float(np.mean(approx_kls)),
+            "clip_fraction":      float(np.mean(clip_fracs)),
+            "grad_norm":          float(np.mean(grad_norms)),
+            "explained_variance": ev,
+            "mean_reward":        float(batch["reward"].mean()),
         }
         ep = self._completed_episodes
         if ep:
-            metrics["episodes_completed"] = len(ep)
-            metrics["mean_episode_return"] = float(np.mean([e[0] for e in ep]))
+            returns = np.asarray([e[0] for e in ep], dtype=np.float64)
+            metrics["episodes_completed"]  = len(ep)
+            metrics["mean_episode_return"] = float(returns.mean())
             metrics["mean_episode_length"] = float(np.mean([e[1] for e in ep]))
             metrics["win_rate"]            = float(np.mean([e[2] for e in ep]))
+            # Min/max/p10/p90 bands. Mean alone hides variance collapse —
+            # AlphaStar Nature paper plots min/max bands for this reason.
+            metrics["episode_return_min"]  = float(returns.min())
+            metrics["episode_return_max"]  = float(returns.max())
+            metrics["episode_return_p10"]  = float(np.percentile(returns, 10))
+            metrics["episode_return_p50"]  = float(np.percentile(returns, 50))
+            metrics["episode_return_p90"]  = float(np.percentile(returns, 90))
             self._completed_episodes = []
+            # Per-level win rate is meaningful only when all envs share one
+            # level (level_mix=None). Multi-level training collapses every
+            # episode under cfg.level_name, which would mislabel mixed runs;
+            # plumbing per-env level requires touching jax_vec_env state and
+            # is left for a follow-up. The dashboard hides this card when
+            # the key is absent or has only one bucket.
+            if not self.cfg.level_mix:
+                lvl = str(self.cfg.level_name)
+                metrics["win_rate_by_level"] = {lvl: metrics["win_rate"]}
 
         self._phase_ns["learn_ns"] += _time.perf_counter_ns() - _t_learn
         self._update_count += 1
@@ -545,8 +587,173 @@ class PPOTrainer:
                 self._refresh_opponents()
                 metrics["pool_size"] = len(self.pool)
 
+        # Archive eval: every N updates, play current policy vs top-K champions.
+        # Returns a metrics dict (may be None if skipped). Time is folded into
+        # update_total_ns since it's part of one PPO step from the user's view.
+        eval_metrics = self._archive_eval()
+        if eval_metrics is not None:
+            metrics.update(eval_metrics)
+
         self._phase_ns["update_total_ns"] += _time.perf_counter_ns() - _t_update
         return metrics
+
+    def _archive_eval(self) -> dict | None:
+        """Periodic eval of current policy vs top-N champions in the archive.
+
+        Returns metrics dict or None if skipped (cadence not hit, archive too
+        thin, or runtime error). Errors are caught here so a transient DB or
+        download failure never breaks training.
+
+        Output keys when populated:
+            win_rate_vs_leaderboard:   float in [0,1], P1 wins / total over all matches
+            archive_eval_n_opponents:  int, number of champions matched against
+            archive_eval_n_games:      int, total games played this eval
+            archive_eval_wall_s:       float, wall-clock for the eval
+        """
+        if self._update_count == 0 or self._update_count % self.cfg.archive_eval_every != 0:
+            return None
+
+        import time as _time
+        import tempfile
+        import importlib
+        from pathlib import Path
+        import urllib.request
+
+        t0 = _time.perf_counter()
+        try:
+            # Lazy import: cli.db / scripts.tournament pull in Supabase, which
+            # most smoke tests don't have. We tolerate ImportError at first eval
+            # and disable archive eval for the rest of the run.
+            try:
+                cli_db = importlib.import_module("cli.db")
+                tournament = importlib.import_module("scripts.tournament")
+            except Exception as exc:
+                if not getattr(self, "_archive_eval_disabled", False):
+                    print(f"[archive_eval] disabled — import failed: {type(exc).__name__}: {exc}", flush=True)
+                    self._archive_eval_disabled = True
+                return None
+            if getattr(self, "_archive_eval_disabled", False):
+                return None
+
+            # Top-N champions by their source run's Elo score. NULL elo (unrated)
+            # sorts last via NULLS LAST. We pull a few extra rows and let the
+            # download loop drop entries with missing weights_url.
+            with cli_db.connect() as c, c.cursor() as cur:
+                cur.execute("""
+                    SELECT ch.id, ch.label, ch.weights_url, ch.obs_norm_url,
+                           r.elo_score
+                      FROM champions ch
+                      LEFT JOIN runs r ON r.id = ch.source_run_id
+                     ORDER BY r.elo_score DESC NULLS LAST, ch.archived_at DESC
+                     LIMIT %s
+                """, (self.cfg.archive_eval_top_n + 5,))
+                cols = ("id", "label", "weights_url", "obs_norm_url", "elo_score")
+                arch = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+            if len(arch) < self.cfg.archive_eval_min_pool:
+                return {"archive_eval_n_opponents": 0, "archive_eval_n_games": 0}
+
+            # Cache: download top-N champion checkpoints once per run, reuse
+            # across evals. Refreshed if archive_eval_top_n changes.
+            top_n = min(self.cfg.archive_eval_top_n, len(arch))
+            cache = getattr(self, "_archive_eval_cache", None)
+            if cache is None or cache.get("top_n") != top_n:
+                cache_dir = Path(tempfile.mkdtemp(prefix=f"mw2-eval-{self._update_count}-"))
+                paths: list[tuple[str, str, float | None]] = []  # (dir, label, elo)
+                supabase_url = __import__('os').environ.get('SUPABASE_URL')
+                if not supabase_url:
+                    print("[archive_eval] SUPABASE_URL not set — disabling archive eval", flush=True)
+                    self._archive_eval_disabled = True
+                    return None
+                for champ in arch:
+                    if len(paths) >= top_n:
+                        break
+                    if not champ.get("weights_url"):
+                        continue
+                    short = str(champ["id"])[:8]
+                    label = champ.get("label") or short
+                    elo = champ.get("elo_score")
+                    cdir = cache_dir / short
+                    cdir.mkdir(exist_ok=True)
+                    w_path = cdir / "weights.pt"
+                    n_path = cdir / "obs_norm.pt"
+                    try:
+                        urllib.request.urlretrieve(
+                            f"{supabase_url}/storage/v1/object/public/{champ['weights_url']}",
+                            w_path,
+                        )
+                        if champ.get("obs_norm_url"):
+                            urllib.request.urlretrieve(
+                                f"{supabase_url}/storage/v1/object/public/{champ['obs_norm_url']}",
+                                n_path,
+                            )
+                    except Exception as exc:
+                        print(f"[archive_eval] skip {label}: download failed ({exc})", flush=True)
+                        continue
+                    paths.append((str(cdir), label, elo))
+                cache = {"top_n": top_n, "paths": paths, "dir": cache_dir}
+                self._archive_eval_cache = cache
+                elo_strs = [f"{e:.0f}" if e is not None else "—" for _, _, e in paths]
+                print(f"[archive_eval] cached {len(paths)} champion checkpoints in {cache_dir}; "
+                      f"elos: {elo_strs}", flush=True)
+
+            opponents = cache["paths"]
+            if not opponents:
+                return {"archive_eval_n_opponents": 0, "archive_eval_n_games": 0}
+
+            # Save current policy weights to a stable eval-checkpoint dir so
+            # tournament._load_policy can read them. Overwritten every eval.
+            eval_ckpt_dir = getattr(self, "_archive_eval_ckpt_dir", None)
+            if eval_ckpt_dir is None:
+                eval_ckpt_dir = Path(tempfile.mkdtemp(prefix="mw2-eval-self-"))
+                self._archive_eval_ckpt_dir = eval_ckpt_dir
+            torch.save(
+                {k: v.detach().cpu() for k, v in self.agent.net.state_dict().items()},
+                eval_ckpt_dir / "weights.pt",
+            )
+            if self.obs_norm is not None:
+                self.obs_norm.save(str(eval_ckpt_dir / "obs_norm.pt"))
+
+            # Sequentially run 2-game (or N-game) batches against each champion.
+            total_p1_wins = 0
+            total_games = 0
+            for opp_dir, opp_label, _opp_elo in opponents:
+                try:
+                    res = tournament.run_match(
+                        p1=str(eval_ckpt_dir),
+                        p2=opp_dir,
+                        games=self.cfg.archive_eval_games,
+                        level=self.cfg.archive_eval_level,
+                        max_ticks=self.cfg.archive_eval_max_ticks,
+                        seed=int(self._rng.integers(0, 2**31 - 1)),
+                        verbose=False,
+                    )
+                except Exception as exc:
+                    print(f"[archive_eval] match vs {opp_label} failed: {exc}", flush=True)
+                    continue
+                # Treat draws as half-wins (standard Elo convention).
+                total_p1_wins += res["p1_wins"] + 0.5 * res["draws"]
+                total_games += res["total"]
+
+            wall = _time.perf_counter() - t0
+            if total_games == 0:
+                return {"archive_eval_n_opponents": len(opponents),
+                        "archive_eval_n_games": 0,
+                        "archive_eval_wall_s": round(wall, 3)}
+
+            wr = total_p1_wins / total_games
+            print(f"[archive_eval] u{self._update_count}: win_rate={wr:.3f} "
+                  f"({int(total_p1_wins)}/{total_games} vs {len(opponents)} champs, {wall:.2f}s)",
+                  flush=True)
+            return {
+                "win_rate_vs_leaderboard": float(wr),
+                "archive_eval_n_opponents": len(opponents),
+                "archive_eval_n_games": int(total_games),
+                "archive_eval_wall_s": round(wall, 3),
+            }
+        except Exception as exc:
+            print(f"[archive_eval] unexpected failure: {type(exc).__name__}: {exc}", flush=True)
+            return None
 
     def sim_phase_breakdown(self) -> dict:
         """Return cumulative wall-time breakdown of training phases.

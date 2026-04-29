@@ -32,6 +32,20 @@
       <div class="stat-label">each point = one rated run, plotted at its training-start time. Y = current Elo.</div>
       <div style="position:relative; height:340px; margin-top:8px;"><canvas id="chart-history"></canvas></div>
     </div>
+
+    <h2>Champion vs champion</h2>
+    <div class="card" id="heatmap-card">
+      <div class="stat-label">
+        head-to-head win rate among the top-20 by Elo (≥3 matches each).
+        Rows + cols sorted by Elo descending. Cells: green = row dominates,
+        red = row loses. Cycling shows up as off-diagonal hot spots —
+        if a lower-Elo row beats a higher-Elo col, your league is
+        non-transitive (rock-paper-scissors).
+      </div>
+      <div id="heatmap" style="margin-top:12px; overflow-x:auto;">
+        <div class="muted">Loading…</div>
+      </div>
+    </div>
   </main>
 
   <script type="module">
@@ -213,6 +227,133 @@
 
     load().catch(e => {
       $summary.innerHTML = `<span class="error">${esc(e.message)}</span>`;
+    });
+
+    // -----------------------------------------------------------------
+    // Champion-vs-champion heatmap. Single sweep: pull top-20 by Elo,
+    // then `games` filtered by player_1_run_id IN(...) AND player_2_run_id
+    // IN(...). Build a 20×20 win-rate matrix, render as SVG. The data
+    // already exists — no schema migration needed.
+    // -----------------------------------------------------------------
+    async function loadHeatmap() {
+      const $hm = document.getElementById('heatmap');
+      if (!$hm) return;
+
+      const { data: top, error } = await sb
+        .from('runs')
+        .select('id, label, elo_score, elo_n_matches')
+        .eq('status', 'done')
+        .gte('elo_n_matches', 3)
+        .order('elo_score', { ascending: false })
+        .limit(20);
+      if (error) { $hm.innerHTML = `<div class="error">${esc(error.message)}</div>`; return; }
+      if (!top || top.length < 2) {
+        $hm.innerHTML = `<div class="muted">need at least 2 rated runs (≥3 matches) — currently ${top?.length ?? 0}</div>`;
+        return;
+      }
+
+      const ids = top.map(r => r.id);
+      // Single round-trip: every game where BOTH players are top-N. Cap
+      // at 50k just in case — real volume should be ≪ that.
+      const { data: games, error: gerror } = await sb
+        .from('games')
+        .select('player_1_run_id, player_2_run_id, winner')
+        .in('player_1_run_id', ids)
+        .in('player_2_run_id', ids)
+        .limit(50000);
+      if (gerror) { $hm.innerHTML = `<div class="error">${esc(gerror.message)}</div>`; return; }
+
+      // matrix[i][j] = { w, d, l } from i's perspective when i played j.
+      const idx = Object.fromEntries(ids.map((id, i) => [id, i]));
+      const N = ids.length;
+      const cell = () => ({ w: 0, d: 0, l: 0 });
+      const M = Array.from({ length: N }, () => Array.from({ length: N }, cell));
+      for (const g of (games || [])) {
+        const i = idx[g.player_1_run_id];
+        const j = idx[g.player_2_run_id];
+        if (i == null || j == null) continue;
+        if (g.winner === g.player_1_run_id)      { M[i][j].w++; M[j][i].l++; }
+        else if (g.winner === g.player_2_run_id) { M[i][j].l++; M[j][i].w++; }
+        else                                      { M[i][j].d++; M[j][i].d++; }
+      }
+
+      // Render as a simple HTML table — easy to style, easy to inspect.
+      const cellSize = 32;     // px
+      const labelW   = 200;    // truncated label column width
+      const colorOf = (rate, n) => {
+        if (n === 0) return 'background:#1a1d24; color:#3a4155;';  // no data
+        // 0% red → 50% near-black → 100% green via HSL
+        const hue = rate < 0.5 ? 0 : 120;             // red or green
+        const dist = Math.abs(rate - 0.5);            // 0…0.5
+        const sat  = Math.round(70 * (dist / 0.5));   // 0…70%
+        const light = 18 + Math.round(28 * (dist / 0.5));  // 18…46%
+        return `background:hsl(${hue}, ${sat}%, ${light}%); color:#e6e8ef;`;
+      };
+
+      let html = `<table style="border-collapse:separate; border-spacing:1px; font-size:11px;">`;
+      // Header row: short ids of opponents.
+      html += `<tr><th style="width:${labelW}px; text-align:right; padding-right:8px; font-weight:normal; color:#8a93a6;">row beats col →</th>`;
+      for (let j = 0; j < N; j++) {
+        html += `<th title="${esc(top[j].label)} (Elo ${Math.round(top[j].elo_score)})"
+                       style="width:${cellSize}px; height:${cellSize}px; padding:0;
+                              transform:rotate(-60deg); transform-origin:bottom left;
+                              white-space:nowrap; font-family:var(--mono); font-size:10px; color:#8a93a6;">
+                  #${j + 1}
+                </th>`;
+      }
+      html += `</tr>`;
+      for (let i = 0; i < N; i++) {
+        const row = top[i];
+        html += `<tr>`;
+        // Row label: rank · short label · Elo.
+        const rate = (() => {
+          let w = 0, d = 0, l = 0;
+          for (let j = 0; j < N; j++) {
+            if (i === j) continue;
+            w += M[i][j].w; d += M[i][j].d; l += M[i][j].l;
+          }
+          const n = w + d + l;
+          return n > 0 ? `${(((w + 0.5 * d) / n) * 100).toFixed(0)}%` : '—';
+        })();
+        html += `<td style="text-align:right; padding-right:8px; font-family:var(--mono); white-space:nowrap;">
+                   <a href="./run.html?id=${esc(row.id)}" style="text-decoration:none;">
+                     <span class="muted">#${i + 1}</span>
+                     <b style="color:#e6e8ef;">${esc(row.label.length > 22 ? row.label.slice(0, 21) + '…' : row.label)}</b>
+                     <span class="muted">${Math.round(row.elo_score)}</span>
+                   </a>
+                   <span class="muted small" style="margin-left:6px;">${rate}</span>
+                 </td>`;
+        for (let j = 0; j < N; j++) {
+          if (i === j) {
+            html += `<td style="width:${cellSize}px; height:${cellSize}px;
+                                background:repeating-linear-gradient(45deg,#262a36,#262a36 4px,#1a1d24 4px,#1a1d24 8px);"></td>`;
+            continue;
+          }
+          const c = M[i][j];
+          const n = c.w + c.d + c.l;
+          const rate = n > 0 ? (c.w + 0.5 * c.d) / n : 0;
+          const tip = n > 0
+            ? `${esc(top[i].label)} vs ${esc(top[j].label)}: ${c.w}W ${c.d}D ${c.l}L (${(rate * 100).toFixed(0)}%)`
+            : `${esc(top[i].label)} vs ${esc(top[j].label)}: no games`;
+          const txt = n > 0 ? `${Math.round(rate * 100)}` : '';
+          html += `<td title="${tip}"
+                       style="width:${cellSize}px; height:${cellSize}px; text-align:center;
+                              font-family:var(--mono); font-size:10px;
+                              ${colorOf(rate, n)}">${txt}</td>`;
+        }
+        html += `</tr>`;
+      }
+      html += `</table>`;
+      html += `<div class="muted small" style="margin-top:8px;">
+                 Cells show win % from row's perspective. Hover for W/D/L breakdown.
+                 The summary % at the right of each row is that row's overall win rate
+                 vs the other 19 champions.
+               </div>`;
+      $hm.innerHTML = html;
+    }
+    loadHeatmap().catch(e => {
+      const $hm = document.getElementById('heatmap');
+      if ($hm) $hm.innerHTML = `<div class="error">${esc(e.message)}</div>`;
     });
   </script>
 </body>

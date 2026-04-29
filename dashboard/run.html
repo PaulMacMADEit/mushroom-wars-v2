@@ -27,7 +27,7 @@
     import { sb, signedUrl, queryParam } from './lib/supabase.js';
     import { fmtTime, fmtDuration, fmtPct, esc, statusPill,
              fmtElo, ticksPerMin, totalTicks, fmtBig } from './lib/ui.js';
-    import { lineChart } from './lib/chart.js';
+    import { lineChart, bandChart } from './lib/chart.js';
 
     const $root = document.getElementById('root');
     const runId = queryParam('id');
@@ -148,7 +148,7 @@
 
         <h2>Training curves</h2>
         <div class="card">
-          <div class="stat-label">win rate vs opponent</div>
+          <div class="stat-label">win rate vs leaderboard (sparse — every N updates) + vs training opponent (every update)</div>
           <div style="position:relative; height:220px;"><canvas id="chart-win"></canvas></div>
           <div style="height:12px;"></div>
           <div class="stat-label">losses</div>
@@ -158,6 +158,21 @@
           <div style="position:relative; height:220px;"><canvas id="chart-signal"></canvas></div>
         </div>
 
+        <h2>Stability + critic</h2>
+        <div class="card">
+          <div class="stat-label">PPO stability (clip fraction high = step too large; grad norm spikes = instability)</div>
+          <div style="position:relative; height:220px;"><canvas id="chart-stability"></canvas></div>
+          <div style="height:12px;"></div>
+          <div class="stat-label">explained variance (1 = perfect critic; 0 = no better than mean; &lt;0 = worse than mean)</div>
+          <div style="position:relative; height:200px;"><canvas id="chart-ev"></canvas></div>
+        </div>
+
+        <h2>Episode return distribution</h2>
+        <div class="card">
+          <div class="stat-label">mean (purple) with p10–p90 band (light) and min/max envelope (dashed). Mean alone hides variance collapse.</div>
+          <div style="position:relative; height:240px;"><canvas id="chart-bands"></canvas></div>
+        </div>
+
         <h2>Throughput</h2>
         <div class="card">
           <div class="stat-label">episodes completed per update</div>
@@ -165,6 +180,12 @@
           <div style="height:12px;"></div>
           <div class="stat-label" id="pool-label" style="display:none;">opponent pool size (self-play)</div>
           <div style="position:relative; height:180px;"><canvas id="chart-pool"></canvas></div>
+        </div>
+
+        <h2 id="permap-h2" style="display:none;">Win rate by level</h2>
+        <div class="card" id="permap-card" style="display:none;">
+          <div class="stat-label">per-level win rate over training. Catches regressions hidden by the global average.</div>
+          <div id="permap-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:12px; margin-top:8px;"></div>
         </div>
 
         <h2>Matchups (evaluation games)</h2>
@@ -188,7 +209,9 @@
 
       // Fetch metrics.json + render charts. Any failure is surfaced
       // visibly — a silently-blank canvas is the worst UX.
-      const chartIds = ['chart-win', 'chart-loss', 'chart-signal', 'chart-eps', 'chart-pool'];
+      const chartIds = ['chart-win', 'chart-loss', 'chart-signal',
+                        'chart-stability', 'chart-ev', 'chart-bands',
+                        'chart-eps', 'chart-pool'];
 
       function replaceCanvasWith(id, text, isError = false) {
         const c = document.getElementById(id);
@@ -246,12 +269,51 @@
         }
       };
 
-      renderOne('chart-win',    ['win_rate'],
+      renderOne('chart-win',    ['win_rate_vs_leaderboard', 'win_rate'],
                 { yLabel: 'win rate', yMin: 0, yMax: 1 });
       renderOne('chart-loss',   ['value_loss', 'entropy_loss'],
                 { yLabel: 'loss' });
       renderOne('chart-signal', ['policy_loss', 'approx_kl'],
                 { yLabel: 'signal' });
+
+      // Stability + critic — gated on key presence so old runs render fine.
+      const hasStab = points.some(p => p.clip_fraction != null || p.grad_norm != null);
+      if (hasStab) {
+        renderOne('chart-stability', ['clip_fraction', 'grad_norm'],
+                  { yLabel: 'value' });
+      } else {
+        replaceCanvasWith('chart-stability', 'no clip/grad data — older run', false);
+      }
+      const hasEv = points.some(p => p.explained_variance != null);
+      if (hasEv) {
+        renderOne('chart-ev', ['explained_variance'],
+                  { yLabel: 'explained variance', yMin: -1, yMax: 1 });
+      } else {
+        replaceCanvasWith('chart-ev', 'no explained-variance data — older run', false);
+      }
+
+      // Episode return bands — uses a separate helper because Chart.js
+      // band fills need adjacent-dataset references.
+      const hasBands = points.some(p =>
+        p.episode_return_p10 != null || p.episode_return_p90 != null ||
+        p.episode_return_min != null || p.episode_return_max != null);
+      if (hasBands) {
+        try {
+          const canvas = document.getElementById('chart-bands');
+          if (canvas) {
+            const prev = charts.get('chart-bands');
+            if (prev) prev.destroy();
+            charts.set('chart-bands', bandChart(canvas, points,
+              { yLabel: 'episode return' }));
+          }
+        } catch (e) {
+          console.error('[chart-bands] render failed:', e);
+          replaceCanvasWith('chart-bands', `chart-bands: ${e.message}`, true);
+        }
+      } else {
+        replaceCanvasWith('chart-bands', 'no return-distribution data — older run', false);
+      }
+
       renderOne('chart-eps',    ['episodes_completed'],
                 { yLabel: 'episodes' });
 
@@ -260,6 +322,72 @@
         const label = document.getElementById('pool-label');
         if (label) label.style.display = '';
         renderOne('chart-pool', ['pool_size'], { yLabel: 'snapshots' });
+      }
+
+      // Per-level win rate sparklines (item #5). Drawn fresh on each refresh
+      // since the set of levels can grow as a run progresses (rare, but
+      // possible if level_mix is added mid-run via an admin tweak).
+      renderPerMap(points);
+    }
+
+    /** Render one mini line chart per level seen in `win_rate_by_level`.
+     * Hidden entirely when no level breakdown is available (old runs or
+     * level_mix-trained runs that don't currently emit per-level). */
+    function renderPerMap(points) {
+      const $h2  = document.getElementById('permap-h2');
+      const $card = document.getElementById('permap-card');
+      const $grid = document.getElementById('permap-grid');
+      if (!$h2 || !$card || !$grid) return;
+
+      // Collect the union of levels seen across all updates.
+      const levels = new Set();
+      for (const p of points) {
+        const m = p.win_rate_by_level;
+        if (m && typeof m === 'object') {
+          for (const k of Object.keys(m)) levels.add(k);
+        }
+      }
+      if (levels.size === 0) {
+        $h2.style.display = 'none';
+        $card.style.display = 'none';
+        return;
+      }
+      $h2.style.display = '';
+      $card.style.display = '';
+
+      // Re-render the grid; destroy any previous per-level charts first.
+      for (const k of [...charts.keys()]) {
+        if (k.startsWith('chart-permap-')) {
+          charts.get(k).destroy();
+          charts.delete(k);
+        }
+      }
+      $grid.innerHTML = '';
+      const sorted = [...levels].sort();
+      for (const level of sorted) {
+        const id = `chart-permap-${level.replace(/[^a-z0-9_]/gi, '_')}`;
+        const slot = document.createElement('div');
+        slot.innerHTML = `
+          <div class="stat-label" style="margin-bottom:4px;"><span class="mono">${level}</span></div>
+          <div style="position:relative; height:140px;"><canvas id="${id}"></canvas></div>
+        `;
+        $grid.appendChild(slot);
+        // Project the per-level series onto the same x axis as the main
+        // metrics — points without this level become null gaps.
+        const projected = points.map(p => {
+          const m = p.win_rate_by_level;
+          return { win_rate: (m && m[level] != null) ? m[level] : null };
+        });
+        const canvas = document.getElementById(id);
+        if (canvas) {
+          try {
+            charts.set(id, lineChart(canvas, projected, ['win_rate'],
+              { yLabel: '', xLabel: '', yMin: 0, yMax: 1 }));
+          } catch (e) {
+            canvas.replaceWith(Object.assign(document.createElement('div'),
+              { className: 'error', textContent: e.message }));
+          }
+        }
       }
     }
 
@@ -340,7 +468,9 @@
     }
 
     async function pollForUpdates(runId) {
-      const chartIds = ['chart-win', 'chart-loss', 'chart-signal', 'chart-eps', 'chart-pool'];
+      const chartIds = ['chart-win', 'chart-loss', 'chart-signal',
+                        'chart-stability', 'chart-ev', 'chart-bands',
+                        'chart-eps', 'chart-pool'];
       function failAllCharts(text) {
         for (const id of chartIds) replaceCanvasWith(id, text, true);
       }

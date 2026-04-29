@@ -720,9 +720,24 @@
      * `picked` is the index the agent chose; that slot is highlighted. */
     function renderHeadBars(label, top, picked, formatter) {
       if (!top || top.length === 0) return "";
+      // Find the picked entry's prob so non-picked bars can show how much
+      // worse the model thought they were — AlphaGo-Teach-style affordance.
+      const pickedEntry = top.find(([idx]) => idx === picked);
+      const pickedProb  = pickedEntry ? pickedEntry[1] : null;
       const pills = top.map(([idx, p]) => {
-        const pickedCls = idx === picked ? " picked" : "";
-        return `<span class="bar${pickedCls}">${formatter(idx)} ${(p * 100).toFixed(0)}%</span>`;
+        const isPicked = idx === picked;
+        const pickedCls = isPicked ? " picked" : "";
+        let title;
+        if (isPicked) {
+          title = `chosen action — ${formatter(idx)} at ${(p * 100).toFixed(1)}%`;
+        } else if (pickedProb != null) {
+          const ratio = pickedProb > 0 ? (p / pickedProb) : 0;
+          const factor = ratio > 0 ? `${(1 / ratio).toFixed(1)}× less likely` : 'effectively zero';
+          title = `alternative — ${formatter(idx)} at ${(p * 100).toFixed(1)}% · ${factor} than the chosen ${formatter(picked)}`;
+        } else {
+          title = `${formatter(idx)} at ${(p * 100).toFixed(1)}% (no chosen reference)`;
+        }
+        return `<span class="bar${pickedCls}" title="${title}">${formatter(idx)} ${(p * 100).toFixed(0)}%</span>`;
       }).join("");
       return `<div class="row-mini"><span class="head-label">${label}</span><span class="bars">${pills}</span></div>`;
     }
@@ -886,9 +901,22 @@
       const sideCls = dec.player === 1 ? "p1" : "p2";
       function bars(label, top, picked, fmt) {
         if (!top || top.length === 0) return "";
+        const pickedEntry = top.find(([i]) => i === picked);
+        const pickedProb  = pickedEntry ? pickedEntry[1] : null;
         const pills = top.slice(0, 5).map(([i, p]) => {
-          const cls = i === picked ? " picked" : "";
-          return `<span class="bar${cls}">${fmt(i)} ${(p * 100).toFixed(0)}%</span>`;
+          const isPicked = i === picked;
+          const cls = isPicked ? " picked" : "";
+          let title;
+          if (isPicked) {
+            title = `chosen action — ${fmt(i)} at ${(p * 100).toFixed(1)}%`;
+          } else if (pickedProb != null) {
+            const ratio = pickedProb > 0 ? (p / pickedProb) : 0;
+            const factor = ratio > 0 ? `${(1 / ratio).toFixed(1)}× less likely` : 'effectively zero';
+            title = `alternative — ${fmt(i)} at ${(p * 100).toFixed(1)}% · ${factor} than the chosen ${fmt(picked)}`;
+          } else {
+            title = `${fmt(i)} at ${(p * 100).toFixed(1)}% (no chosen reference)`;
+          }
+          return `<span class="bar${cls}" title="${title}">${fmt(i)} ${(p * 100).toFixed(0)}%</span>`;
         }).join("");
         return `<div class="d-row"><span class="head-label">${label}</span>${pills}</div>`;
       }

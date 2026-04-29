@@ -247,8 +247,53 @@
           <div><div class="stat-label">ticks/min</div><div class="stat">${ticksPerMin(sps)}</div></div>
           <div><div class="stat-label">train time</div><div class="stat">${fmtDuration(r.wall_ms)}</div></div>
           <div><div class="stat-label">total ticks</div><div class="stat">${fmtBig(tt)}</div></div>
+          <div>
+            <div class="stat-label">archive beaten &gt;80%</div>
+            <div class="stat" id="champ-archive-stat">…</div>
+          </div>
         </div>
       `;
+      // Archive-beaten count is the AlphaStar-paper "is this run robustly
+      // strong, or just strong vs siblings?" check. One round-trip: count
+      // opponents the champion beats >80% across all eval games.
+      computeArchiveBeaten(r.id).then(s => {
+        const el = document.getElementById('champ-archive-stat');
+        if (el) el.innerHTML = s;
+      }).catch(e => {
+        const el = document.getElementById('champ-archive-stat');
+        if (el) el.innerHTML = `<span class="error small">${esc(e.message)}</span>`;
+      });
+    }
+
+    /** For run `champId`, fetch every game it played and bucket by opponent.
+     * Return an HTML string of "X / Y" — Y = distinct opponents with ≥3
+     * games, X = of those, how many the champion wins ≥80% of (with draws
+     * counting half). Returns "—" when there's not enough data. */
+    async function computeArchiveBeaten(champId) {
+      const { data: games, error } = await sb
+        .from('games')
+        .select('player_1_run_id, player_2_run_id, winner')
+        .or(`player_1_run_id.eq.${champId},player_2_run_id.eq.${champId}`)
+        .limit(50000);
+      if (error) throw error;
+      if (!games || games.length === 0) return '<span class="muted small">no eval games</span>';
+
+      const byOpp = {};  // opp_id → { w, d, l }
+      for (const g of games) {
+        const oppId = g.player_1_run_id === champId ? g.player_2_run_id : g.player_1_run_id;
+        const b = (byOpp[oppId] = byOpp[oppId] || { w: 0, d: 0, l: 0 });
+        if (g.winner === champId)  b.w++;
+        else if (g.winner === null) b.d++;
+        else                        b.l++;
+      }
+      const opps = Object.values(byOpp).filter(b => (b.w + b.d + b.l) >= 3);
+      if (opps.length < 3) return '<span class="muted small">need ≥3 opponents w/ 3+ games</span>';
+      const beaten = opps.filter(b => {
+        const n = b.w + b.d + b.l;
+        return ((b.w + 0.5 * b.d) / n) >= 0.8;
+      }).length;
+      const pct = ((beaten / opps.length) * 100).toFixed(0);
+      return `${beaten}/${opps.length} <span class="muted small" style="font-size:0.6em;">(${pct}%)</span>`;
     }
 
     async function loadStats() {
