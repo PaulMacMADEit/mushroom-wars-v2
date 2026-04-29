@@ -147,6 +147,11 @@
       const stepsPerSec = run.result?.steps_per_sec ?? null;
       const totalTicksRun = totalTicks(run.result, run.hyperparams);
 
+      // "Rerank this run" hook — only for rated training runs (admin job
+      // rows can't rerate themselves and unrated rows have no anchor).
+      const canRerank = run.simulator_id !== 'admin'
+                     && run.status === 'done'
+                     && (run.elo_n_matches ?? 0) >= 1;
       $root.innerHTML = `
         <h2>Run ${esc(run.label)}</h2>
         <div class="card">
@@ -157,7 +162,34 @@
             <div><span class="stat-label">sim</span><div class="mono">${esc(run.simulator_id)}</div></div>
             <div><span class="stat-label">seed</span><div class="mono">${esc(run.seed ?? '')}</div></div>
             <div><span class="stat-label">machine</span><div class="mono">${esc(run.machine)}</div></div>
+            ${canRerank ? `<div style="margin-left:auto;">
+              <button id="rr1-toggle" class="btn-primary">Rerank this run</button>
+            </div>` : ''}
           </div>
+          ${canRerank ? `<div id="rr1-form" style="display:none; margin-top:14px; padding-top:14px; border-top:1px solid var(--border); display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end;">
+            <label class="small muted">opponents
+              <br><select id="rr1-mode" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+                <option value="near" selected>±N nearest by Elo</option>
+                <option value="top">top N by Elo</option>
+              </select>
+            </label>
+            <label class="small muted">N
+              <br><input id="rr1-n" type="number" min="1" max="20" value="5" style="width:60px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+            </label>
+            <label class="small muted">games/match
+              <br><input id="rr1-games" type="number" min="8" max="256" step="8" value="64" style="width:80px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+            </label>
+            <label class="small muted">level
+              <br><select id="rr1-level" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+                <option value="random_close_4_5">random_close_4_5</option>
+                <option value="random_4_8">random_4_8</option>
+                <option value="random_8_16" selected>random_8_16</option>
+                <option value="random_16_24">random_16_24</option>
+              </select>
+            </label>
+            <button id="rr1-submit" class="btn-primary" style="height:30px;">Queue rerank</button>
+            <span id="rr1-status" class="muted small"></span>
+          </div>` : ''}
         </div>
 
         <div class="grid">
@@ -303,6 +335,42 @@
 
         ${run.error ? `<h2>Error</h2><pre class="error">${esc(run.error)}</pre>` : ''}
       `;
+
+      // Wire the "Rerank this run" toggle + submit if it was rendered.
+      const $rr1Toggle = document.getElementById('rr1-toggle');
+      const $rr1Form   = document.getElementById('rr1-form');
+      const $rr1Submit = document.getElementById('rr1-submit');
+      const $rr1Status = document.getElementById('rr1-status');
+      $rr1Toggle?.addEventListener('click', () => {
+        $rr1Form.style.display = ($rr1Form.style.display === 'none') ? 'flex' : 'none';
+      });
+      $rr1Submit?.addEventListener('click', async () => {
+        const mode  = document.getElementById('rr1-mode').value;
+        const n     = parseInt(document.getElementById('rr1-n').value, 10);
+        const games = parseInt(document.getElementById('rr1-games').value, 10);
+        const level = document.getElementById('rr1-level').value;
+        const ts = new Date().toISOString().slice(2,16).replace(/[-T:]/g,'').replace(/(\d{6})(\d{4})/, '$1-$2');
+        const label = `rerank-${ts}-${run.label.slice(0,30)}-${mode}${n}`;
+        $rr1Submit.disabled = true;
+        $rr1Status.textContent = 'queueing…';
+        const { data, error } = await sb.from('runs').insert({
+          project: 'mushroom-wars',
+          model_id: 'admin',
+          simulator_id: 'admin',
+          label,
+          status: 'queued',
+          budget_ms: 0,
+          machine: '',
+          launch_at: Date.now(),
+          hyperparams: { kind: 'rerate_one', target_run_id: run.id, mode, n, games, level },
+        }).select('id').single();
+        $rr1Submit.disabled = false;
+        if (error) {
+          $rr1Status.innerHTML = `<span class="error">${esc(error.message)}</span>`;
+          return;
+        }
+        $rr1Status.innerHTML = `queued <a href="./run.html?id=${esc(data.id)}">${esc(label)}</a>`;
+      });
 
       // Render structured hyperparams — driven by run.hyperparams which is
       // available immediately. No need to wait for metrics.json.

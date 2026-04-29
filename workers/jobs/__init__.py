@@ -5,9 +5,11 @@ discriminator inside hyperparams is `kind` ('rerate' for now). The worker
 dispatches via `dispatch(job, ...)`.
 """
 from . import rerate
+from . import rerate_one
 
 HANDLERS = {
-    "rerate": rerate.handle,
+    "rerate":     rerate.handle,
+    "rerate_one": rerate_one.handle,
 }
 
 
