@@ -2451,6 +2451,46 @@ lo running 11 min in.
 
 **Queue.** 1 running + 2 queued = 3. Skipped queueing.
 
+### Loop fire 56 — 2026-04-29 10:11 PT — entropy_coef cycle-3: continued deflation, fleet shift to active continues
+
+**State.** Worker PID 4019322, **16h 49min uptime**, RSS 6.61GB
+plateau holding (15+ fires). Champion drift 1159→1160.
+
+**entropy_coef now has cycle-1, cycle-2, AND cycle-3 data:**
+
+| run | cycle 1 | cycle 2 | cycle 3 |
+|---|---|---|---|
+| -lo (0.003) | 1057 | 1048 | **1019 (-29 vs cycle-2)** |
+| -mid (0.01) | 1058 | 1041 | running |
+| -hi (0.03) | 1036 | 1035 | queued |
+
+**Cumulative cycle-1 → cycle-3 deflation on lo: -38 Elo.** Corpus-
+deflation pattern continues uniformly.
+
+**entropy_coef-lo cycle-3 game review:**
+- WIN: 13 ticks, **29% noop**, 100%/noop/**50%-sends** — moderate active
+- LOSS: 85 ticks, 40% noop, 100%/noop/75%, value drop +8.77
+
+**Fleet shift confirmed across same cell over time:**
+| fire | run | WIN noop% | WIN ticks | top non-noop |
+|---|---|---|---|---|
+| fire 17 | entropy_coef-lo cycle-1 | (data not in log) | — | — |
+| fire 26 | entropy_coef-lo cycle-2 | 69% | 116 | 100/75 |
+| **fire 56** | **entropy_coef-lo cycle-3** | **29%** | **13** | **100/50** |
+
+Same hyperparams + same axis cell, completely different policy outcomes.
+**The bench corpus's selection pressure has shifted dramatically over
+~17 hours of training**, pulling all v13 baselines toward active
+short-aggressive policies. v14's "active varied" attractor is now
+more aligned with the corpus's preferred strategy than 17h ago.
+
+**This is one more piece of evidence that v14's -11 Elo gap from
+fire 55 is structural (PFSP weighting), not strategic.** v13 has
+*caught up* to v14's behavior signature; the gap is now about strong-
+opponent specialization, not active-vs-passive.
+
+**Queue:** 1 running + 1 queued = 2. Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-29 01:55 PT — fix scripts/karp_review_games.py for tied created_at
