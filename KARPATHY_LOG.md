@@ -3013,6 +3013,34 @@ training opponent.
 PaulLinux backstop fires every 15min and will queue `clip_range` next
 once `gae_lambda-hi` clears.
 
+### Loop fire 66 — 2026-04-29 14:11 PT — first sweep WITH per-update rotation; new policy archetype (mid-range sends dominate)
+
+gae_lambda sweep with rotate_per_update done: lo failed (worker restart),
+mid=Elo 955, hi=Elo 983. Higher training rate (0.41-0.44 vs 0.40 without
+rotation) but lower bench Elo (was 1030+ without rotation). Expected
+trade-off — rotation prevents over-specialization to one opponent;
+policy is more general (higher training rate across diverse opps) but
+underperforms on bench-eval matches against any specific opponent.
+
+🟢 NEW POLICY ARCHETYPE on gae_lambda-mid game review:
+- WIN sample: 67 ticks, **50%-sends DOMINATE (32%)**, no 100%-sends at all,
+  value-drop **-7.34** (2nd-largest negative WIN drop of all 66 fires)
+- LOSS sample: 16 ticks, 4 different send sizes used (noop 38%, 25% at
+  25%, 100% at 25%)
+
+First time across 66 fires that 100%-sends are absent from a WIN sample.
+The agent learned medium-commitment 50% sends are preferable vs a diverse
+opponent pool. Rotation forcing genuinely new strategy.
+
+Champion ranking continues shifting on close-4-5: cdcc0826 b6 down to
+1146 (was 1190 at peak). karpv2-n_envs-lo at 1053. b6 specialist fading.
+
+Label bug from fire 65 (champion:mw2-pfsp collapse) ships on NEXT sweep —
+gae_lambda runs predated commit d84e6bf so they still showed collapsed
+labels. clip_range sweep (backstop next) gets the fix.
+
+Queue empty. Backstop ticks ~14:15, picks clip_range cycle-3-of-v2.
+
 ## Code changes during loop
 
 ### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
