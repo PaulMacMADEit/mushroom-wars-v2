@@ -2721,6 +2721,70 @@ the next karpv2- result confirms the diagnosis.**
 sweep complete to see if the 3-update problem is consistent across
 cells before changing config.
 
+### Loop fire 60 — 2026-04-29 12:11 PT — entropy_coef sweep complete; bootstrap pattern confirmed; 1 win in cycle-3
+
+**State.** Worker idle (GPU 0%), queue empty. PID 4019322, **18h 49min
+uptime**, RSS 6.60GB plateau. Champion **+17 to 1187** (biggest single-
+fire jump in many fires — bench corpus updating from karpv2- runs).
+
+**🟢 First karpv2- entropy_coef sweep complete:**
+
+| run | entropy_coef | Elo | rate | sps | updates | wins/24 |
+|---|---|---|---|---|---|---|
+| -lo (0.003) | 798 | 0.134 | 322 | 3 | 0 |
+| -mid (0.01) | **823** | 0.131 | 322 | 3 | **1** |
+| -hi (0.03) | 835 | 0.126 | 321 | 3 | (TBD) |
+
+**Three patterns:**
+1. **All sub-anchor** (798-835), 37 Elo range, hi > mid > lo
+2. **All 3 updates, all ~321 sps** — slowdown + update-starvation uniform
+3. **Higher entropy wins under bootstrap** — same finding as fire 27's
+   "high entropy is partial v14 substitute" but stronger under v2
+
+**🟢 entropy_coef-mid game review — first karpv2 win is GENUINELY DIFFERENT:**
+
+| game | tag | ticks | noop% | entropy | top types | value drop |
+|---|---|---|---|---|---|---|
+| WIN | 22 | 55% | **4.34** | 50%=18% / 25%=18% / noop=55% | **-3.74** |
+| LOSS | 11 | 67% | 3.98 | 75%=17% / 25%=17% / noop=67% | +3.41 |
+
+**Two new loop records:**
+- **WIN value-drop -3.74** — most negative ever (agent's confidence
+  rose 3.74 during the win). Prior record was -2.28 from n_envs-mid
+  cycle-3 / value_coef-hi cycle-3.
+- **WIN entropy 4.34** — highest WIN entropy of the loop (typical 1-3).
+
+**This is a NEW POLICY ARCHETYPE under v2:**
+- Massive exploration (entropy 4.34)
+- **Small sends only** (25%, 50% — never 100%)
+- Patient (55% noop)
+- Confident throughout (-3.74 value rise)
+
+The agent learned **"don't overcommit, you can't beat the champion in
+a slugfest."** Defensive, exploratory, small-commitment policy. This
+is *plausibly* what you want vs a strong opponent — preserve garrison,
+wait for openings, take small calculated risks.
+
+LOSS sample also shows 25%-sends — even in defeat the agent preserves
+garrison. Different from v1 LOSS samples (commit 100% and die fast).
+
+**Verdict on the bootstrap problem.** 3 updates is too few — we're not
+actually training. But the *direction* is interesting: where v1 wanted
+"more updates of cautious learning", **v2 wants "more updates of
+exploratory learning"** because the opponent is strong and cautious
+loses. High entropy + small sends = a learnable response.
+
+**Recommendation: switch to rollout_steps=32 + 20-min cells now.**
+Same wall-time per fire, but 12 updates/cell instead of 3 = 4× learning
+per cell. Hold off on D (batch neural opponent) until we see whether
+12 updates is enough to break sub-anchor.
+
+**Awaiting Paul's call on the YAML change** — won't autonomously edit.
+
+**Queue:** empty. Backstop will tick at :15 PT and pick next axis (lr
+cycle-1 of v2, since round-robin is fresh under karpv2- prefix). Will
+let the cron continue if no YAML change lands first.
+
 ## Code changes during loop
 
 ### 2026-04-29 11:25 PT — regime change v1→v2 (see above)
