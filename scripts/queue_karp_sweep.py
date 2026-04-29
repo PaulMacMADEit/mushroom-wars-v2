@@ -86,34 +86,56 @@ def queue_sweep(axis: str | None, dry_run: bool, baseline_overrides: dict) -> No
     cells = axis_obj.cells
 
     # Training opponent: read from configs/karpathy_loop.yaml `training_opponent`
-    # block. Sugar: name='latest_champion' resolves to opponent_name=neural with
-    # the most-recent champion's source_run_id injected.
+    # block. Resolution per cell (each sweep cell gets its own opponent pick),
+    # supporting:
+    #   latest_champion  — most-recent archived champion
+    #   random_champion  — uniform random from archive
+    #   pfsp_champion    — PFSP-weighted random (favours recently-difficult)
+    #   self_play        — enable trainer's self_play=true (disables fused_rollout)
+    #   neural           — explicit run_id in kwargs (legacy)
     opp = dict(cfg.training_opponent or {})
-    name = opp.get("name", "random_legal")
-    kwargs = dict(opp.get("kwargs", {}) or {})
-    if name == "latest_champion":
+    opp_mode = opp.get("name", "latest_champion")
+    base_kwargs = dict(opp.get("kwargs", {}) or {})
+
+    def _pick_opponent_for_cell(mode: str, cell_label: str):
+        """Return (opponent_name, opponent_kwargs, self_play_override) for one cell."""
+        if mode == "self_play":
+            print(f"[karp]   {cell_label}: self_play")
+            return "neural", {}, True
+        if mode == "neural":
+            return "neural", dict(base_kwargs), False
+        # All champion-* modes pull from the archive
         with connect() as c, c.cursor() as cur:
-            cur.execute("SELECT source_run_id, label FROM champions ORDER BY archived_at DESC LIMIT 1")
-            row = cur.fetchone()
-        if row:
-            name = "neural"
-            kwargs = {"device": "cuda", "opponent_run_id": str(row[0]), **kwargs}
-            print(f"[karp] training_opponent=latest_champion → {row[1]} ({str(row[0])[:8]})")
-        else:
-            # 2026-04-29: removed random_legal fallback. Training vs random_legal
-            # produces a curve that climbs to ~95% regardless of real strength,
-            # which is not useful signal. If no champion exists, that's a real
-            # bootstrap problem — seed the archive first.
+            if mode == "latest_champion":
+                cur.execute("SELECT source_run_id, label FROM champions ORDER BY archived_at DESC LIMIT 1")
+                rows_db = cur.fetchall()
+            elif mode == "random_champion":
+                cur.execute("SELECT source_run_id, label FROM champions ORDER BY random() LIMIT 1")
+                rows_db = cur.fetchall()
+            elif mode == "pfsp_champion":
+                # PFSP weight = 1 - run.elo_score normalised; use champion's source-run elo.
+                # Higher-Elo opponents (recently-difficult) sampled more often.
+                cur.execute("""
+                    SELECT c.source_run_id, c.label, COALESCE(r.elo_score, 1000) AS elo
+                      FROM champions c
+                      LEFT JOIN runs r ON r.id = c.source_run_id
+                     ORDER BY random() * (1.0 / GREATEST(1.0, COALESCE(r.elo_score, 1000) - 900)) DESC
+                     LIMIT 1
+                """)
+                rows_db = cur.fetchall()
+            else:
+                raise RuntimeError(f"[karp] unknown training_opponent.name={mode!r}")
+        if not rows_db:
             raise RuntimeError(
-                "[karp] training_opponent=latest_champion but no champions in the "
-                "archive. Seed the archive (e.g. via cli/migrate_champion_archive.py "
-                "or workers/bench_eval.py) before queueing sweeps. Refusing to fall "
-                "back to random_legal — it gives no learning signal worth measuring."
+                f"[karp] training_opponent={mode!r} but no champions in archive. "
+                "Seed the archive (e.g. via workers/bench_eval.py) before queueing."
             )
-    base_hp["opponent_name"] = name
-    if kwargs:
-        base_hp["opponent_kwargs"] = kwargs
-    print(f"[karp] training opponent: name={name} kwargs={kwargs}")
+        run_id = str(rows_db[0][0])
+        label  = rows_db[0][1]
+        print(f"[karp]   {cell_label}: opponent={label} ({run_id[:8]}) via {mode}")
+        return "neural", {"device": "cuda", "opponent_run_id": run_id, **base_kwargs}, False
+
+    print(f"[karp] training_opponent.mode={opp_mode}")
 
     stamp = datetime.now().strftime("%y%m%d-%H%M")
     budget_ms = int(cfg.schedule["cell_budget_seconds"]) * 1000
@@ -124,9 +146,21 @@ def queue_sweep(axis: str | None, dry_run: bool, baseline_overrides: dict) -> No
 
     rows = []
     for cell in cells:
+        # Resolve opponent per-cell so each cell can train vs a different
+        # archive member (under random_champion / pfsp_champion modes).
+        opp_name, opp_kwargs, self_play_override = _pick_opponent_for_cell(
+            opp_mode, cell["label"],
+        )
         hp = {**base_hp, axis_obj.axis: cell["value"]}
+        hp["opponent_name"] = opp_name
+        if opp_kwargs:
+            hp["opponent_kwargs"] = opp_kwargs
+        if self_play_override:
+            # self_play=true requires fused_rollout=false (trainer assertion).
+            hp["self_play"] = True
+            hp["fused_rollout"] = False
         label = f"karpv2-{stamp}-{axis_obj.axis}-{cell['label']}"
-        desc  = f"Karpathy sweep: {axis_obj.axis}={cell['value']}"
+        desc  = f"Karpathy sweep: {axis_obj.axis}={cell['value']} (opp={opp_mode})"
         rows.append((cell, label, desc, hp))
 
     for cell, label, desc, hp in rows:

@@ -1,0 +1,42 @@
+# Worker tunables.
+#
+# Loaded by `cli/worker_config.py`, consumed at module import in
+# `workers/worker.py`. Edit this file (NOT Python) when you want to change
+# worker behaviour. Reload requires worker restart (constants are read once
+# per process at startup).
+
+# ---------------------------------------------------------------------------
+# Live metrics
+# ---------------------------------------------------------------------------
+metrics:
+  # Upload metrics.json after every N PPO updates. Lower = more frequent
+  # dashboard refresh; cost is ~50ms per upload (negligible).
+  # 2026-04-29: bumped to 1 for 5-min cells (was 5; meant first chart didn't
+  # appear until ~30% through the cell).
+  upload_every: 1
+
+  # Mid-run weight snapshots (used for self-play archive + crash recovery).
+  snapshot_interval_s: 600
+
+# ---------------------------------------------------------------------------
+# Auto-rate (run a quick Elo eval at run finish)
+# ---------------------------------------------------------------------------
+auto_rate:
+  games_per_match:        64    # same as cron-agent's Elo review
+  elo_k:                  32    # standard K-factor
+  level_name:             "random_close_4_5"  # 2026-04-29 matched to v2 training
+  opponents_vs_baseline:  3     # legacy; pre-bench_eval random_legal anchor matches
+
+# ---------------------------------------------------------------------------
+# Admission gate (top-K play-in for new runs)
+# ---------------------------------------------------------------------------
+admission:
+  top_k:               10
+  games_per_match:     12
+  level_name:          "random_close_4_5"  # 2026-04-29 matched to v2 training
+
+# ---------------------------------------------------------------------------
+# Built-in baseline run (synthetic random_legal anchor; legacy)
+# ---------------------------------------------------------------------------
+baseline:
+  run_id: "00000000-0000-0000-0000-000000000001"

@@ -261,22 +261,21 @@ def run_match(
             break
 
     wall = time.perf_counter() - t0
-    not_settled = games - settled
-    if not_settled > 0:
-        draws += not_settled
-    total = p1_wins + p2_wins + draws
+    timeouts = games - settled  # 2026-04-29 fire 65: tracked separately from resolved draws
+    total = p1_wins + p2_wins + draws + timeouts
 
     if verbose:
         print(f"  {games} games × max {max_ticks} ticks on {level}: "
-              f"P1 {p1_wins} / P2 {p2_wins} / draw {draws} ({wall:.1f}s)")
+              f"P1 {p1_wins} / P2 {p2_wins} / draw {draws} / timeout {timeouts} ({wall:.1f}s)")
 
     return {
-        "p1_wins": p1_wins,
-        "p2_wins": p2_wins,
-        "draws":   draws,
-        "total":   total,
-        "settled": settled,
-        "wall_s":  wall,
+        "p1_wins":  p1_wins,
+        "p2_wins":  p2_wins,
+        "draws":    draws,     # resolved draws only (mutual elimination)
+        "timeouts": timeouts,  # neither player resolved by max_ticks
+        "total":    total,
+        "settled":  settled,
+        "wall_s":   wall,
     }
 
 
@@ -332,12 +331,30 @@ def update_elo_from_match(
     update on the right side); only p1 gets a delta against a fixed 1200
     baseline.
 
-    Score for p1 = (p1_wins + 0.5*draws) / total, weighted by total games.
-    For simplicity we apply ONE Elo step using the aggregate score (matches
-    practical Elo on tournament outcomes; high game count keeps variance low).
+    Score for p1 = (p1_wins + 0.5*draws) / decided_games.
+
+    2026-04-29 fire 65: TIMEOUTS NO LONGER COUNT IN ELO. Previously,
+    timeouts (games that hit MAX_TICKS without either player winning)
+    were lumped into draws at 0.5 each, which let mutual-noop policies
+    maintain Elo against each other indefinitely. Now timeouts are
+    excluded from the Elo calculation entirely — they're treated as
+    "games not played" and don't contribute to either player's rating.
+    Resolved draws (mutual elimination) still score 0.5 each.
+
+    Edge case: if ALL games timed out, decided_games == 0 and we skip
+    the Elo update (no signal to extract).
     """
     total = result["total"]
-    p1_score = (result["p1_wins"] + 0.5 * result["draws"]) / max(total, 1)
+    timeouts = result.get("timeouts", 0)
+    decided = total - timeouts
+    if decided <= 0:
+        # No games resolved — nothing to learn. Skip the Elo update.
+        p1_rating, _ = fetch_run_elo(conn, p1_run_id)
+        if p2_run_id is None:
+            return p1_rating, 1000.0
+        p2_rating, _ = fetch_run_elo(conn, p2_run_id)
+        return p1_rating, p2_rating
+    p1_score = (result["p1_wins"] + 0.5 * result["draws"]) / decided
 
     p1_rating, p1_n = fetch_run_elo(conn, p1_run_id)
     if p2_run_id is None:
@@ -431,18 +448,16 @@ def main():
 
     wall = time.perf_counter() - t0
 
-    # Any envs that never terminated count as draws (timeout reached or post-
-    # auto-reset; latter shouldn't happen with single-tick K=1 but defensive).
-    not_settled = args.games - settled
-    if not_settled > 0:
-        draws += not_settled
+    # 2026-04-29 fire 65: timeouts tracked separately from resolved draws.
+    timeouts = args.games - settled
 
-    total = p1_wins + p2_wins + draws
+    total = p1_wins + p2_wins + draws + timeouts
     print(f"\n=== results ({wall:.1f}s wall) ===")
-    print(f"  P1 wins: {p1_wins:>5d} ({100*p1_wins/total:5.1f}%)")
-    print(f"  P2 wins: {p2_wins:>5d} ({100*p2_wins/total:5.1f}%)")
-    print(f"  draws:   {draws:>5d} ({100*draws/total:5.1f}%)")
-    print(f"  settled: {settled:>5d}/{total}")
+    print(f"  P1 wins:  {p1_wins:>5d} ({100*p1_wins/total:5.1f}%)")
+    print(f"  P2 wins:  {p2_wins:>5d} ({100*p2_wins/total:5.1f}%)")
+    print(f"  draws:    {draws:>5d} ({100*draws/total:5.1f}%)")
+    print(f"  timeouts: {timeouts:>5d} ({100*timeouts/total:5.1f}%)  ← both score 0 in Elo")
+    print(f"  settled:  {settled:>5d}/{total}")
 
     if args.update_elo:
         # Resolve which sides are real Supabase run ids (not random_legal/noop).
@@ -466,7 +481,7 @@ def main():
                     print(f"  Elo: p1 -> {p1_new:.1f} (vs baseline 1000)")
                 else:
                     # Only p2 is real; flip the result and update p2 against baseline.
-                    flipped = {"p1_wins": p2_wins, "p2_wins": p1_wins, "draws": draws, "total": total}
+                    flipped = {"p1_wins": p2_wins, "p2_wins": p1_wins, "draws": draws, "timeouts": timeouts, "total": total}
                     p2_new, _ = update_elo_from_match(conn, p2_id, None, flipped, k=args.elo_k)
                     print(f"  Elo: p2 -> {p2_new:.1f} (vs baseline 1000)")
 

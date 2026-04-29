@@ -206,16 +206,14 @@ def mark_done(
 # matches so its Elo emerges without manual intervention.
 # ---------------------------------------------------------------------------
 
-ADMISSION_TOP_K           = 10  # play vs current top-K Elo runs
-ADMISSION_GAMES_PER_MATCH = 12  # ±12% SE on 30% win-rate; 4-5 min total drain
-                                  # (was 30, dropped 2026-04-24 to cap drain time
-                                  # at larger model sizes; ranking signal is
-                                  # still strong enough at 12 games × 10 opps).
-# Baseline auto-admission dropped 2026-04-24: trained models saturate vs
-# random_legal (85-100%), so the match was signal-free. Random pseudo-run
-# stays in the DB for historical queries; nothing new gets queued against it.
-BASELINE_RUN_ID = "00000000-0000-0000-0000-000000000001"
-ADMISSION_LEVEL = "random_8_12"
+# 2026-04-29: constants moved to configs/worker.yaml. See cli/worker_config.py.
+# Loaded once at module import; restart worker to pick up YAML changes.
+from cli.worker_config import load as _load_worker_config
+_WORKER_CFG = _load_worker_config()
+ADMISSION_TOP_K           = int(_WORKER_CFG.admission["top_k"])
+ADMISSION_GAMES_PER_MATCH = int(_WORKER_CFG.admission["games_per_match"])
+BASELINE_RUN_ID           = str(_WORKER_CFG.baseline["run_id"])
+ADMISSION_LEVEL           = str(_WORKER_CFG.admission["level_name"])
 
 
 def _current_top_elo_runs(conn, k: int) -> list[str]:
@@ -277,12 +275,11 @@ def _queue_admission_matches(conn, new_run_id, level_name: str = ADMISSION_LEVEL
           f"× {ADMISSION_GAMES_PER_MATCH} games for run {new_run_id}")
 
 
-# Auto-rate config (CURRICULUM_PLAN.md §3.3 — fast Elo seeding so runs land
-# on the dashboard with a real score within minutes of finishing).
-AUTO_RATE_GAMES   = 64    # per match — same as cron-agent's Elo review
-AUTO_RATE_LEVEL   = "random_8_16"
-AUTO_RATE_K       = 32    # standard Elo K
-AUTO_RATE_OPPONENTS_VS_BASELINE = 3   # 3 matches vs random_legal
+# Auto-rate config (CURRICULUM_PLAN.md §3.3). Constants from configs/worker.yaml.
+AUTO_RATE_GAMES                 = int(_WORKER_CFG.auto_rate["games_per_match"])
+AUTO_RATE_LEVEL                 = str(_WORKER_CFG.auto_rate["level_name"])
+AUTO_RATE_K                     = int(_WORKER_CFG.auto_rate["elo_k"])
+AUTO_RATE_OPPONENTS_VS_BASELINE = int(_WORKER_CFG.auto_rate["opponents_vs_baseline"])
 
 def _auto_rate_run(run_id: str, label: str) -> None:
     """Run a quick Elo benchmarking pass for a freshly-finished run.
@@ -711,10 +708,8 @@ def _public_url(path: str) -> str:
 # Train one run
 # ---------------------------------------------------------------------------
 
-METRICS_UPLOAD_EVERY    = 1    # 2026-04-29 fire 63: every update (was 5). 5-min cells under v2
-                                # only get 12-21 updates total — every-5 meant first chart didn't
-                                # appear until ~30% through the cell. Per-update upload is ~50ms.
-SNAPSHOT_INTERVAL_S     = 600  # 10 min between mid-run weight snapshots
+METRICS_UPLOAD_EVERY = int(_WORKER_CFG.metrics["upload_every"])
+SNAPSHOT_INTERVAL_S  = int(_WORKER_CFG.metrics["snapshot_interval_s"])
 
 
 def _upload_snapshot(run_id, snap_n: int, trainer) -> str | None:

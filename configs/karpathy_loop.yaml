@@ -53,8 +53,15 @@ model:
 #   latest_champion  — sugar; queue_karp_sweep.py resolves to opponent_name=neural
 #                      with opponent_kwargs.opponent_run_id = champions[0].source_run_id
 training_opponent:
-  name: "latest_champion"         # 2026-04-29 regime change: NO random_legal. Train vs the live champion always.
-  kwargs: {}                      # queue_karp_sweep.py auto-resolves to neural+champion's run_id
+  # 2026-04-29 fire 65: per-cell random opponent picking from champion archive.
+  # Modes:
+  #   latest_champion  — most-recent archived champion (single, no diversity)
+  #   random_champion  — uniform random from archive per cell ← RECOMMENDED
+  #   pfsp_champion    — PFSP-weighted random per cell (favours stronger opps)
+  #   self_play        — trainer's self_play=true (requires fused_rollout=false)
+  #   neural           — explicit run_id in kwargs (legacy)
+  name: "random_champion"
+  kwargs: {}
 
 # ---------------------------------------------------------------------------
 # Baseline PPO hyperparameters
