@@ -37,6 +37,46 @@
     }
     .play-button:hover { background: #82b8fc; }
     .play-button:disabled { background: #2a2f3d; color: var(--fg-muted); cursor: not-allowed; }
+    .seg {
+      display: inline-flex;
+      gap: 0;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      flex-wrap: wrap;
+    }
+    .seg button {
+      background: #1f2433;
+      color: var(--fg-muted);
+      border: 0;
+      border-right: 1px solid var(--border);
+      padding: 6px 12px;
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .seg button:last-child { border-right: 0; }
+    .seg button:hover { background: #262c3d; color: var(--fg); }
+    .seg button.active { background: var(--accent); color: #0b0d12; font-weight: 600; }
+    .training-default-row {
+      grid-column: 1 / -1;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      font-size: 12px;
+      color: var(--fg-muted);
+      padding: 8px 10px;
+      background: rgba(96,165,250,0.05);
+      border: 1px solid rgba(96,165,250,0.18);
+      border-radius: 6px;
+    }
+    .training-default-row .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+    .training-default-row a { color: var(--accent); }
+    .map-size-tag {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--fg-muted);
+    }
     .link-btn {
       background: transparent;
       color: var(--accent);
@@ -116,27 +156,32 @@
           <option value="100">100 games</option>
         </select>
 
-        <label>Level</label>
-        <select id="level">
-          <optgroup label="Asymmetric (unfair, more interesting)">
-            <option value="asym_6_6">Asymmetric - 6 buildings</option>
-            <option value="asym_8_8">Asymmetric - 8 buildings</option>
-            <option value="asym_8_12">Asymmetric - 8-12 buildings</option>
-            <option value="asym_12_12">Asymmetric - 12 buildings</option>
-            <option value="asym_16_16" selected>Asymmetric - 16 buildings</option>
-            <option value="asym_20_20">Asymmetric - 20 buildings</option>
-            <option value="asym_24_32">Asymmetric - 24-32 buildings</option>
-          </optgroup>
-          <optgroup label="Symmetric (fair, 180-degree mirrored)">
-            <option value="crossroads_6">Crossroads (6 buildings, fixed)</option>
-            <option value="random_6_6">Random - 6 buildings</option>
-            <option value="random_8_8">Random - 8 buildings</option>
-            <option value="random_8_12">Random - 8-12 buildings</option>
-            <option value="random_12_12">Random - 12 buildings</option>
-            <option value="random_16_16">Random - 16 buildings</option>
-            <option value="random_20_20">Random - 20 buildings</option>
-          </optgroup>
-        </select>
+        <div class="training-default-row">
+          <span class="dot"></span>
+          <div>Training default loaded — <span class="mono" id="training-level-tag">random_close_4_5</span>
+            (close 350×350 map, 4–5 buildings). Click <a href="#" id="reset-defaults">reset</a> to restore.</div>
+        </div>
+
+        <label>Layout</label>
+        <div class="seg" id="layout-seg">
+          <button data-layout="symmetric">Symmetric</button>
+          <button data-layout="asymmetric">Asymmetric</button>
+        </div>
+
+        <label>Map size</label>
+        <div class="seg" id="mapsize-seg">
+          <button data-mapsize="close" title="350×350 — fast travel, ~2× more episodes/sec">Close (350)</button>
+          <button data-mapsize="full"  title="700×700 — full board">Full (700)</button>
+        </div>
+
+        <label>Buildings</label>
+        <div class="seg" id="buildings-seg"></div>
+
+        <label>Resolved level</label>
+        <div>
+          <span class="mono" id="resolved-level" style="font-size:13px;color:var(--fg);"></span>
+          <span class="map-size-tag" id="resolved-mapsize"></span>
+        </div>
 
         <div></div>
         <div><button id="play" class="play-button">Play</button></div>
@@ -154,11 +199,133 @@
 
     const $p1     = document.getElementById('p1');
     const $p2     = document.getElementById('p2');
-    const $level  = document.getElementById('level');
     const $games  = document.getElementById('games');
     const $mirror = document.getElementById('mirror');
     const $play   = document.getElementById('play');
     const $status = document.getElementById('status');
+    const $layoutSeg    = document.getElementById('layout-seg');
+    const $mapsizeSeg   = document.getElementById('mapsize-seg');
+    const $buildingsSeg = document.getElementById('buildings-seg');
+    const $resolved     = document.getElementById('resolved-level');
+    const $resolvedSize = document.getElementById('resolved-mapsize');
+    const $resetDefaults = document.getElementById('reset-defaults');
+
+    // --- Level picker -------------------------------------------------------
+    // The RPC accepts: crossroads_6 | random_close_<a>_<b> | random_<a>_<b> | asym_<a>_<b>
+    // Map size is implicit in the level family: close → 350×350, others → 700×700.
+    // We expose three independent chunks (Layout, Map size, Buildings) and
+    // resolve them to a single level_name string before queueing.
+    //
+    // Symmetric × close + 4–5 buildings = `random_close_4_5` — the current
+    // training default per configs/training_levels.yaml.
+    const TRAINING_DEFAULTS = {
+      layout:    'symmetric',
+      mapSize:   'close',
+      buildings: '4_5',
+    };
+    // Building-count options per (layout, mapSize) combination. The RPC regex
+    // imposes the constraints: only `random_close_*` exists for symmetric
+    // close; full-size has both random_* and asym_*.
+    const BUILDINGS_PER_FAMILY = {
+      'symmetric_close':  ['4_5', '4_8', '6_10', '8_16'],
+      'symmetric_full':   ['6_6', '8_8', '8_12', '12_12', '16_16', '20_20'],
+      'asymmetric_close': [],   // no asym_close_* in sim/levels.py
+      'asymmetric_full':  ['6_6', '8_8', '8_12', '12_12', '16_16', '20_20', '24_32'],
+    };
+    function familyKey(layout, mapSize) { return `${layout}_${mapSize}`; }
+
+    let levelState = loadLevelState();
+    function loadLevelState() {
+      let s;
+      try {
+        const raw = localStorage.getItem('mw2.play.level');
+        s = raw ? { ...TRAINING_DEFAULTS, ...JSON.parse(raw) } : { ...TRAINING_DEFAULTS };
+      } catch { s = { ...TRAINING_DEFAULTS }; }
+      // Heal stale combinations: if the (layout, mapSize) family is empty, bounce to defaults.
+      if (BUILDINGS_PER_FAMILY[familyKey(s.layout, s.mapSize)].length === 0) {
+        s = { ...TRAINING_DEFAULTS };
+      }
+      return s;
+    }
+    function saveLevelState() {
+      try { localStorage.setItem('mw2.play.level', JSON.stringify(levelState)); } catch { /* ignore */ }
+    }
+
+    function resolveLevelName() {
+      const { layout, mapSize, buildings } = levelState;
+      // Special case: symmetric + full + 6_6 → keep crossroads_6 available?
+      // No — random_6_6 is also valid and varies seed each game, which is
+      // preferable for self-play eval. Crossroads stays an internal fixture.
+      if (layout === 'symmetric'  && mapSize === 'close') return `random_close_${buildings}`;
+      if (layout === 'symmetric'  && mapSize === 'full')  return `random_${buildings}`;
+      if (layout === 'asymmetric' && mapSize === 'full')  return `asym_${buildings}`;
+      // asymmetric+close has no levels — the picker disables it.
+      return null;
+    }
+    function mapSizePixels() {
+      return levelState.mapSize === 'close' ? 350 : 700;
+    }
+
+    function renderLevelPicker() {
+      // Layout
+      for (const btn of $layoutSeg.querySelectorAll('button')) {
+        btn.classList.toggle('active', btn.dataset.layout === levelState.layout);
+      }
+      // Map size — gray out close+asymmetric (no levels exist)
+      for (const btn of $mapsizeSeg.querySelectorAll('button')) {
+        btn.classList.toggle('active', btn.dataset.mapsize === levelState.mapSize);
+        const wouldEmpty = BUILDINGS_PER_FAMILY[familyKey(levelState.layout, btn.dataset.mapsize)].length === 0;
+        btn.disabled = wouldEmpty;
+        btn.style.opacity = wouldEmpty ? '0.4' : '';
+        btn.title = wouldEmpty ? 'No levels exist for this combination' : btn.title;
+      }
+      // Buildings — repopulate based on (layout, mapSize)
+      const opts = BUILDINGS_PER_FAMILY[familyKey(levelState.layout, levelState.mapSize)];
+      if (!opts.includes(levelState.buildings)) levelState.buildings = opts[0] ?? '';
+      $buildingsSeg.innerHTML = opts.map(b => {
+        const label = b.includes('_') ? b.replace('_', '–') : b;
+        return `<button data-buildings="${b}" class="${b === levelState.buildings ? 'active' : ''}">${label}</button>`;
+      }).join('');
+      for (const btn of $buildingsSeg.querySelectorAll('button')) {
+        btn.addEventListener('click', () => {
+          levelState.buildings = btn.dataset.buildings;
+          saveLevelState();
+          renderLevelPicker();
+        });
+      }
+      // Resolved
+      const resolved = resolveLevelName();
+      $resolved.textContent = resolved ?? '— pick a valid combination —';
+      $resolvedSize.textContent = ` · ${mapSizePixels()}×${mapSizePixels()} px`;
+      $play.disabled = !resolved;
+    }
+
+    for (const btn of $layoutSeg.querySelectorAll('button')) {
+      btn.addEventListener('click', () => {
+        levelState.layout = btn.dataset.layout;
+        // If the new combination has no levels (asym+close), bounce mapSize to full.
+        if (BUILDINGS_PER_FAMILY[familyKey(levelState.layout, levelState.mapSize)].length === 0) {
+          levelState.mapSize = 'full';
+        }
+        saveLevelState();
+        renderLevelPicker();
+      });
+    }
+    for (const btn of $mapsizeSeg.querySelectorAll('button')) {
+      btn.addEventListener('click', () => {
+        if (btn.disabled) return;
+        levelState.mapSize = btn.dataset.mapsize;
+        saveLevelState();
+        renderLevelPicker();
+      });
+    }
+    $resetDefaults.addEventListener('click', (e) => {
+      e.preventDefault();
+      levelState = { ...TRAINING_DEFAULTS };
+      saveLevelState();
+      renderLevelPicker();
+    });
+    renderLevelPicker();
 
     function setStatus(kind, html) {
       $status.style.display = 'block';
@@ -217,7 +384,11 @@
     async function queueAndWatch() {
       const runA = $p1.value;
       const runB = $p2.value;
-      const level = $level.value;
+      const level = resolveLevelName();
+      if (!level) {
+        setStatus('error', 'Pick a valid layout/map-size/buildings combination.');
+        return;
+      }
       const games = parseInt($games.value, 10) || 5;
       if (!runA || !runB) {
         setStatus('error', 'Pick both players.');
@@ -293,7 +464,9 @@
             const sideLabel = sides[i] === 'p1' ? 'P1' : sides[i] === 'p2' ? 'P2' : sides[i];
             const winnerStr = sides[i] === 'draw' ? 'draw'
                             : `${sideLabel} wins${swapped ? ' (sides swapped)' : ''}`;
-            const link = url ? `<a href="./game.html?url=${encodeURIComponent(url)}">replay</a>` : '—';
+            const link = url
+              ? `<a href="./game.html?url=${encodeURIComponent(url)}&match=${encodeURIComponent(matchId)}">replay</a>`
+              : '—';
             return `<tr>
               <td><span class="mono">#${g.game_index + 1}</span></td>
               <td>${esc(winnerStr)}</td>

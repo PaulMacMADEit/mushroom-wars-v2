@@ -213,6 +213,54 @@
     .mind-chart svg { display: block; width: 100%; height: 140px; }
     .mind-panel { padding: 8px 12px; margin-top: 0; }
     .mind-panel .mind-title { margin-bottom: 4px; }
+    .obs-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .obs-col {
+      padding: 6px 8px;
+      border-radius: 4px;
+      background: rgba(11,13,18,0.55);
+    }
+    .obs-col.p1 { border-left: 2px solid #f87171; }
+    .obs-col.p2 { border-left: 2px solid #60a5fa; }
+    .obs-side-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .4px;
+      margin-bottom: 4px;
+    }
+    .obs-col.p1 .obs-side-label { color: #fca5a5; }
+    .obs-col.p2 .obs-side-label { color: #93c5fd; }
+    .obs-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      font-size: 11px;
+      padding: 1px 0;
+    }
+    .obs-row .obs-k { color: var(--fg-muted); }
+    .obs-row .obs-v { font-family: var(--mono); color: var(--fg); font-weight: 600; }
+    .obs-shared {
+      margin-top: 8px;
+      padding-top: 6px;
+      border-top: 1px solid var(--border);
+    }
+    .time-bar-wrap {
+      height: 6px;
+      background: rgba(11,13,18,0.7);
+      border-radius: 3px;
+      overflow: hidden;
+      margin: 4px 0;
+    }
+    .time-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), #fbbf24 70%, #ef4444 95%);
+      width: 0%;
+      transition: width 80ms linear;
+    }
     .mind-legend {
       display: flex;
       gap: 16px;
@@ -429,6 +477,36 @@
 
     <div class="workspace">
       <div class="col-left">
+        <div class="mind-panel" id="obs-panel" style="display:none">
+          <div class="mind-title">Observation @ t — what the network sees right now</div>
+          <div class="obs-grid">
+            <div class="obs-col p1">
+              <div class="obs-side-label">P1</div>
+              <div class="obs-row"><span class="obs-k">Buildings</span><span class="obs-v" id="obs-p1-b">—</span></div>
+              <div class="obs-row"><span class="obs-k">Garrison</span><span class="obs-v" id="obs-p1-g">—</span></div>
+              <div class="obs-row"><span class="obs-k">In flight</span><span class="obs-v" id="obs-p1-f">—</span></div>
+              <div class="obs-row"><span class="obs-k">Total units</span><span class="obs-v" id="obs-p1-u">—</span></div>
+              <div class="obs-row"><span class="obs-k">Production /t</span><span class="obs-v" id="obs-p1-p">—</span></div>
+            </div>
+            <div class="obs-col p2">
+              <div class="obs-side-label">P2</div>
+              <div class="obs-row"><span class="obs-k">Buildings</span><span class="obs-v" id="obs-p2-b">—</span></div>
+              <div class="obs-row"><span class="obs-k">Garrison</span><span class="obs-v" id="obs-p2-g">—</span></div>
+              <div class="obs-row"><span class="obs-k">In flight</span><span class="obs-v" id="obs-p2-f">—</span></div>
+              <div class="obs-row"><span class="obs-k">Total units</span><span class="obs-v" id="obs-p2-u">—</span></div>
+              <div class="obs-row"><span class="obs-k">Production /t</span><span class="obs-v" id="obs-p2-p">—</span></div>
+            </div>
+          </div>
+          <div class="obs-shared">
+            <div class="obs-row"><span class="obs-k">Tick</span><span class="obs-v" id="obs-tick">—</span></div>
+            <div class="obs-row"><span class="obs-k">Time remaining</span><span class="obs-v" id="obs-time-remaining">—</span></div>
+            <div class="time-bar-wrap">
+              <div class="time-bar-fill" id="time-bar-fill"></div>
+            </div>
+            <div class="obs-row"><span class="obs-k">Decision</span><span class="obs-v" id="obs-decision">—</span></div>
+          </div>
+        </div>
+
         <div class="mind-panel" id="mind-panel" style="display:none">
           <div class="mind-title">V(s) — "am I winning?"</div>
           <div class="mind-chart"><svg id="mind-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg></div>
@@ -438,6 +516,11 @@
           <div class="mind-title">Force — buildings &amp; total units</div>
           <div class="mind-chart"><svg id="force-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg></div>
           <div class="mind-legend"><span>Solid = units · dashed = buildings</span></div>
+        </div>
+
+        <div class="mind-panel" id="inflight-panel" style="display:none">
+          <div class="mind-title">Units in flight — pressure / commitment</div>
+          <div class="mind-chart"><svg id="inflight-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg></div>
         </div>
 
         <div class="mind-panel" id="reward-panel" style="display:none">
@@ -522,6 +605,30 @@
     const $prevGame = document.getElementById("prev-game");
     const $nextGame = document.getElementById("next-game");
     const $gamePos  = document.getElementById("game-pos");
+    const $obsPanel = document.getElementById("obs-panel");
+    const $inflightPanel = document.getElementById("inflight-panel");
+    const $inflightChart = document.getElementById("inflight-chart");
+    const $obsP1 = {
+      b: document.getElementById("obs-p1-b"),
+      g: document.getElementById("obs-p1-g"),
+      f: document.getElementById("obs-p1-f"),
+      u: document.getElementById("obs-p1-u"),
+      p: document.getElementById("obs-p1-p"),
+    };
+    const $obsP2 = {
+      b: document.getElementById("obs-p2-b"),
+      g: document.getElementById("obs-p2-g"),
+      f: document.getElementById("obs-p2-f"),
+      u: document.getElementById("obs-p2-u"),
+      p: document.getElementById("obs-p2-p"),
+    };
+    const $obsTick = document.getElementById("obs-tick");
+    const $obsTimeRem = document.getElementById("obs-time-remaining");
+    const $obsDecision = document.getElementById("obs-decision");
+    const $timeBarFill = document.getElementById("time-bar-fill");
+
+    // Cached force series for live obs lookup. Populated by renderForceChart.
+    let _forceSeries = null;
 
     let player = null;
     let currentData = null;
@@ -538,6 +645,7 @@
         $time.textContent = `t = ${player.t.toFixed(1)} / ${player.duration}`;
         updateMindCursor(player.t);
         updateTickTableCursor(player.t);
+        updateObservation(player.t);
       });
       player.onStateChange(() => {
         $play.textContent = player.playing ? "Pause" : "Play";
@@ -563,6 +671,7 @@
       renderForceChart(data);
       renderRewardChart(data);
       renderEntropyChart(data);
+      updateObservation(0);
       $dropzone.style.display = "none";
       $play.textContent = "Play";
       $time.textContent = `t = 0 / ${player.duration}`;
@@ -1055,6 +1164,9 @@
 
       const buildings = { 1: [], 2: [] };  // array-by-tick of building counts
       const units     = { 1: [], 2: [] };
+      const inflight  = { 1: [], 2: [] };  // squads-in-flight only
+      const garrison  = { 1: [], 2: [] };  // total garrison (excludes inflight)
+      const production = { 1: [], 2: [] }; // active production per tick (sum of non-full owned buildings × prod)
 
       for (let t = 0; t <= maxT; t++) {
         // Apply production (each owned building +prod, clamped to cap) —
@@ -1078,30 +1190,47 @@
           }
         }
         // Snapshot totals.
-        let b1 = 0, b2 = 0, u1 = 0, u2 = 0;
+        let b1 = 0, b2 = 0, g1 = 0, g2 = 0, p1 = 0, p2 = 0;
         for (const slot in owner) {
-          if (owner[slot] === 1) { b1 += 1; u1 += garr[slot]; }
-          else if (owner[slot] === 2) { b2 += 1; u2 += garr[slot]; }
+          if (owner[slot] === 1) {
+            b1 += 1; g1 += garr[slot];
+            if (garr[slot] < cap[slot]) p1 += prod;
+          } else if (owner[slot] === 2) {
+            b2 += 1; g2 += garr[slot];
+            if (garr[slot] < cap[slot]) p2 += prod;
+          }
         }
+        let f1 = 0, f2 = 0;
         for (const gid in squads) {
           const s = squads[gid];
-          if (s.owner === 1) u1 += s.count;
-          else if (s.owner === 2) u2 += s.count;
+          if (s.owner === 1) f1 += s.count;
+          else if (s.owner === 2) f2 += s.count;
         }
         buildings[1].push(b1); buildings[2].push(b2);
-        units[1].push(u1 / scale); units[2].push(u2 / scale);  // show in real units
+        garrison[1].push(g1 / scale); garrison[2].push(g2 / scale);
+        inflight[1].push(f1 / scale); inflight[2].push(f2 / scale);
+        units[1].push((g1 + f1) / scale); units[2].push((g2 + f2) / scale);
+        production[1].push(p1 / scale); production[2].push(p2 / scale);
       }
-      return { buildings, units, maxT };
+      return { buildings, units, inflight, garrison, production, maxT };
     }
 
     function renderForceChart(d) {
       if (!d.map || !d.events || d.events.length === 0) {
         $forcePanel.style.display = "none";
+        $inflightPanel.style.display = "none";
+        $obsPanel.style.display = "none";
+        _forceSeries = null;
         return;
       }
       $forcePanel.style.display = "block";
+      $inflightPanel.style.display = "block";
+      $obsPanel.style.display = "block";
 
-      const { buildings, units, maxT } = computeForceSeries(d);
+      const series = computeForceSeries(d);
+      _forceSeries = series;
+      renderInflightChart(series);
+      const { buildings, units, maxT } = series;
       const { W, H, PAD_L, PAD_R, PAD_T, PAD_B } = chartLayout(maxT);
 
       // Two y-axes conceptually (buildings 0..N, units 0..M) — we share the
@@ -1149,6 +1278,92 @@
         <line id="force-cursor" x1="${xFor(0)}" y1="${PAD_T}" x2="${xFor(0)}" y2="${H-PAD_B}"
               stroke="#e6e8ef" stroke-width="1" opacity="0.7"/>
       `;
+    }
+
+    function renderInflightChart({ inflight, maxT }) {
+      const { W, H, PAD_L, PAD_R, PAD_T, PAD_B } = chartLayout(maxT);
+      const yMax = Math.max(1, ...inflight[1], ...inflight[2]) * 1.1;
+      const xFor = t => PAD_L + (t / maxT) * (W - PAD_L - PAD_R);
+      const yFor = u => PAD_T + (1 - u / yMax) * (H - PAD_T - PAD_B);
+      const linePts = arr => arr.map((v, i) => `${xFor(i)},${yFor(v)}`).join(" ");
+      const yLabel = [0, Math.round(yMax/2), Math.round(yMax)]
+        .map(u => `<text x="${PAD_L - 6}" y="${yFor(u)+3}" text-anchor="end" fill="#8a93a6" font-size="10">${u}</text>`)
+        .join("");
+      $inflightChart.setAttribute("viewBox", `0 0 ${W} ${H}`);
+      $inflightChart.innerHTML = `
+        <rect x="${PAD_L}" y="${PAD_T}" width="${W-PAD_L-PAD_R}" height="${H-PAD_T-PAD_B}" fill="#0b0d12" stroke="#262a36"/>
+        <polyline points="${linePts(inflight[1])}" fill="none" stroke="#f87171" stroke-width="2"/>
+        <polyline points="${linePts(inflight[2])}" fill="none" stroke="#60a5fa" stroke-width="2"/>
+        <line x1="${PAD_L}" y1="${H-PAD_B}" x2="${W-PAD_R}" y2="${H-PAD_B}" stroke="#3a4155"/>
+        ${xTickSvg(W, H, PAD_L, PAD_R, PAD_B, maxT, xFor)}
+        <text x="${PAD_L-6}" y="${PAD_T+10}" text-anchor="end" fill="#8a93a6" font-size="10">units</text>
+        ${yLabel}
+        <line id="inflight-cursor" x1="${xFor(0)}" y1="${PAD_T}" x2="${xFor(0)}" y2="${H-PAD_B}"
+              stroke="#e6e8ef" stroke-width="1" opacity="0.7"/>
+      `;
+    }
+
+    /** Pull the per-side stats at integer tick t from the cached force series.
+     * Cheap O(1) — series arrays are pre-computed per-tick. */
+    function obsAtTick(t) {
+      if (!_forceSeries) return null;
+      const i = Math.max(0, Math.min(_forceSeries.maxT, Math.floor(t)));
+      return {
+        b1: _forceSeries.buildings[1][i],
+        b2: _forceSeries.buildings[2][i],
+        g1: _forceSeries.garrison[1][i],
+        g2: _forceSeries.garrison[2][i],
+        f1: _forceSeries.inflight[1][i],
+        f2: _forceSeries.inflight[2][i],
+        u1: _forceSeries.units[1][i],
+        u2: _forceSeries.units[2][i],
+        p1: _forceSeries.production[1][i],
+        p2: _forceSeries.production[2][i],
+      };
+    }
+
+    /** Update the observation panel + time bar to reflect tick t.
+     * Uses the cached force series, plus current decision if any tick matches. */
+    function updateObservation(t) {
+      if (!currentData || !_forceSeries) return;
+      const o = obsAtTick(t);
+      if (!o) return;
+      const fmt = v => Math.round(v).toString();
+      $obsP1.b.textContent = fmt(o.b1); $obsP2.b.textContent = fmt(o.b2);
+      $obsP1.g.textContent = fmt(o.g1); $obsP2.g.textContent = fmt(o.g2);
+      $obsP1.f.textContent = fmt(o.f1); $obsP2.f.textContent = fmt(o.f2);
+      $obsP1.u.textContent = fmt(o.u1); $obsP2.u.textContent = fmt(o.u2);
+      $obsP1.p.textContent = o.p1.toFixed(1); $obsP2.p.textContent = o.p2.toFixed(1);
+
+      // Time horizon: prefer the sim-published cap, fall back to TIMEOUT_TICKS
+      // mirror constant. Game can also end before cap (winner declared) — use
+      // duration_ticks as the actual horizon for THIS game.
+      const cap = currentData.game_timeout_ticks ?? TIMEOUT_TICKS;
+      const remaining = Math.max(0, cap - t);
+      $obsTick.textContent = `${Math.floor(t)} / ${currentData.duration_ticks}`;
+      $obsTimeRem.textContent = `${remaining.toFixed(0)} ticks (cap ${cap})`;
+      const pct = Math.min(100, (t / cap) * 100);
+      $timeBarFill.style.width = `${pct}%`;
+
+      // Active decision at this tick (if a per-decision snapshot exists).
+      const decisions = currentData.decisions ?? [];
+      const dec = decisions.length ? decisions.reduce((best, d) =>
+        (d.t <= t && (!best || d.t > best.t)) ? d : best, null) : null;
+      if (dec) {
+        const player = dec.player === 1 ? 'P1' : 'P2';
+        $obsDecision.textContent = `${player} @ t=${dec.t} · V=${dec.value.toFixed(2)} · H=${dec.entropy.toFixed(2)}`;
+      } else {
+        $obsDecision.textContent = '—';
+      }
+
+      // Move the inflight cursor too.
+      const cursor = document.getElementById('inflight-cursor');
+      if (cursor && _forceSeries) {
+        const layout = chartLayout(_forceSeries.maxT);
+        const x = layout.PAD_L + (Math.min(t, _forceSeries.maxT) / _forceSeries.maxT) * (layout.W - layout.PAD_L - layout.PAD_R);
+        cursor.setAttribute('x1', x);
+        cursor.setAttribute('x2', x);
+      }
     }
 
     // Mirrors sim/config.py reward constants and sim/engine.py _check_victory.
@@ -1414,44 +1629,77 @@
       if (f) onFile(f);
     });
 
-    // --- Recent games navigation (prev/next) ------------------------------
-    // Fetch the N most recent games with replays so the user can flip
-    // through them without leaving this page.
+    // --- Game navigation (prev/next) --------------------------------------
+    // Two modes:
+    //   1. Match-scoped (preferred): ?match=<id> in URL → walk that match's
+    //      games in game_index order. Used when arriving from play.html so
+    //      "next game" means "next game in this match", not "next game in
+    //      Supabase globally".
+    //   2. Recent-games (fallback): no ?match= → fetch N most recent games
+    //      with replays so the user can flip through history.
     const NAV_LIMIT = 10;
-    let recentGames = [];      // [{id, actions_url, created_at}, ...] newest-first
-    let currentGameIdx = -1;   // index in recentGames; -1 = current URL not in list
+    let navGames = [];         // [{id, actions_url, created_at}, ...] in nav order
+    let currentGameIdx = -1;   // index in navGames; -1 = current URL not in list
+    let navMode = 'recent';    // 'match' or 'recent'
 
-    async function loadRecentGames() {
+    async function loadNavGames(matchId) {
+      if (matchId) {
+        // Match-scoped: every game in this match, ordered by game_index ASC
+        // (game #1 first → "next" walks 1→2→3...).
+        const { data, error } = await sb.from('games')
+          .select('id, actions_url, game_index, matches(created_at)')
+          .eq('match_id', matchId)
+          .not('actions_url', 'is', null)
+          .order('game_index', { ascending: true });
+        if (error) {
+          console.warn('match games fetch failed:', error.message);
+          return { games: [], mode: 'recent' };
+        }
+        return { games: data, mode: 'match' };
+      }
+      // Recent-games fallback.
       const { data, error } = await sb.from('games')
         .select('id, actions_url, matches(created_at)')
         .not('actions_url', 'is', null)
         .limit(50);
       if (error) {
         console.warn('recent games fetch failed:', error.message);
-        return [];
+        return { games: [], mode: 'recent' };
       }
       // Sort newest-first by match created_at.
       data.sort((a, b) =>
         (b.matches?.created_at ?? '').localeCompare(a.matches?.created_at ?? ''));
-      return data.slice(0, NAV_LIMIT);
+      return { games: data.slice(0, NAV_LIMIT), mode: 'recent' };
     }
 
     function findIdxByUrl(currentUrl) {
       if (!currentUrl) return -1;
-      return recentGames.findIndex(g => currentUrl.includes(g.actions_url));
+      // Decode both sides — `currentUrl` from location.search is already
+      // decoded by URLSearchParams, but actions_url is the raw storage path
+      // ("public/runs/<id>.json"), so substring-contains works either way.
+      return navGames.findIndex(g => g.actions_url && currentUrl.includes(g.actions_url));
     }
 
     function updateNavButtons() {
-      const total = recentGames.length;
-      // Newer = lower index. Older = higher index. Disable at the edges.
-      $nextGame.disabled = currentGameIdx <= 0;
-      $prevGame.disabled = currentGameIdx === -1 || currentGameIdx >= total - 1;
+      const total = navGames.length;
+      // In 'match' mode, navGames is ordered game_index ASC, so "next" = idx+1.
+      // In 'recent' mode, navGames is ordered newest-first, so "next" = idx-1
+      // (newer game). Both modes use the same `prev`/`next` arrows; the
+      // direction is set in the click handlers below.
+      if (navMode === 'match') {
+        $nextGame.disabled = currentGameIdx === -1 || currentGameIdx >= total - 1;
+        $prevGame.disabled = currentGameIdx <= 0;
+      } else {
+        $nextGame.disabled = currentGameIdx <= 0;
+        $prevGame.disabled = currentGameIdx === -1 || currentGameIdx >= total - 1;
+      }
       $gamePos.textContent = currentGameIdx >= 0 ? `${currentGameIdx + 1}/${total}` : "";
     }
 
     async function navigateTo(idx) {
-      if (idx < 0 || idx >= recentGames.length) return;
-      const g = recentGames[idx];
+      if (idx < 0 || idx >= navGames.length) return;
+      const g = navGames[idx];
+      if (!g.actions_url) return;
       const url = publicUrl(g.actions_url);
       try {
         const data = await fetch(url).then(r => {
@@ -1462,6 +1710,7 @@
         currentGameIdx = idx;
         updateNavButtons();
         // Reflect in the address bar without reload, so refresh keeps you here.
+        // Preserve `match` so refresh stays in match-scoped nav mode.
         const params = new URLSearchParams(location.search);
         params.set('url', url);
         history.replaceState({}, '', `${location.pathname}?${params}`);
@@ -1470,11 +1719,18 @@
       }
     }
 
-    $prevGame.addEventListener('click', () => navigateTo(currentGameIdx + 1));
-    $nextGame.addEventListener('click', () => navigateTo(currentGameIdx - 1));
+    // Direction depends on mode (see updateNavButtons).
+    $prevGame.addEventListener('click', () => {
+      navigateTo(navMode === 'match' ? currentGameIdx - 1 : currentGameIdx + 1);
+    });
+    $nextGame.addEventListener('click', () => {
+      navigateTo(navMode === 'match' ? currentGameIdx + 1 : currentGameIdx - 1);
+    });
 
-    // --- ?url= param ------------------------------------------------------
-    const url = new URLSearchParams(location.search).get("url");
+    // --- ?url= and ?match= params -----------------------------------------
+    const _qs = new URLSearchParams(location.search);
+    const url = _qs.get("url");
+    const matchId = _qs.get("match");
     if (url) {
       fetch(url)
         .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
@@ -1483,8 +1739,9 @@
     }
 
     // Populate the nav list in parallel; doesn't block initial replay load.
-    loadRecentGames().then(list => {
-      recentGames = list;
+    loadNavGames(matchId).then(({ games, mode }) => {
+      navGames = games;
+      navMode = mode;
       currentGameIdx = findIdxByUrl(url);
       updateNavButtons();
     });

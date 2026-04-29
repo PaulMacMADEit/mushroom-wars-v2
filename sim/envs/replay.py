@@ -194,18 +194,19 @@ class Recorder:
     def to_dict(self) -> dict[str, Any]:
         duration = self._events[-1]["t"] if self._events else 0
         return {
-            "game_id":        self.game_id,
-            "sim_version":    self.sim_version,
-            "level_name":     self.level_name,
-            "seed":           self.seed,
-            "tick_hz":        C.TICK_HZ,
-            "scale":          C.SCALE,
-            "prod_per_tick":  C.PRODUCTION_PER_TICK,
-            "duration_ticks": duration,
-            "winner":         self._winner,
-            "map":            self._map,
-            "events":         self._events,
-            "decisions":      self._decisions,
+            "game_id":            self.game_id,
+            "sim_version":        self.sim_version,
+            "level_name":         self.level_name,
+            "seed":               self.seed,
+            "tick_hz":            C.TICK_HZ,
+            "scale":              C.SCALE,
+            "prod_per_tick":      C.PRODUCTION_PER_TICK,
+            "game_timeout_ticks": C.GAME_TIMEOUT_TICKS,
+            "duration_ticks":     duration,
+            "winner":             self._winner,
+            "map":                self._map,
+            "events":             self._events,
+            "decisions":          self._decisions,
         }
 
     def write_json(self, path: str | Path) -> Path:
