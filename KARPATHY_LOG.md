@@ -2785,7 +2785,87 @@ per cell. Hold off on D (batch neural opponent) until we see whether
 cycle-1 of v2, since round-robin is fresh under karpv2- prefix). Will
 let the cron continue if no YAML change lands first.
 
+### Loop fire 61 — 2026-04-29 12:43 PT — config bumped (rs=8, lr=1e-3, 5min cells, bench level matched); worker restarted; first new-config sweep queued
+
+**Major config changes shipped.** Per Paul fire 60-61:
+
+| field | v2-initial | v2-tuned |
+|---|---|---|
+| cell_budget_seconds | 600 (10min) | **300 (5min)** |
+| rollout_steps baseline | 64 | **8** |
+| lr baseline | 3e-4 | **1e-3** |
+| rollout_steps sweep cells | 32/64/128 | **4/8/16** |
+| bench_eval LEVEL | random_8_16 | **random_close_4_5** (matches training) |
+
+**bench_eval extracted to YAML.** New `configs/bench_eval.yaml` +
+`cli/bench_config.py` loader. Per Paul: every settings block should
+be in a config file, not Python constants.
+
+**Worker restarted at 12:44 PT** to load new bench_eval LEVEL into
+memory. New PID 1666605. lr-mid (in-flight, old config) marked failed
+~20 min in. Lost data point but not worth waiting since it was old
+config.
+
+**Old-config lr sweep results before restart:**
+
+| run | lr | Elo | rate | updates | wins/24 |
+|---|---|---|---|---|---|
+| -lo (1e-4) | 816 | 0.128 | 3 | 0 |
+| -mid (3e-4) | failed (killed) | — | — | — |
+| -hi (1e-3) | **839** | 0.129 | 3 | 0 |
+
+**lr-hi 839 vs lr-lo 816** — 23 Elo edge to higher lr under v2.
+Validates baking lr=1e-3 as new baseline.
+
+**🟢 lr-hi LOSS sample — TWO new records:**
+
+| metric | value | prior record |
+|---|---|---|
+| LOSS entropy | **5.33** | 4.52 (fire 33 EXTRA) |
+| LOSS action vocabulary | **all 5 types used** (noop, 25, 50, 75, 100) | 4 types (multiple cells) |
+
+Higher lr at 3 updates = maximum exploration; agent is still essentially
+random, exploring everywhere. Validates lr=1e-3 for v2 bootstrap (need
+broad exploration to escape random init) AND shows 3 updates is far
+from convergence.
+
+**First new-config sweep queued:** rollout_steps × [4, 8, 16].
+- karpv2-260429-1244-rollout_steps-lo  rollout_steps=4
+- karpv2-260429-1244-rollout_steps-mid rollout_steps=8 (matches baseline)
+- karpv2-260429-1244-rollout_steps-hi  rollout_steps=16
+
+**Hyperparams verified:** 5-min cells, lr=1e-3, neural opponent,
+random_close_4_5, reward_version=2. Worker fresh, GPU 18% (between iters).
+
+**Expected updates per cell at 322 sps:**
+- rs=4:  ~24 updates per 5-min cell
+- rs=8:  ~12 updates per 5-min cell (baseline)
+- rs=16: ~6 updates per 5-min cell
+
+This sweep will tell us whether **fewer-but-smaller-rollouts** or
+**more-rollouts-bigger** wins under v2 bootstrap.
+
 ## Code changes during loop
+
+### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
+
+Two changes shipped together (commit 6cf8077):
+
+1. **bench_eval.py constants → configs/bench_eval.yaml**:
+   - LEVEL, MAX_TICKS, ELO_K (match.*)
+   - SWEEP_GAMES (sweep.games_per_champion)
+   - PROMO_GAMES, PROMO_THRESHOLD (promotion.*)
+   - BOOTSTRAP_GATE_GAMES, BOOTSTRAP_GATE_THRESHOLD, MIN_ARCHIVE_FOR_GATE
+     (bootstrap_gate.*)
+   - MAX_ARCHIVE_SIZE, ERA_SOFT_CAP (archive.*)
+   - New cli/bench_config.py loader
+   - bench_eval.py top-level constants now read from YAML at module import.
+
+2. **karpathy_loop.yaml update density bump**:
+   - cell_budget_seconds: 600 → 300
+   - rollout_steps baseline: 64 → 8
+   - lr baseline: 3e-4 → 1e-3
+   - rollout_steps sweep cells: [32,64,128] → [4,8,16]
 
 ### 2026-04-29 11:25 PT — regime change v1→v2 (see above)
 
