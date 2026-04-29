@@ -3147,6 +3147,68 @@ sign stays inverted across cells, the critic is mis-calibrated under rotation.
 depth at cap (6); next fire will likely skip queueing if value_coef + max_grad_norm
 are still in flight.
 
+### Loop fire 69 — 2026-04-29 16:00 PT — value_coef sweep flat (all sub-anchor); update_epochs-cont. backfilled to 1071 (+16); critic mis-cal pattern repeats; reward_version A/B queued
+
+**State.** Worker active, backstop active (last 15:45, next 16:00 — same minute as
+this fire). Karp queue: max_grad_norm-mid running, max_grad_norm-hi queued,
+reward_version-{lo,hi} queued by this fire = depth 4.
+
+**Recent finished karp- runs since fire 68:**
+
+| label | swept_var | dur | Elo | n | PFSP | promoted? |
+|---|---|---|---|---|---|---|
+| `karpv2-...1530-value_coef-lo` | value_coef=0.25 | 6.0m | 958.8 | 12 | 0.752 | no |
+| `karpv2-...1530-value_coef-mid` | value_coef=0.5 | 13.0m | 968.3 | 12 | 0.797 | no |
+| `karpv2-...1530-value_coef-hi` | value_coef=1.0 | 19.9m | 964.0 | 12 | 0.812 | no |
+| `karpv2-...1532-max_grad_norm-lo` | max_grad_norm=0.25 | 25.3m | 1002.8 | 12 | 0.725 | no |
+
+**Backfill on champion #3** (`karpv2-...1448-cont-update_epochs-hi-20min`):
+Elo n grew 12→16, score climbed **1055.2 → 1071.7 (+16.5)**. With more bench data
+the long-cont. champion is the strongest karpv2 yet by ~14 Elo.
+
+**Key reads:**
+- **value_coef sweep is flat.** lo/mid/hi all sub-anchor, span only 9 Elo
+  (959–968). Default 0.5 is fine — no signal to move. Notable: hi-coef PFSP
+  is highest (0.812) so the critic isn't *worse* with more weight, just not
+  better either.
+- **max_grad_norm-lo (0.25) above anchor at 1003.** Tighter clipping = stable.
+  Compare to mid/hi when they finish.
+- **20-min continuation (cont-update_epochs-hi-20min) is the actual top karpv2.**
+  Bench data backfilled cleanly between fires — confirms the "wait one fire
+  before flagging unrated" rule.
+
+**Karp leaderboard (top karpv2, by source-run elo_score):**
+
+| run | elo | n | when |
+|---|---|---|---|
+| `karpv2-260429-1448-cont-update_epochs-hi-20min` | **1071.7** | 16 | fire 68 + backfill |
+| `karpv2-260429-1305-n_envs-lo` | 1057.7 | 25 | fire 64 |
+| `karpv2-260429-1244-rollout_steps-lo` | 1030.2 | 10 | fire 62 |
+| `karpv2-260429-1445-minibatch_size-lo` | 1029.0 | 11 | fire 67/68 |
+| `karpv2-260429-1532-max_grad_norm-lo` | 1002.8 | 12 | fire 69 (this) |
+
+cron-era `cron-260428-0407-phase2_selfplay-med-00` still untouched at 1147.
+
+**Review games (most-recent rated, `karpv2-...1532-max_grad_norm-lo`):**
+
+| game | tag | ticks | decisions | noop% | entropy | value drop | top types | flags |
+|---|---|---|---|---|---|---|---|---|
+| `117929b2` | WIN | 55 | 28 | 39% | 3.58 | -2.96 | noop=39% 25%=21% 75%=14% | ok |
+| `06b1d88e` | LOSS | 22 | 11 | 55% | 3.63 | +6.59 | noop=55% 50%=27% 100%=9% | high noop rate 55% |
+
+🚩 *Loss has 55% noop + value drop +6.59.* Same critic-mis-cal pattern as
+fire 68 (64% noop, +8.9). Two consecutive cells show the agent over-estimating
+its position right before losing. **Likely systematic under random_champion +
+rotation** — the agent isn't seeing the same opponent long enough to develop
+a calibrated value head against any single one. Watch fire 70-71; if it
+persists, candidate fix: bump bench_eval n above 12-16 OR slow rotation
+(rotate_per_2_updates).
+
+**Queued.** reward_version A/B (v1.3 vs v1.4) via round-robin — 2 cells, 5 min
+each. Will produce direct evidence for whether per-tick shaping (v1.4) is
+still helping under rotation, or whether the active-policy gains from v14
+(noted at v14-bake on 2026-04-29) plateau under the new opponent mix.
+
 ## Code changes during loop
 
 ### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
