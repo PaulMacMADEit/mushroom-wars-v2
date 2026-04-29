@@ -2971,6 +2971,48 @@ edit code mid-sweep):
 - Implement rotating-champion training (1 champion per update, sampled
   from archive — addresses opponent-diversity gap; see fire 63 reply)
 
+### Loop fire 65 — 2026-04-29 14:00 PT — gamma sweep complete; gae_lambda mid-flight; karpv2-n_envs-lo holds champion
+
+**State.** Worker active. Backstop active. GPU 18%, VRAM 4.6GB. Queue: 1
+running (`gae_lambda-mid`, started 13:58 UTC), 1 queued (`gae_lambda-hi`).
+
+**🟢 gamma sweep results** (all vs the karpv2 champion `n_envs-lo`):
+
+| run | gamma | Elo | PFSP | bv | rate | promoted? |
+|---|---|---|---|---|---|---|
+| -lo  | 0.95 | — | — | — | — | killed×2 (intentional worker-restart kills) |
+| -mid | 0.97 | 969 | 0.840 | 11 | 0.361 | N |
+| -hi  | 0.99 | 942 | 0.892 | 11 | 0.415 | N |
+
+Neither cell touched the karpv2 champion (`n_envs-lo` still #1 at Elo
+1040). Mid (baseline) edges hi by ~27 Elo, but PFSP is higher for hi
+(0.892 vs 0.840) — hi's archive-sweep was more 50/50; mid's more
+decisive toward losing. Hi has higher training-rate (0.415 vs 0.361).
+Reading: hi explores more sharply but doesn't convert wins consistently.
+
+**No `gamma-lo` data this cycle.** Killed twice by intentional restarts.
+Backstop will re-queue on next round-robin.
+
+**gae_lambda-lo** (0.9) also killed by fire-65 restart. -mid (0.95)
+running; -hi (0.98) queued. Sweep finishes ~14:13 PT.
+
+**Champion archive (top 5 by archived_at):**
+
+1. ⭐ `karpv2-260429-1305-n_envs-lo` (Elo 1040) — first karpv2 champion
+   in the loop's history; promoted today at 20:12 UTC.
+2. `cron-260428-0407-phase2_selfplay-med-00` (Elo 1134)
+3. `cron-260428-0407-phase2_selfplay-short-03`
+4. `cron-260428-0407-phase2_selfplay-short-02`
+5. `cron-260428-0407-phase2_selfplay-short-01`
+
+cron-med-00 still has higher Elo (1134) but karpv2-n_envs-lo is the
+most-recently-promoted, which is what `random_champion` picks as the
+training opponent.
+
+**Holding queue.** 2 karpv2- runs in flight; not queueing more this fire.
+PaulLinux backstop fires every 15min and will queue `clip_range` next
+once `gae_lambda-hi` clears.
+
 ## Code changes during loop
 
 ### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
