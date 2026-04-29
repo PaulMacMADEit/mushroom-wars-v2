@@ -2094,6 +2094,71 @@ fires. The previous worker's 9GB-at-5h crash was workload-specific.
 **Queue:** 1 running + 0 queued = 1. Skipped queueing. Backstop ticks
 next, picks value_coef cycle-3 (NEW axis).
 
+### Loop fires 47-48 — 2026-04-29 06:16-06:41 PT — minibatch_size cycle-3 + value_coef cycle-3 lo
+
+**State.** Worker PID 4019322, **13h 19min uptime**, RSS 6.61GB
+plateau holding 9+ fires. Champion drift 1170→1167→1159 (-11 net,
+biggest drift sequence in many fires; identity unchanged).
+
+**minibatch_size cycle-3 complete (NEW axis):**
+
+| run | minibatch_size | Elo | wins/24 |
+|---|---|---|---|
+| -lo (256)  | 998 (sub-anchor) | 9 |
+| -mid (512) | 1019 | (game review failed — race condition) |
+| -hi (1024) | **1032** | **18** |
+
+**hi > mid > lo, range 34 Elo, monotone.** Larger minibatch wins.
+Same direction as rollout_steps cycle-3 (hi > mid). Both axes that
+**increase per-update signal stability** win under cycle-3 corpus
+deflation.
+
+minibatch_size-hi cycle-3 game review:
+- WIN: replay missing (race condition — game JSON not yet uploaded)
+- LOSS: 54 ticks, 44% noop, **75%-sends 33%** (active-losing pattern again),
+  value-drop +7.93 (panicked)
+
+**🚩 5th cycle-1 finding to invert under cycle-3.** The "smaller-fewer-
+faster wins" theme from cycle-1 has now flipped on:
+- gamma (lo > mid > hi → mid > lo > hi)
+- rollout_steps (lo > mid > hi → hi ≈ lo > mid)
+- gae_lambda (NEW — lo wins, but range narrow)
+- clip_range (flat → hi > mid > lo)
+- **minibatch_size (NEW — hi > mid > lo, range 34 Elo)**
+
+Only **lr** kept cycle-1 direction (lo > mid > hi).
+
+**value_coef cycle-3 in progress (NEW axis):**
+
+| run | value_coef | Elo | wins/24 |
+|---|---|---|---|
+| -lo (0.25)  | **1020** | 9 |
+| -mid (0.50 baseline) | running 4 min in | — |
+| -hi (1.00)  | queued | — |
+
+**🟢 value_coef-lo cycle-3 — second negative LOSS value-drop seen:**
+
+| game | tag | ticks | noop% | top types | value drop |
+|---|---|---|---|---|---|
+| WIN | 43 | 45% | noop/100%/75% | -0.79 |
+| **LOSS** | 16 | 50% | noop/100%/75% | **-0.13 (negative)** |
+
+LOSS value-drop only -0.13 — agent's confidence barely shifted while
+losing. Similar to update_epochs-hi cycle-3's -1.31. **Two paths to
+"blind" policies emerged:**
+1. **Under-train value head** (value_coef-lo): gradient pressure on
+   value head is small, value head stays near-prior, doesn't track
+   game state.
+2. **Over-train value head** (update_epochs-hi): value head overfits
+   to noisy advantage estimates, hallucinates value.
+
+Both fail at distinguishing winning from losing positions. Symmetric
+failure modes.
+
+**Worker memory.** 9+ fires of flat plateau at 6.61GB. No restart pressure.
+
+**Queue:** 1 running + 1 queued = 2. Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-29 01:55 PT — fix scripts/karp_review_games.py for tied created_at
