@@ -1983,6 +1983,69 @@ restart pressure.
 
 **Queue:** 1 running + 2 queued = 3. Skipped queueing.
 
+### Loop fires 43-45 — 2026-04-29 04:20-05:17 PT — consolidated entry
+
+Fires 43-44 had state pulls + analysis but didn't land commits.
+Consolidating with fire 45 here.
+
+**State at fire 45.** Worker PID 4019322, **11h 55min uptime**, RSS
+6.61GB plateau holding firmly. Champion drift 1176→1177→1173.
+
+**update_epochs cycle-3 complete (NEW axis, never run before):**
+
+| run | update_epochs | Elo | rate |
+|---|---|---|---|
+| -lo  | 2  | **1023** | 0.905 |
+| -mid | 4 (baseline) | 1008 | 0.912 |
+| -hi  | 8  | 1008 | 0.894 |
+
+**lo > mid ≈ hi**, range 15 Elo (modest). Same theme as gae_lambda-lo,
+lr-lo: less-aggressive updates win. Diminishing returns past 4 epochs.
+
+**🟢 update_epochs-hi cycle-3 game review — broken value head:**
+
+| game | tag | ticks | noop% | top types | value drop |
+|---|---|---|---|---|---|
+| WIN | 16 | 25% | 100%=75% | -1.00 |
+| **LOSS** | 7 | 25% | 100%=75% | **-1.31 (NEGATIVE)** |
+
+**First negative LOSS value-drop across 44 fires.** Every prior LOSS
+sample had positive drop (agent's value estimate fell during the
+game = lost confidence). This run shows value *rising* +1.31 during
+a loss — **the agent thought it was winning when it lost**.
+
+Same play in both WIN and LOSS (25% noop / 100%=75%). **Monotone
+policy with broken value estimation.** High update_epochs (8) likely
+overfits to noisy advantage estimates → value head hallucinates.
+Different failure mode from clip_range-hi cycle-3's "two-faced"
+(aggressive WIN + passive LOSS) — this is "blind" not two-faced.
+
+**update_epochs-lo game review (fire 43, captured but uncommitted):**
+- WIN: 18 ticks, 11% noop, 100%=56% / 75%=33% / noop=11% — varied,
+  active, 75%-sends 33% (high)
+- LOSS: 46 ticks, 74% noop, value-drop +0.77 (low — calm)
+
+Combination of "active winner + calm loser." Compare to clip_range-hi
+cycle-3 (similar Elo 1033): aggressive WIN + extreme passive LOSS but
+panicked (+5.06 drop). Same broad strategy, very different emotional
+regulation.
+
+**minibatch_size cycle-3 in flight (NEW axis).** lo running 16 min in,
+mid + hi queued. Will be one more data point before the cycle-3 round-
+robin reaches max_grad_norm + reward_version (already swept).
+
+**Known race condition observation.** update_epochs-mid cycle-3 was
+rated (Elo 1008, bv=10, rated) but its 10 matches all had 0 games
+populated. Bench_eval rating system writes to `runs.bench_vector`
+*before* the per-game replay records hit `games` table. Game review
+on freshly-rated runs may need to wait. **Not a bug — design decoupling.**
+
+**Worker memory.** 6.61GB plateau holding for 7+ fires (since fire 37).
+No restart pressure. 11h 55min uptime confirms previous worker's
+9GB-at-5h crash was workload-specific.
+
+**Queue.** 1 running + 2 queued = 3. Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-29 01:55 PT — fix scripts/karp_review_games.py for tied created_at
