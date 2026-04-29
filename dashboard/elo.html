@@ -73,7 +73,7 @@
       if (error) throw error;
 
       if (!data || !data.length) {
-        $summary.textContent = 'No rated runs yet. The worker auto-rates each new run vs random_legal at finish; first ratings will arrive within ~5 min of the next completed run.';
+        $summary.textContent = 'No rated runs yet. Each new run is auto-rated against the champion archive; first ratings arrive within ~5 min of the next completed run.';
         $rank.innerHTML = '<div class="muted">(empty)</div>';
         renderHistoryChart([]);
         return;
@@ -91,10 +91,10 @@
           <div><div class="stat-label">&gt; 1000</div><div class="stat win">${above1k}</div></div>
           <div><div class="stat-label">&lt; 1000</div><div class="stat lose">${below1k}</div></div>
           <div class="muted small" style="margin-left:auto;">
-            Anchor 1000 = pure random_legal play. Each newly-finished run gets
-            auto-rated by the worker (3 matches vs random_legal); cron-agent
-            adds extra matches against the top-Elo set every 3h. Weekly
-            re-rating refreshes the top-30 (Sun 02:13).
+            Anchor 1000 = starting Elo. Each newly-finished run gets
+            auto-rated by bench_eval (sweep vs every champion in the
+            archive on `random_close_4_5`). Champions promoted at ≥60%
+            head-to-head over 16 games. See configs/bench_eval.yaml.
           </div>
         </div>
       `;
@@ -136,8 +136,9 @@
           <tbody>${rows.join('')}</tbody>
         </table>
         <div class="muted small" style="margin-top:8px;">
-          Δ vs 1000 = Elo distance from the random_legal baseline anchor.
-          A 200-point lead means winning ~76% of head-to-heads.
+          Δ vs 1000 = Elo distance from the starting anchor. A 200-point
+          lead means winning ~76% of head-to-heads against the champion
+          archive.
         </div>`;
 
       // Elo over time scatter — uses queued_at as x, elo_score as y.
@@ -176,7 +177,7 @@
             pointRadius: 4,
             pointHoverRadius: 7,
           }, {
-            // Reference line at 1000 (random_legal anchor).
+            // Reference line at 1000 (Elo starting anchor).
             label: 'baseline 1000',
             data: points.map(p => ({ x: p.x, y: 1000 })),
             borderColor: '#444',

@@ -26,11 +26,12 @@
     <div class="card" style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
       <label class="small muted">status
         <br><select id="filter-status" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
-          <option value="">any</option>
+          <option value="">any (excl. discarded)</option>
           <option>queued</option>
           <option>running</option>
           <option>done</option>
           <option>failed</option>
+          <option>discarded</option>
         </select>
       </label>
       <label class="small muted">machine
@@ -67,7 +68,12 @@
         .select('id, label, status, machine, model_id, simulator_id, seed, wall_ms, games_played, queued_at, result, elo_score, elo_n_matches')
         .order('queued_at', { ascending: false })
         .limit(100);
-      if ($status.value) q = q.eq('status', $status.value);
+      if ($status.value) {
+        q = q.eq('status', $status.value);
+      } else {
+        // Default view excludes 'discarded' — used for cleanup/cancelled rows.
+        q = q.neq('status', 'discarded');
+      }
       if ($machine.value.trim()) q = q.eq('machine', $machine.value.trim());
       if ($label.value.trim()) q = q.ilike('label', `%${$label.value.trim()}%`);
       const { data, error } = await q;
