@@ -1,94 +1,91 @@
 # Mushroom Wars v2 — last-24h Supabase summary
 
-_Generated: 2026-04-27T17:45:01+00:00 (UTC). Auto-written by `scripts/write_runs_summary.py`._
+_Generated: 2026-04-29T17:45:01+00:00 (UTC). Auto-written by `scripts/write_runs_summary.py`._
 
 ## Counts
 - done: 56
-- failed: 5
-- discarded: 62
+- failed: 2
+- discarded: 0
 - running: 0
-- queued: 9
+- queued: 0
 
 ## Done runs
 
 | label | status | rate | updates | wall (s) | seed | opponent | sim | weights |
 |---|---|---|---|---|---|---|---|---|
-| b4-260426-1848-default60-s1 | done | 0.353 | 20 | 3725 | 1 | neural (0385b326) | sim-v1.2 | yes |
-| b4-260426-1848-default60-s4 | done | 0.326 | 20 | 3715 | 4 | neural (0385b326) | sim-v1.2 | yes |
-| b4-260426-1848-default60-s3 | done | 0.357 | 20 | 3717 | 3 | neural (0385b326) | sim-v1.2 | yes |
-| b4-260426-1848-default60-s2 | done | 0.342 | 20 | 3714 | 2 | neural (0385b326) | sim-v1.2 | yes |
-| 260426-2313-v13-validate | done | 0.890 | 34 | 1230 | 1234 | random_legal | sim-v1.3 | yes |
-| cron-260426-2335-phase1_close-short-02 | done | 0.870 | 30 | 948 | 944569945 | random_legal | sim-v1.3 | yes |
-| cron-260426-2336-phase1_close-short-03 | done | 0.871 | 31 | 953 | 1384192797 | random_legal | sim-v1.3 | yes |
-| cron-260426-2336-phase1_close-short-00 | done | 0.867 | 30 | 927 | 90672299 | random_legal | sim-v1.3 | yes |
-| cron-260426-2336-phase1_close-short-02 | done | 0.917 | 35 | 962 | 30889835 | random_legal | sim-v1.3 | yes |
-| cron-260426-2336-phase1_close-short-01 | done | 0.920 | 35 | 954 | 678382355 | random_legal | sim-v1.3 | yes |
-| cron-260426-2336-phase1_close-short-04 | done | 0.915 | 36 | 956 | 106126068 | random_legal | sim-v1.3 | yes |
-| cron-260427-0108-phase1_close-short-02 | done | 0.916 | 35 | 922 | 42610017 | random_legal | sim-v1.3 | yes |
-| cron-260427-0108-phase1_close-short-01 | done | 0.910 | 35 | 936 | 116326131 | random_legal | sim-v1.3 | yes |
-| cron-260427-0108-phase1_close-short-00 | done | 0.916 | 36 | 956 | 323407400 | random_legal | sim-v1.3 | yes |
-| cron-260427-0108-phase1_close-med-01 | done | 0.945 | 53 | 1828 | 1888058850 | random_legal | sim-v1.3 | yes |
-| cron-260427-0108-phase1_close-med-00 | done | 0.951 | 55 | 1841 | 219956744 | random_legal | sim-v1.3 | yes |
-| cron-260427-0108-phase1_close-short-05 | done | 0.876 | 30 | 934 | 1913597887 | random_legal | sim-v1.3 | yes |
-| cron-260427-0108-phase1_close-short-04 | done | 0.872 | 30 | 956 | 1289855775 | random_legal | sim-v1.3 | yes |
-| cron-260427-0108-phase1_close-short-03 | done | 0.914 | 37 | 946 | 680421149 | random_legal | sim-v1.3 | yes |
-| cron-260427-0415-phase1_full_mix-short-01 | done | 0.883 | 59 | 932 | 126160896 | random_legal | sim-v1.3 | yes |
-| cron-260427-0415-phase1_full_mix-short-00 | done | 0.867 | 56 | 920 | 160751786 | random_legal | sim-v1.3 | yes |
-| cron-260427-0415-phase1_full_mix-short-02 | done | 0.882 | 59 | 936 | 1047268373 | random_legal | sim-v1.3 | yes |
-| cron-260427-0415-phase1_full_mix-short-03 | done | 0.882 | 59 | 940 | 91970538 | random_legal | sim-v1.3 | yes |
-| cron-260427-0415-phase1_full_mix-short-05 | done | 0.879 | 58 | 920 | 1484715888 | random_legal | sim-v1.3 | yes |
-| cron-260427-0415-phase1_full_mix-short-04 | done | 0.875 | 60 | 936 | 1999739581 | random_legal | sim-v1.3 | yes |
-| cron-260427-0415-phase1_full_mix-med-01 | done | 0.931 | 91 | 1839 | 1951585114 | random_legal | sim-v1.3 | yes |
-| cron-260427-0415-phase1_full_mix-med-02 | done | 0.933 | 88 | 1844 | 623265016 | random_legal | sim-v1.3 | yes |
-| cron-260427-0415-phase1_full_mix-med-00 | done | 0.933 | 88 | 1854 | 1102676725 | random_legal | sim-v1.3 | yes |
-| cron-260427-0707-phase1_full_mix-short-05 | done | 0.878 | 59 | 935 | 72986850 | random_legal | sim-v1.3 | yes |
-| cron-260427-0707-phase1_full_mix-med-01 | done | 0.930 | 90 | 1851 | 1566126975 | random_legal | sim-v1.3 | yes |
-| cron-260427-0707-phase1_full_mix-short-03 | done | 0.876 | 60 | 926 | 1095366971 | random_legal | sim-v1.3 | yes |
-| cron-260427-0707-phase1_full_mix-short-02 | done | 0.873 | 59 | 922 | 1688478068 | random_legal | sim-v1.3 | yes |
-| cron-260427-0707-phase1_full_mix-med-03 | done | 0.929 | 89 | 1838 | 650420206 | random_legal | sim-v1.3 | yes |
-| cron-260427-0707-phase1_full_mix-med-02 | done | 0.934 | 92 | 1821 | 2144894289 | random_legal | sim-v1.3 | yes |
-| cron-260427-0707-phase1_full_mix-med-00 | done | 0.932 | 86 | 1842 | 1170911162 | random_legal | sim-v1.3 | yes |
-| cron-260427-0707-phase1_full_mix-short-04 | done | 0.881 | 59 | 929 | 457736741 | random_legal | sim-v1.3 | yes |
-| cron-260427-1007-phase1_full_mix-short-04 | done | 0.869 | 59 | 929 | 1047249741 | random_legal | sim-v1.3 | yes |
-| cron-260427-1007-phase1_full_mix-short-00 | done | 0.875 | 59 | 932 | 48901728 | random_legal | sim-v1.3 | yes |
-| cron-260427-1007-phase1_full_mix-short-03 | done | 0.873 | 60 | 938 | 857524509 | random_legal | sim-v1.3 | yes |
-| cron-260427-1007-phase1_full_mix-short-01 | done | 0.874 | 59 | 928 | 2143513634 | random_legal | sim-v1.3 | yes |
-| cron-260427-1007-phase1_full_mix-short-02 | done | 0.871 | 58 | 932 | 1897305880 | random_legal | sim-v1.3 | yes |
-| cron-260427-1007-phase1_full_mix-med-02 | done | 0.931 | 91 | 1846 | 959337593 | random_legal | sim-v1.3 | yes |
-| cron-260427-1007-phase1_full_mix-med-01 | done | 0.925 | 92 | 1838 | 1408484354 | random_legal | sim-v1.3 | yes |
-| cron-260427-1007-phase1_full_mix-med-00 | done | 0.927 | 91 | 1826 | 1470200614 | random_legal | sim-v1.3 | yes |
-| cron-260427-1007-phase1_full_mix-short-05 | done | 0.880 | 58 | 940 | 1282375282 | random_legal | sim-v1.3 | yes |
-| cron-260427-1307-phase1_full_mix-short-01 | done | 0.877 | 59 | 938 | 348348227 | random_legal | sim-v1.3 | yes |
-| cron-260427-1307-phase1_full_mix-short-03 | done | 0.877 | 60 | 932 | 1133023767 | random_legal | sim-v1.3 | yes |
-| cron-260427-1307-phase1_full_mix-short-00 | done | 0.878 | 58 | 930 | 2053977009 | random_legal | sim-v1.3 | yes |
-| cron-260427-1307-phase1_full_mix-short-04 | done | 0.872 | 59 | 935 | 761933997 | random_legal | sim-v1.3 | yes |
-| cron-260427-1307-phase1_full_mix-med-00 | done | 0.929 | 91 | 1821 | 351671727 | random_legal | sim-v1.3 | yes |
-| cron-260427-1307-phase1_full_mix-short-02 | done | 0.879 | 58 | 922 | 634348117 | random_legal | sim-v1.3 | yes |
-| cron-260427-1307-phase1_full_mix-short-05 | done | 0.870 | 58 | 937 | 596664893 | random_legal | sim-v1.3 | yes |
-| cron-260427-1307-phase1_full_mix-endurance | done | 0.963 | 133 | 3642 | 1611429663 | random_legal | sim-v1.3 | yes |
-| cron-260427-1607-phase1_full_mix-short-05 | done | 0.878 | 57 | 938 | 869211252 | random_legal | sim-v1.3 | yes |
-| cron-260427-1607-phase1_full_mix-short-03 | done | 0.878 | 57 | 941 | 1295764331 | random_legal | sim-v1.3 | yes |
-| cron-260427-1607-phase1_full_mix-short-04 | done | 0.869 | 58 | 924 | 1741023794 | random_legal | sim-v1.3 | yes |
+| karp-260428-1145-gamma-lo | done | 0.909 | 66 | 1230 | lo | random_legal | sim-v1.3 | yes |
+| karp-260428-1145-gamma-hi | done | 0.894 | 77 | 1225 | hi | random_legal | sim-v1.3 | yes |
+| karp-260428-1145-gamma-mid | done | 0.907 | 66 | 1250 | mid | random_legal | sim-v1.3 | yes |
+| karp-260428-1216-clip_coef-lo | done | 0.909 | 64 | 1224 | lo | random_legal | sim-v1.3 | yes |
+| karp-260428-1216-clip_coef-hi | done | 0.904 | 67 | 1250 | hi | random_legal | sim-v1.3 | yes |
+| karp-260428-1216-clip_coef-mid | done | 0.909 | 64 | 1232 | mid | random_legal | sim-v1.3 | yes |
+| karp-260428-1312-entropy_coef-hi | done | 0.863 | 80 | 1231 | hi | random_legal | sim-v1.3 | yes |
+| karp-260428-1443-entropy_coef-lo | done | 0.914 | 47 | 1260 | lo | random_legal | sim-v1.3 | yes |
+| karp-260428-1443-entropy_coef-mid | done | 0.912 | 49 | 1224 | mid | random_legal | sim-v1.3 | yes |
+| karp-260428-1443-entropy_coef-hi | done | 0.901 | 54 | 1250 | hi | random_legal | sim-v1.3 | yes |
+| karp-260428-1512-lr-hi | done | 0.848 | 62 | 1230 | hi | random_legal | sim-v1.3 | yes |
+| karp-260428-1512-lr-lo | done | 0.916 | 49 | 1250 | lo | random_legal | sim-v1.3 | yes |
+| karp-260428-1512-lr-mid | done | 0.912 | 51 | 1249 | mid | random_legal | sim-v1.3 | yes |
+| karp-260428-1700-rollout_steps-mid | done | 0.906 | 46 | 1238 | mid | random_legal | sim-v1.3 | yes |
+| karp-260428-1700-rollout_steps-lo | done | 0.933 | 87 | 1242 | lo | random_legal | sim-v1.3 | yes |
+| karp-260428-1700-rollout_steps-hi | done | 0.875 | 30 | 1233 | hi | random_legal | sim-v1.3 | yes |
+| karp-260428-1719-reward_version-lo | done | 0.911 | 49 | 1227 | lo | random_legal | sim-v1.3 | yes |
+| karp-260428-1719-reward_version-hi | done | 0.917 | 50 | 1234 | hi | random_legal | sim-v1.3 | yes |
+| karp-260428-1900-entropy_coef-hi | done | 0.901 | 54 | 1233 | hi | random_legal | sim-v1.3 | yes |
+| karp-260428-1900-entropy_coef-lo | done | 0.914 | 49 | 1236 | lo | random_legal | sim-v1.3 | yes |
+| karp-260428-1900-entropy_coef-mid | done | 0.913 | 49 | 1229 | mid | random_legal | sim-v1.3 | yes |
+| karp-260428-2015-lr-lo | done | 0.918 | 50 | 1254 | lo | random_legal | sim-v1.3 | yes |
+| karp-260428-2015-lr-hi | done | 0.833 | 66 | 1242 | hi | random_legal | sim-v1.3 | yes |
+| karp-260428-2015-lr-mid | done | 0.915 | 49 | 1237 | mid | random_legal | sim-v1.3 | yes |
+| karp-260428-2130-rollout_steps-mid | done | 0.910 | 50 | 1225 | mid | random_legal | sim-v1.3 | yes |
+| karp-260428-2130-rollout_steps-hi | done | 0.878 | 30 | 1228 | hi | random_legal | sim-v1.3 | yes |
+| karp-260428-2130-rollout_steps-lo | done | 0.934 | 87 | 1230 | lo | random_legal | sim-v1.3 | yes |
+| karp-260428-2245-n_envs-hi | done | 0.873 | 29 | 1245 | hi | random_legal | sim-v1.3 | yes |
+| karp-260428-2245-n_envs-lo | done | 0.929 | 84 | 1234 | lo | random_legal | sim-v1.3 | yes |
+| karp-260428-2245-n_envs-mid | done | 0.911 | 50 | 1234 | mid | random_legal | sim-v1.3 | yes |
+| karp-260429-0000-gamma-hi | done | 0.892 | 58 | 1250 | hi | random_legal | sim-v1.3 | yes |
+| karp-260429-0000-gamma-lo | done | 0.916 | 47 | 1256 | lo | random_legal | sim-v1.3 | yes |
+| karp-260429-0000-gamma-mid | done | 0.912 | 49 | 1230 | mid | random_legal | sim-v1.3 | yes |
+| karp-260429-0115-gae_lambda-lo | done | 0.926 | 46 | 1231 | lo | random_legal | sim-v1.3 | yes |
+| karp-260429-0115-gae_lambda-mid | done | 0.916 | 49 | 1241 | mid | random_legal | sim-v1.3 | yes |
+| karp-260429-0115-gae_lambda-hi | done | 0.896 | 52 | 1239 | hi | random_legal | sim-v1.3 | yes |
+| karp-260429-0230-clip_range-mid | done | 0.911 | 51 | 1252 | mid | random_legal | sim-v1.3 | yes |
+| karp-260429-0230-clip_range-lo | done | 0.860 | 62 | 1251 | lo | random_legal | sim-v1.3 | yes |
+| karp-260429-0230-clip_range-hi | done | 0.927 | 45 | 1223 | hi | random_legal | sim-v1.3 | yes |
+| karp-260429-0345-update_epochs-hi | done | 0.894 | 51 | 1235 | hi | random_legal | sim-v1.3 | yes |
+| karp-260429-0345-update_epochs-mid | done | 0.912 | 50 | 1231 | mid | random_legal | sim-v1.3 | yes |
+| karp-260429-0345-update_epochs-lo | done | 0.905 | 52 | 1229 | lo | random_legal | sim-v1.3 | yes |
+| karp-260429-0500-minibatch_size-mid | done | 0.913 | 50 | 1238 | mid | random_legal | sim-v1.3 | yes |
+| karp-260429-0500-minibatch_size-lo | done | 0.896 | 48 | 1256 | lo | random_legal | sim-v1.3 | yes |
+| karp-260429-0500-minibatch_size-hi | done | 0.919 | 51 | 1230 | hi | random_legal | sim-v1.3 | yes |
+| karp-260429-0615-value_coef-mid | done | 0.906 | 50 | 1238 | mid | random_legal | sim-v1.3 | yes |
+| karp-260429-0615-value_coef-hi | done | 0.898 | 52 | 1255 | hi | random_legal | sim-v1.3 | yes |
+| karp-260429-0615-value_coef-lo | done | 0.923 | 48 | 1241 | lo | random_legal | sim-v1.3 | yes |
+| karp-260429-0730-max_grad_norm-lo | done | 0.911 | 50 | 1229 | lo | random_legal | sim-v1.3 | yes |
+| karp-260429-0730-max_grad_norm-hi | done | 0.910 | 50 | 1228 | hi | random_legal | sim-v1.3 | yes |
+| karp-260429-0730-max_grad_norm-mid | done | 0.911 | 50 | 1253 | mid | random_legal | sim-v1.3 | yes |
+| karp-260429-0845-reward_version-lo | done | 0.913 | 49 | 1252 | lo | random_legal | sim-v1.3 | yes |
+| karp-260429-0845-reward_version-hi | done | 0.916 | 50 | 1259 | hi | random_legal | sim-v1.3 | yes |
+| karp-260429-0930-entropy_coef-hi | done | 0.897 | 55 | 1248 | hi | random_legal | sim-v1.3 | yes |
+| karp-260429-0930-entropy_coef-lo | done | 0.916 | 47 | 1240 | lo | random_legal | sim-v1.3 | yes |
+| karp-260429-0930-entropy_coef-mid | done | 0.913 | 49 | 1251 | mid | random_legal | sim-v1.3 | yes |
 
 ## Strongest checkpoints (rate >= 0.55, weights present)
 
 | run id | label | rate | updates | opponent |
 |---|---|---|---|---|
-| `209d3364-35d8-42b0-897a-7fa2663d3952` | cron-260427-1307-phase1_full_mix-endurance | 0.963 | 133 | random_legal |
-| `7e6d2412-806a-406a-a1c9-43fa58bae292` | cron-260427-0707-phase1_full_mix-med-02 | 0.934 | 92 | random_legal |
-| `9cf4df5f-39f1-4ff9-bc4d-e97416c3d408` | cron-260427-1007-phase1_full_mix-med-01 | 0.925 | 92 | random_legal |
-| `d3e42b37-c948-4c70-be8b-993125d6cf48` | cron-260427-0415-phase1_full_mix-med-01 | 0.931 | 91 | random_legal |
-| `ea7df826-df20-4571-bcaf-fbba09932cb5` | cron-260427-1007-phase1_full_mix-med-02 | 0.931 | 91 | random_legal |
-| `c004641f-78fa-41a3-8996-1092c2fc220b` | cron-260427-1007-phase1_full_mix-med-00 | 0.927 | 91 | random_legal |
-| `d2b7fe83-4489-46d3-9187-4b2888cff5d1` | cron-260427-1307-phase1_full_mix-med-00 | 0.929 | 91 | random_legal |
-| `9c076de4-26a3-48a1-8d1b-007b9d0dfb1c` | cron-260427-0707-phase1_full_mix-med-01 | 0.930 | 90 | random_legal |
-| `731cd2aa-ee35-48e6-a6b4-df780d8308e1` | cron-260427-0707-phase1_full_mix-med-03 | 0.929 | 89 | random_legal |
-| `4ca57178-dc32-4367-8874-158ebe0c490e` | cron-260427-0415-phase1_full_mix-med-02 | 0.933 | 88 | random_legal |
+| `07a5801e-7466-4c6d-941f-7fd0e6f241dd` | karp-260428-1700-rollout_steps-lo | 0.933 | 87 | random_legal |
+| `31a7b71e-7507-4ba6-bb31-013acf7080ac` | karp-260428-2130-rollout_steps-lo | 0.934 | 87 | random_legal |
+| `af4d02ef-7fc9-49fd-9726-69a7da6ce85c` | karp-260428-2245-n_envs-lo | 0.929 | 84 | random_legal |
+| `96d3a692-5d43-4486-8815-643cbbfc5cbc` | karp-260428-1312-entropy_coef-hi | 0.863 | 80 | random_legal |
+| `24ddd3cb-a014-4015-947f-024aeade143f` | karp-260428-1145-gamma-hi | 0.894 | 77 | random_legal |
+| `2300d14e-e859-4ecb-817c-3ac318039705` | karp-260428-1216-clip_coef-hi | 0.904 | 67 | random_legal |
+| `9adbce51-e3d3-4b7a-94e5-5e869e55dd8a` | karp-260428-1145-gamma-lo | 0.909 | 66 | random_legal |
+| `2bf900f3-7f2f-4bed-b096-577966daeb9b` | karp-260428-1145-gamma-mid | 0.907 | 66 | random_legal |
+| `2c11092e-3e20-49c2-8829-a4f36fc1a1b7` | karp-260428-2015-lr-hi | 0.833 | 66 | random_legal |
+| `063ce0ae-e369-486b-acdd-3c2eb19ff2d1` | karp-260428-1216-clip_coef-lo | 0.909 | 64 | random_legal |
 
 ## Failed runs
-- `326e10a5` b4-260426-1848-ceiling90
-- `7e0e5ca9` cron-260427-0108-phase1_close-med-02
-- `c8ed2648` cron-260427-0413-phase1_full_mix-short-04
-- `bfe123f3` cron-260427-1607-phase1_full_mix-short-00
-- `09ba1f7a` cron-260427-1607-phase1_full_mix-med-00
+- `c53cc011` karp-260428-1312-entropy_coef-lo
+- `56b2d2f1` karp-260428-1312-entropy_coef-mid
 
