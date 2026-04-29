@@ -224,6 +224,9 @@
         <h2>Matchups (post-run evaluation)</h2>
         <div class="card" id="matchups"><div class="muted">Loading matchups…</div></div>
 
+        <h2>Reward scheme</h2>
+        <div class="card" id="reward-panel"></div>
+
         <h2>Hyperparams</h2>
         <div class="card" id="hyperparams-panel"></div>
 
@@ -236,6 +239,7 @@
       // Render structured hyperparams — driven by run.hyperparams which is
       // available immediately. No need to wait for metrics.json.
       renderHyperparams(run.hyperparams ?? {});
+      renderRewardScheme(run.hyperparams ?? {});
 
       // Fill in the matchups panel in parallel with the charts — uses the
       // same `games` table the Elo page does, but filtered to this run.
@@ -693,6 +697,77 @@
         return v.toFixed(6).replace(/\.?0+$/, '');
       }
       return String(v);
+    }
+
+    /** Reward scheme panel — resolves the reward version from hyperparams and
+     * shows the actual scalar values (capture, win, lose, draw, speed bonus,
+     * per-tick shaping) alongside the PPO discount γ. Source of truth:
+     * sim/config.py REWARD_*_BY_VERSION tuples (mirrored here so the dashboard
+     * is self-contained). Update both when a new reward version ships. */
+    const REWARD_TABLES = {
+      // [v1.2, v1.3, v1.4]
+      capture:        [0.1,   0.05,  0.05],
+      lose_building:  [-0.1,  -0.05, -0.05],
+      win:            [1.0,   5.0,   5.0],
+      lose:           [-1.0,  -5.0,  -5.0],
+      draw:           [0.0,   -0.5,  -0.5],
+      speed_bonus:    [0.5,   2.0,   2.0],
+      tick_buildings: [0.0,   0.0,   0.0010],
+      tick_units:     [0.0,   0.0,   0.0002],
+    };
+    function renderRewardScheme(hp) {
+      const $card = document.getElementById('reward-panel');
+      if (!$card) return;
+      // Resolve version: reward_version wins if ≥0, else fall back to reward_v13.
+      let v = hp.reward_version;
+      if (v == null || v < 0) v = hp.reward_v13 ? 1 : 0;
+      v = Math.max(0, Math.min(2, v|0));
+      const versionLabel = ['v1.2', 'v1.3', 'v1.4'][v];
+      const t = REWARD_TABLES;
+      const fmt = (x) => Number.isInteger(x) ? String(x) : (x === 0 ? '0' : x.toString());
+      const sign = (x) => x > 0 ? `+${fmt(x)}` : fmt(x);
+      const gamma = hp.gamma ?? 0.99;
+
+      const rows = [
+        ['Capture building',    sign(t.capture[v]),       'each time you take an enemy / neutral building'],
+        ['Lose building',       sign(t.lose_building[v]), 'each time the opponent takes one of yours'],
+        ['Win the game',        sign(t.win[v]),           'terminal — paid once on game end (winner)'],
+        ['Speed bonus (winner)', `up to +${fmt(t.speed_bonus[v])}`,
+                                 `added to win reward, scaled by (1 − tick/timeout). Win at tick 0 → full bonus; at timeout → 0.`],
+        ['Lose the game',       sign(t.lose[v]),          'terminal — paid once on game end (loser)'],
+        ['Draw',                sign(t.draw[v]),          'terminal — paid to both on timeout'],
+        ['Per-tick building Δ', v === 2 ? `±${fmt(t.tick_buildings[v])} × (own − opp buildings)` : '0',
+                                 v === 2 ? 'every tick, both players (symmetric). v1.4 only.' : 'disabled in this reward version'],
+        ['Per-tick unit Δ',     v === 2 ? `±${fmt(t.tick_units[v])} × (own − opp real units)` : '0',
+                                 v === 2 ? 'every tick, both players (symmetric). v1.4 only.' : 'disabled in this reward version'],
+        ['Discount γ',          fmt(gamma),               'PPO future-reward discount per step. Closer to 1 = patient (long-horizon credit). With speed bonus, agent is incentivised to win quickly anyway.'],
+      ];
+
+      $card.innerHTML = `
+        <div style="display:flex; gap:24px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
+          <div><span class="stat-label">reward version</span><div class="stat mono">${versionLabel}</div></div>
+          <div><span class="stat-label">discount γ</span><div class="stat mono">${fmt(gamma)}</div></div>
+          <div><span class="stat-label">winning fast pays more</span><div class="mono small">+${fmt(t.win[v])} terminal +up to ${fmt(t.speed_bonus[v])} speed</div></div>
+        </div>
+        <table>
+          <thead><tr>
+            <th style="width:200px;">event</th>
+            <th style="width:240px;">reward</th>
+            <th>when / how</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(([e, val, desc]) => `<tr>
+              <td><span class="mono small">${esc(e)}</span></td>
+              <td><span class="mono">${esc(val)}</span></td>
+              <td><span class="muted small">${esc(desc)}</span></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+        <div class="muted small" style="margin-top:8px;">
+          Source: <span class="mono">sim/config.py</span> <span class="mono">REWARD_*_BY_VERSION</span>.
+          Reward version selection: <span class="mono">reward_version</span> wins if ≥0, otherwise falls back to <span class="mono">reward_v13</span>.
+        </div>
+      `;
     }
 
     /** Win rate progression in 10% buckets across the run.
