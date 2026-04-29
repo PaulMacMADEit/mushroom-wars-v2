@@ -16,6 +16,7 @@
       <a href="./training.html">Training</a>
       <a href="./replays.html">Replays</a>
       <a href="./play.html">Play</a>
+      <a href="./process.html">Process</a>
     </nav>
   </header>
 
@@ -34,6 +35,18 @@
 
     // Chart instances are retained so we can destroy + re-render on poll.
     const charts = new Map();
+
+    // Hoisted to module-level so refreshCharts() and pollForUpdates() — both
+    // top-level functions — can call it without a closure over load().
+    function replaceCanvasWith(id, text, isError = false) {
+      const c = document.getElementById(id);
+      if (!c) return;
+      const msg = document.createElement('div');
+      msg.className = isError ? 'error' : 'muted';
+      msg.style.padding = '20px';
+      msg.textContent = text;
+      c.replaceWith(msg);
+    }
 
     if (!runId) {
       $root.innerHTML = `<div class="error">no <span class="inline-code">?id=…</span> in URL</div>`;
@@ -212,16 +225,6 @@
       const chartIds = ['chart-win', 'chart-loss', 'chart-signal',
                         'chart-stability', 'chart-ev', 'chart-bands',
                         'chart-eps', 'chart-pool'];
-
-      function replaceCanvasWith(id, text, isError = false) {
-        const c = document.getElementById(id);
-        if (!c) return;
-        const msg = document.createElement('div');
-        msg.className = isError ? 'error' : 'muted';
-        msg.style.padding = '20px';
-        msg.textContent = text;
-        c.replaceWith(msg);
-      }
 
       function failAllCharts(text) {
         for (const id of chartIds) replaceCanvasWith(id, text, true);
@@ -473,15 +476,6 @@
                         'chart-eps', 'chart-pool'];
       function failAllCharts(text) {
         for (const id of chartIds) replaceCanvasWith(id, text, true);
-      }
-      function replaceCanvasWith(id, text, isError = false) {
-        const c = document.getElementById(id);
-        if (!c) return;
-        const msg = document.createElement('div');
-        msg.className = isError ? 'error' : 'muted';
-        msg.style.padding = '20px';
-        msg.textContent = text;
-        c.replaceWith(msg);
       }
 
       const timer = setInterval(async () => {
