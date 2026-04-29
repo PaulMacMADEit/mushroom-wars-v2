@@ -171,7 +171,7 @@
           <div style="position:relative; height:220px;"><canvas id="chart-signal"></canvas></div>
         </div>
 
-        <h2>Win rate progression (10% buckets)</h2>
+        <h2>Win rate progression</h2>
         <div class="card" id="win-rate-progression">
           <div class="muted">no data yet — populated once a few training updates have completed.</div>
         </div>
@@ -807,10 +807,13 @@
         return Math.min(N_BUCKETS - 1, Math.floor(N_BUCKETS * frac));
       };
 
-      // ---- (B) Training-rollout: per-(bucket, opponent) win rate ----------
-      // Each metrics row has training_opp_label + win_rate (vs that opp this update).
-      // We weight by episodes_completed so a bucket with many episodes weighs more.
-      const trainBuckets = Array.from({length: N_BUCKETS}, () => ({}));
+      // ---- (B) Training-rollout: per-update win rate ----------------------
+      // Each metrics row is exactly ONE PPO update; under opponent_pool_mode
+      // =rotate_per_update, every update faces a (potentially) different
+      // opponent. Render one column per update, left-to-right by update index.
+      // trainPerUpdate[i][opp_label] = { wins, n }   (sparse — typically one
+      // opp per column under rotation mode).
+      const trainPerUpdate = points.map(() => ({}));
       let anyTrain = false;
       points.forEach((p, i) => {
         const lab = p.training_opp_label;
@@ -818,13 +821,10 @@
         const eps = p.episodes_completed;
         if (lab == null || wr == null || !eps) return;
         anyTrain = true;
-        const b = bucketOf(i);
-        const slot = trainBuckets[b][lab] = trainBuckets[b][lab] || { wins: 0, n: 0 };
-        slot.wins += wr * eps;
-        slot.n    += eps;
+        trainPerUpdate[i][lab] = { wins: wr * eps, n: eps };
       });
       const trainOpps = new Set();
-      for (const b of trainBuckets) for (const lab of Object.keys(b)) trainOpps.add(lab);
+      for (const u of trainPerUpdate) for (const lab of Object.keys(u)) trainOpps.add(lab);
 
       // ---- (A) Eval matches: per-(bucket, opponent) win rate from eval_matches.
       // Time bucket is determined by the eval_match's `update` field, mapped to
@@ -871,18 +871,18 @@
         const opps = Array.from(trainOpps);
         trainHtml = `
           <div class="stat-label" style="margin-bottom:8px;">
-            Win rate vs the opponent the agent played each update. Buckets are 10% slices of training (by update index). Weighted by episodes completed; <span class="mono">n=</span> is total episodes in the bucket.
+            Win rate vs the opponent the agent played each PPO update. One column per update, left → right. <span class="mono">n=</span> is episodes completed in that update.
           </div>
           <div style="overflow-x:auto;">
           <table>
             <thead><tr>
               <th>opponent</th>
-              ${trainBuckets.map((_, i) => `<th>${i*10}–${(i+1)*10}%</th>`).join('')}
+              ${trainPerUpdate.map((_, i) => `<th>${i+1}</th>`).join('')}
             </tr></thead>
             <tbody>
               ${opps.map(opp => {
-                const cells = trainBuckets.map(b => {
-                  const s = b[opp];
+                const cells = trainPerUpdate.map(u => {
+                  const s = u[opp];
                   if (!s || s.n === 0) return `<td style="text-align:center;">${fmtRate(null)}</td>`;
                   const wr = s.wins / s.n;
                   return `<td style="text-align:center; background:${cellColor(wr)};">${fmtRate(wr, Math.round(s.n))}</td>`;
