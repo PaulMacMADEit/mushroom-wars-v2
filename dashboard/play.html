@@ -77,6 +77,21 @@
       font-size: 11px;
       color: var(--fg-muted);
     }
+    /* Winner pill in the result table — P1 = blue (per Paul's request),
+       P2 = red. Note this is intentionally inverted from the global
+       canvas/chart convention where P1 = red. Scoped to play.html only. */
+    .winner-bubble {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: var(--mono);
+      letter-spacing: .2px;
+    }
+    .winner-bubble.win-p1   { background: rgba(96,165,250,0.20); color: #93c5fd; border: 1px solid rgba(96,165,250,0.45); }
+    .winner-bubble.win-p2   { background: rgba(248,113,113,0.20); color: #fca5a5; border: 1px solid rgba(248,113,113,0.45); }
+    .winner-bubble.win-draw { background: rgba(107,114,128,0.20); color: var(--fg-muted); border: 1px solid var(--border); }
     .link-btn {
       background: transparent;
       color: var(--accent);
@@ -195,6 +210,8 @@
     import { sb, publicUrl } from './lib/supabase.js';
     import { esc } from './lib/ui.js';
 
+    // Baseline (random-legal) is excluded from the players list — it's a sanity
+    // opponent for training, not something you'd choose to spectate.
     const BASELINE_ID = '00000000-0000-0000-0000-000000000001';
 
     const $p1     = document.getElementById('p1');
@@ -337,7 +354,8 @@
     async function populateRuns() {
       const { data, error } = await sb.from('runs')
         .select('id, label, finished_at, result, weights_url')
-        .or(`weights_url.not.is.null,id.eq.${BASELINE_ID}`)
+        .not('weights_url', 'is', null)
+        .neq('id', BASELINE_ID)
         .eq('status', 'done')
         .order('finished_at', { ascending: false })
         .limit(100);
@@ -352,11 +370,39 @@
       }).join('');
       $p1.innerHTML = options;
       $p2.innerHTML = options;
-      if (data.length > 0) {
-        $p1.value = data[0].id;
-        $p2.value = data[0].id;  // default self-play
-      }
+
+      // Restore last-used players if still in the list, else default to
+      // newest run on both sides (self-play).
+      const remembered = loadRemembered();
+      const ids = new Set(data.map(r => r.id));
+      if (remembered.p1 && ids.has(remembered.p1)) $p1.value = remembered.p1;
+      else if (data.length > 0) $p1.value = data[0].id;
+      if (remembered.p2 && ids.has(remembered.p2)) $p2.value = remembered.p2;
+      else if (data.length > 0) $p2.value = $p1.value;  // self-play default
+
+      // Restore games count.
+      if (remembered.games) $games.value = String(remembered.games);
+
+      mirrored = ($p1.value === $p2.value);
       updateMirrorButton();
+    }
+
+    // --- Last-used players + games persistence -----------------------------
+    function loadRemembered() {
+      try {
+        const raw = localStorage.getItem('mw2.play.players');
+        if (raw) return JSON.parse(raw);
+      } catch { /* ignore */ }
+      return {};
+    }
+    function saveRemembered() {
+      try {
+        localStorage.setItem('mw2.play.players', JSON.stringify({
+          p1:    $p1.value,
+          p2:    $p2.value,
+          games: $games.value,
+        }));
+      } catch { /* ignore */ }
     }
 
     // Mirror default: P2 tracks P1 until you manually change P2.
@@ -370,16 +416,20 @@
     }
     $p1.addEventListener('change', () => {
       if (mirrored) $p2.value = $p1.value;
+      saveRemembered();
     });
     $p2.addEventListener('change', () => {
       mirrored = ($p2.value === $p1.value);
       updateMirrorButton();
+      saveRemembered();
     });
     $mirror.addEventListener('click', () => {
       $p2.value = $p1.value;
       mirrored = true;
       updateMirrorButton();
+      saveRemembered();
     });
+    $games.addEventListener('change', saveRemembered);
 
     async function queueAndWatch() {
       const runA = $p1.value;
@@ -459,18 +509,23 @@
           const isSelfPlay = games[0]?.player_1_run_id === games[0]?.player_2_run_id;
           const rows = games.map((g, i) => {
             const url = g.actions_url ? publicUrl(g.actions_url) : null;
-            const dur = g.duration_ms ? `${(g.duration_ms / 1000).toFixed(1)}s` : '—';
-            const swapped = g.stats?.swapped === true;
-            const sideLabel = sides[i] === 'p1' ? 'P1' : sides[i] === 'p2' ? 'P2' : sides[i];
-            const winnerStr = sides[i] === 'draw' ? 'draw'
-                            : `${sideLabel} wins${swapped ? ' (sides swapped)' : ''}`;
+            const ticks = g.stats?.ticks;
+            const ticksStr = (ticks != null) ? `${ticks} ticks` : '—';
+            const side = sides[i];
+            const cls = side === 'p1' ? 'win-p1'
+                       : side === 'p2' ? 'win-p2'
+                       : side === 'draw' ? 'win-draw' : '';
+            const label = side === 'p1' ? 'P1 wins'
+                        : side === 'p2' ? 'P2 wins'
+                        : side === 'draw' ? 'draw' : '?';
+            const winnerCell = `<span class="winner-bubble ${cls}">${esc(label)}</span>`;
             const link = url
               ? `<a href="./game.html?url=${encodeURIComponent(url)}&match=${encodeURIComponent(matchId)}">replay</a>`
               : '—';
             return `<tr>
               <td><span class="mono">#${g.game_index + 1}</span></td>
-              <td>${esc(winnerStr)}</td>
-              <td><span class="mono">${esc(dur)}</span></td>
+              <td>${winnerCell}</td>
+              <td><span class="mono">${esc(ticksStr)}</span></td>
               <td>${link}</td>
             </tr>`;
           }).join('');
@@ -485,21 +540,19 @@
                </div>` : '';
           $status.innerHTML = `
             <div style="margin-bottom:10px;">
-              <strong>Match done</strong>: P1 ${winsP1} · P2 ${winsP2} · draws ${draws}
+              <strong>Match done</strong>:
+              <span class="winner-bubble win-p1">P1 ${winsP1}</span>
+              <span class="winner-bubble win-p2">P2 ${winsP2}</span>
+              ${draws ? `<span class="winner-bubble win-draw">draws ${draws}</span>` : ''}
             </div>
             ${selfPlayNote}
             <table style="margin-top:8px;">
-              <thead><tr><th>game</th><th>result</th><th>duration</th><th></th></tr></thead>
+              <thead><tr><th>game</th><th>result</th><th>ticks</th><th></th></tr></thead>
               <tbody>${rows}</tbody>
             </table>
-            <div style="margin-top:12px;">
-              <button id="play-again" class="play-button">Play another</button>
-            </div>
           `;
-          document.getElementById('play-again').addEventListener('click', () => {
-            $play.disabled = false;
-            $status.style.display = 'none';
-          });
+          // Re-enable Play so the user can re-queue the same setup with one click.
+          $play.disabled = false;
           return;
         }
         if (m.status === 'failed') {
