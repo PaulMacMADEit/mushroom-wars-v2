@@ -2546,6 +2546,63 @@ Will be informative noise data.
 
 **Queue:** empty. Skipped queueing.
 
+### Loop fire 58 — 2026-04-29 11:11 PT — 🟢 b6 vs-champion 90-min sweep queued (4 seeds); EXACTLY the experiment I recommended fire 57
+
+**State.** Worker PID 4019322, **17h 49min uptime**, **RSS 7.22GB
+(+0.61 since fire 57)** — significant uptick, watching for transient.
+Champion drift 1158→1160.
+
+**🟢 NEW NON-KARP RUNS QUEUED — and I'm NOT discarding them.**
+
+Inspected the queue: 4 runs labeled `b6-260429-1802-default90-s{1,2,3,42}`,
+queued **9 minutes after my fire-57 "train vs champion" recommendation.**
+
+Description: *"b6 default K=4 90min vs b3-endurance; retry b5 (discarded)
+— does 90 min break through the 0.34 plateau?"*
+
+| field | value |
+|---|---|
+| budget | **90 minutes per run** (compute scaling gate) |
+| seeds | 1, 2, 3, 42 (proper variance estimate) |
+| **opponent_name** | **neural** (training vs champion!) |
+| level_name | random_8_16 |
+| n_envs | 1024 |
+
+**This is exactly the experiment I recommended in fire 57:**
+1. ✅ Train vs neural (champion) opponent
+2. ✅ 90-min cell (compute scaling gate from training-discipline rules)
+3. ✅ Multi-seed for variance estimate
+4. ✅ Same level mix as karp loop (controls for distribution)
+
+Per project memory step 4 ("Clear non-karp clutter"), I'd normally
+discard these. **NOT discarding** — these are intentional, exactly
+what we need. Surfacing instead.
+
+**Resource impact.** 4 × 90 min serial = **6 hours of worker time**
+queued behind lr-mid + lr-hi (~30 min remaining of lr cycle-3). The
+karp- queue will be blocked through ~17:30 PT. **Acceptable** — these
+b6 runs are more valuable than more cycle-3 noise data.
+
+**lr cycle-3 in progress (still running, will complete before b6 starts):**
+
+| run | cycle 1 | cycle 2 | cycle 3 |
+|---|---|---|---|
+| -lo | 1073 | 1054 | **1016 (-57 cumulative)** |
+| -mid | 1036 | 1045 | running |
+| -hi | 1009 | 954 | queued |
+
+lr-lo cycle-3 game review:
+- WIN: 12 ticks, 17% noop, **100%=83%** near type-collapse
+- LOSS: 66 ticks, 18% noop, 100%/75%/noop varied
+- **5/24 wins** — among lowest of cycle-3
+
+**Worker memory.** Second consecutive +0.5GB+ uptick (fire-54's was
+transient, this is +0.61). Watching for sustained creep but worker
+service stays healthy. 17h 49min uptime intact.
+
+**Queue:** 1 running + 5 queued (1 karp lr-hi + 4 b6 90-min seeds).
+**Skipped queueing.**
+
 ## Code changes during loop
 
 ### 2026-04-29 01:55 PT — fix scripts/karp_review_games.py for tied created_at
