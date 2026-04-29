@@ -22,6 +22,34 @@
 
   <main>
     <h2>Elo ranking</h2>
+    <div class="card" id="rerate-card" style="margin-bottom:8px;">
+      <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end;">
+        <div>
+          <div class="stat-label">queue a rerate job</div>
+          <div class="muted small">re-runs head-to-heads vs the top opponent set, updates Elo. Picked up by any worker accepting admin jobs.</div>
+        </div>
+        <label class="small muted">level
+          <br><select id="rr-level" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+            <option value="random_close_4_5">random_close_4_5</option>
+            <option value="random_4_8">random_4_8</option>
+            <option value="random_8_16" selected>random_8_16 (canonical)</option>
+            <option value="random_16_24">random_16_24</option>
+            <option value="random_full_mix">random_full_mix</option>
+          </select>
+        </label>
+        <label class="small muted">matches/run
+          <br><input id="rr-matches" type="number" min="1" max="20" value="4" style="width:70px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+        </label>
+        <label class="small muted">games/match
+          <br><input id="rr-games" type="number" min="8" max="256" step="8" value="64" style="width:80px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+        </label>
+        <label class="small muted">max runs
+          <br><input id="rr-max-runs" type="number" min="1" max="200" value="30" style="width:80px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+        </label>
+        <button id="rr-submit" class="btn-primary" style="height:30px;">Queue rerate</button>
+        <span id="rr-status" class="muted small"></span>
+      </div>
+    </div>
     <div class="card muted" id="summary">Loading…</div>
 
     <div class="card" id="ranking">
@@ -229,6 +257,46 @@
 
     load().catch(e => {
       $summary.innerHTML = `<span class="error">${esc(e.message)}</span>`;
+    });
+
+    // -----------------------------------------------------------------
+    // "Queue rerate" form. Inserts a row into `runs` with simulator_id =
+    // 'admin' + hyperparams.kind = 'rerate'. The worker (any machine
+    // not in 'matches only' mode that accepts admin jobs) picks it up
+    // via claim_next_job() and dispatches to workers.jobs.rerate.
+    // -----------------------------------------------------------------
+    const $rrSubmit = document.getElementById('rr-submit');
+    const $rrStatus = document.getElementById('rr-status');
+    $rrSubmit?.addEventListener('click', async () => {
+      const level    = document.getElementById('rr-level').value;
+      const matches  = parseInt(document.getElementById('rr-matches').value, 10);
+      const games    = parseInt(document.getElementById('rr-games').value, 10);
+      const maxRuns  = parseInt(document.getElementById('rr-max-runs').value, 10);
+      if (!level || !matches || !games || !maxRuns) {
+        $rrStatus.innerHTML = '<span class="error">fill in all fields</span>';
+        return;
+      }
+      const ts = new Date().toISOString().slice(2,16).replace(/[-T:]/g,'').replace(/(\d{6})(\d{4})/, '$1-$2');
+      const label = `rerate-${ts}-${level}-m${matches}-g${games}-r${maxRuns}`;
+      $rrSubmit.disabled = true;
+      $rrStatus.textContent = 'queueing…';
+      const { data, error } = await sb.from('runs').insert({
+        project: 'mushroom-wars',
+        model_id: 'admin',
+        simulator_id: 'admin',
+        label,
+        status: 'queued',
+        budget_ms: 0,
+        machine: '',
+        launch_at: Date.now(),
+        hyperparams: { kind: 'rerate', level, matches, games, max_runs: maxRuns },
+      }).select('id').single();
+      $rrSubmit.disabled = false;
+      if (error) {
+        $rrStatus.innerHTML = `<span class="error">${esc(error.message)}</span>`;
+        return;
+      }
+      $rrStatus.innerHTML = `queued <a href="./run.html?id=${esc(data.id)}">${esc(label)}</a> · pickup by any worker accepting admin jobs`;
     });
 
     // -----------------------------------------------------------------

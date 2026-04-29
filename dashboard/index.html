@@ -116,13 +116,13 @@
         return;
       }
       const modeOf = w => w.paused ? 'off' : (w.matches_only ? 'matches' : 'full');
-      const descOf = m => m === 'off' ? 'paused' : m === 'matches' ? 'matches only' : 'taking jobs';
+      const descOf = m => m === 'off' ? 'paused' : m === 'matches' ? 'matches + admin jobs' : 'all jobs (training + matches + admin)';
       const dotOf  = m => m === 'off' ? 'off' : 'on';
       $workers.innerHTML = data.map(w => {
         const label = MACHINE_LABEL[w.machine] ?? w.machine;
         const mode = modeOf(w);
         const btn = (m, target, cls) =>
-          `<button data-machine="${esc(w.machine)}" data-target="${target}" class="${cls}"${m===target?' disabled':''}>${target==='full'?'Full':target==='matches'?'Matches only':'Off'}</button>`;
+          `<button data-machine="${esc(w.machine)}" data-target="${target}" class="${cls}"${m===target?' disabled':''}>${target==='full'?'All':target==='matches'?'Admin':'Off'}</button>`;
         return `<div class="worker-row">
           <span class="worker-dot ${dotOf(mode)}"></span>
           <strong>${esc(label)}</strong>
@@ -335,6 +335,27 @@
           ? (Date.now() - new Date(r.started_at).getTime())
           : r.wall_ms;
         const tsLabel = r.finished_at ?? r.started_at ?? r.queued_at;
+        // Admin jobs (sim='admin') don't have model/level/games/Elo —
+        // render the kind + matches_done/failed instead.
+        if (r.simulator_id === 'admin') {
+          const kind = r.result?.kind ?? r.hyperparams?.kind ?? 'job';
+          const md = r.result?.matches_done, mf = r.result?.matches_failed;
+          const summary = (md != null) ? `${md} ok · ${mf || 0} failed` : '—';
+          return tr([
+            statusPill(r.status),
+            `<a href="./run.html?id=${esc(r.id)}">${esc(r.label)}</a>`,
+            `<span class="mono small">job:${esc(kind)}</span>`,
+            `<span class="mono small">—</span>`,
+            `<span class="mono">${esc(r.machine ?? '')}</span>`,
+            fmtDuration(wallMs),
+            `<span class="mono">—</span>`,
+            `<span class="mono">${summary}</span>`,
+            `<span class="muted">—</span>`,
+            `<span class="muted">—</span>`,
+            `<span class="muted">—</span>`,
+            `<span class="muted">${fmtTime(tsLabel)}</span>`,
+          ]);
+        }
         return tr([
           statusPill(r.status),
           `<a href="./run.html?id=${esc(r.id)}">${esc(r.label)}</a>`,
@@ -378,10 +399,15 @@
         return;
       }
       const rows = data.map(r => {
-        const lvl = r.hyperparams?.level_name ?? '—';
-        const opp = r.hyperparams?.opponent_name ?? 'random_legal';
-        const K   = r.hyperparams?.action_repeat ?? 1;
-        const budget = r.budget_ms ? fmtDuration(r.budget_ms) : '—';
+        const isJob = r.simulator_id === 'admin';
+        const lvl = isJob
+          ? `job:${r.hyperparams?.kind ?? 'admin'}`
+          : (r.hyperparams?.level_name ?? '—');
+        const opp = isJob
+          ? `${r.hyperparams?.matches ?? '?'}m × ${r.hyperparams?.games ?? '?'}g × ${r.hyperparams?.max_runs ?? '?'}r`
+          : (r.hyperparams?.opponent_name ?? 'random_legal');
+        const K   = isJob ? '—' : (r.hyperparams?.action_repeat ?? 1);
+        const budget = isJob ? '—' : (r.budget_ms ? fmtDuration(r.budget_ms) : '—');
         // Inline ❌ button — clears the run via Supabase. Confirms first
         // because deletes are irreversible and a fat-fingered click on a
         // queued sweep is annoying to recover from.

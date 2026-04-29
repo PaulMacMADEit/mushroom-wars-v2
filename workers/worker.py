@@ -113,6 +113,43 @@ def build_net_for_model(model_id: str, obs_size: int, num_actions: int) -> Actor
 # Claim + finalize
 # ---------------------------------------------------------------------------
 
+def _claim_via(conn, fn_name: str, machine: str):
+    """Shared body for claim_one / claim_one_job."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT id, model_id, simulator_id, label, budget_ms, seed, "
+            f"hyperparams::text, parent_run_id "
+            f"FROM {fn_name}(%s, %s)",
+            (PROJECT, machine),
+        )
+        row = cur.fetchone()
+    conn.commit()
+    return row
+
+
+def claim_one_job(conn, machine: str):
+    """Call claim_next_job (admin sim only); return dict or None.
+
+    Used when matches_only=true so the worker still picks up rerate /
+    bench_eval jobs but skips real training queues.
+    """
+    row = _claim_via(conn, "claim_next_job", machine)
+    if row is None:
+        return None
+    id_, model_id, sim_id, label, budget_ms, seed, hp_text, parent_id = row
+    return {
+        "id":           id_,
+        "model_id":     model_id,
+        "sim_id":       sim_id,
+        "label":        label,
+        "budget_ms":    budget_ms,
+        "seed":         seed,
+        "hyperparams":  json.loads(hp_text) if hp_text else {},
+        "parent_run_id": parent_id,
+        "parent":       None,
+    }
+
+
 def claim_one(conn, machine: str):
     """Call claim_next_run; return dict or None.
 
@@ -120,15 +157,7 @@ def claim_one(conn, machine: str):
     caller can init the trainer from the parent's weights + optimizer +
     obs_norm.
     """
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT id, model_id, simulator_id, label, budget_ms, seed, "
-            "hyperparams::text, parent_run_id "
-            "FROM claim_next_run(%s, %s)",
-            (PROJECT, machine),
-        )
-        row = cur.fetchone()
-    conn.commit()
+    row = _claim_via(conn, "claim_next_run", machine)
     if row is None:
         return None
     id_, model_id, sim_id, label, budget_ms, seed, hp_text, parent_id = row
@@ -1222,9 +1251,12 @@ def main():
                     time.sleep(args.poll_interval)
                     continue
 
-                # 1) Try training runs first (longer, higher priority) — unless
-                # this machine is in matches_only mode (dashboard-controlled).
-                job = None if matches_only else claim_one(conn, args.machine)
+                # 1) Try queued runs. matches_only mode: admin jobs only
+                # (rerate, etc.). Full mode: any queued run.
+                if matches_only:
+                    job = claim_one_job(conn, args.machine)
+                else:
+                    job = claim_one(conn, args.machine)
                 if job is None:
                     # 2) Fall back to queued eval matches. Filter by
                     # `summary.target_machine` so interactive-play matches
@@ -1248,11 +1280,37 @@ def main():
 
                 idle_streak = 0
                 claimed = job
+                is_admin_job = (job["sim_id"] == "admin")
                 print(f"[worker] claimed run id={job['id']} label={job['label']!r} "
                       f"model={job['model_id']} sim={job['sim_id']} "
-                      f"budget={job['budget_ms']}ms seed={job['seed']!r}")
+                      f"budget={job['budget_ms']}ms seed={job['seed']!r}"
+                      + (" [admin job]" if is_admin_job else ""))
 
-                model_meta = fetch_model_meta(conn, job["model_id"])
+                # Admin jobs (sim_id='admin') skip the training path entirely.
+                # The handler module manages its own DB connection and calls
+                # mark_done / mark_failed on completion.
+                if is_admin_job:
+                    model_meta = None
+                else:
+                    model_meta = fetch_model_meta(conn, job["model_id"])
+
+            if is_admin_job:
+                from workers.jobs import dispatch as dispatch_job
+                t0 = time.time()
+                try:
+                    dispatch_job(claimed, mark_done, mark_failed)
+                except Exception as job_exc:
+                    err = f"{job_exc.__class__.__name__}: {job_exc}\n\n{traceback.format_exc()}"
+                    print(f"[worker] admin job error: {err}")
+                    wall_ms = int((time.time() - t0) * 1000)
+                    try:
+                        with connect() as conn:
+                            mark_failed(conn, claimed["id"], err, wall_ms)
+                    except Exception as exc2:
+                        print(f"[worker] failed to mark job failed: {exc2}")
+                if args.one:
+                    return
+                continue
 
             # Training happens outside the `with connect()` block so we don't
             # hold a DB connection for the whole training run.
