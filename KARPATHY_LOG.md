@@ -3209,6 +3209,79 @@ each. Will produce direct evidence for whether per-tick shaping (v1.4) is
 still helping under rotation, or whether the active-policy gains from v14
 (noted at v14-bake on 2026-04-29) plateau under the new opponent mix.
 
+### Loop fire 70 — 2026-04-29 16:30 PT — 🟢 reward_version A/B clean signal: v1.4 wins by +58 Elo; max_grad_norm sweep flat (U-shaped); cont-chain batch 01 running; critic mis-cal 3-for-3
+
+**State.** Worker active, backstop active. Karp queue cleared except cont-batch
+running. Queue: `karpv2-cont-0791c618-01` running (started 16:26, ETA 16:46) +
+this fire just queued entropy_coef sweep (3 cells) = depth 4.
+
+**Chain status (cont-0791c618):** batch 01 running. Helper called, no-op as
+expected — waits for head to finish.
+
+**Recent finished karp- runs since fire 69:**
+
+| label | swept_var | dur | Elo | n | PFSP |
+|---|---|---|---|---|---|
+| `karpv2-...1532-max_grad_norm-mid` | 0.5 | 32.2m | 929.8 | 20 | 0.794 |
+| `karpv2-...1532-max_grad_norm-hi` | 1.0 | 39.1m | 1001.3 | 20 | 0.716 |
+| `karpv2-...1600-reward_version-lo` | v1.3 | 17.6m | 1003.4 | 16 | 0.801 |
+| `karpv2-...1600-reward_version-hi` | v1.4 | 24.6m | **1061.9** | 13 | 0.702 ⭐ |
+
+**Backfill (more bench data):**
+- value_coef-{lo,mid,hi}: 959/968/964 → **955/960/944** (n: 12→20). Still flat.
+- max_grad_norm-lo: 1003 → **990** (n: 12→20).
+
+**Key reads:**
+- 🟢 **reward_version A/B is the cleanest signal of the day. v1.4 beats v1.3 by
+  +58 Elo (1062 vs 1003)** at the same opponent mix. Confirms the v14-as-default
+  decision (2026-04-29 baseline bake) holds under random_champion rotation.
+  Per-tick building/units shaping is doing real work, not just front-loading
+  the easy random_legal regime.
+- **max_grad_norm is U-shaped, not monotonic.** mid (0.5, baseline) at 930 is
+  the worst; lo (0.25) at 990 and hi (1.0) at 1001 both better. Either noise at
+  n=20 or genuine sensitivity to clipping at the baseline. Worth a redo on the
+  axis when we cycle back; doesn't justify changing the baseline.
+- **value_coef confirmed flat with full n=20 data.** 11 Elo span across all
+  three. Default 0.5 stays.
+
+**Karp leaderboard (top karpv2):**
+
+| run | elo | n | when |
+|---|---|---|---|
+| `karpv2-260429-1448-cont-update_epochs-hi-20min` | **1071.7** | 16 | fire 68 + backfill |
+| `karpv2-260429-1600-reward_version-hi` | **1061.9** | 13 | fire 70 (this) ⭐ |
+| `karpv2-260429-1305-n_envs-lo` | 1057.7 | 25 | fire 64 |
+| `karpv2-260429-1244-rollout_steps-lo` | 1030.2 | 10 | fire 62 |
+
+reward_version-hi will likely promote when bench data fills out. cron-era
+champion `cron-260428-0407-phase2_selfplay-med-00` still untouched at 1147.
+
+**Review games (most-recent rated, `karpv2-...1600-reward_version-hi`):**
+
+| game | tag | ticks | decisions | noop% | entropy | value drop | top types | flags |
+|---|---|---|---|---|---|---|---|---|
+| `7b91107f` | WIN | 92 | 46 | 39% | 3.35 | -1.86 | noop=39% 100%=22% 75%=17% | ok |
+| `9542ae9b` | LOSS | 15 | 8 | 75% | 3.91 | +3.57 | noop=75% 50%=12% 100%=12% | high noop rate 75% |
+
+🚩 **Critic mis-cal pattern is now 3-for-3:**
+
+| fire | run | LOSS noop% | LOSS value drop |
+|---|---|---|---|
+| 68 | `cont-update_epochs-hi-20min` | 64% | +8.9 |
+| 69 | `max_grad_norm-lo` | 55% | +6.6 |
+| 70 | `reward_version-hi` | 75% | +3.6 |
+
+Every loss the critic was over-confident right before losing. Entropy is fine
+(3.4-3.9). Issue is value-head calibration, not policy exploration. Hypothesis
+firming up: **random_champion rotation = critic never sees enough of any one
+opponent to calibrate against them**. Candidate fixes for a future axis:
+1. `opponent_pool_mode: ""` (fixed-per-run opponent) — direct test
+2. Bigger n in bench_eval (n>20) — tighter Elo, fewer false positives
+3. Slower rotation (`rotate_per_4_updates` if available, or pin per cell)
+
+**Queued.** entropy_coef sweep ({0.003, 0.01, 0.03}) via round-robin. New cycle
+starts; round-robin wrapped after reward_version.
+
 ## Code changes during loop
 
 ### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
