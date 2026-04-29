@@ -2223,6 +2223,47 @@ worker's 9GB-at-5h crash was workload-specific, not a leak.**
 
 **Queue:** 1 running + 2 queued = 3. Skipped queueing.
 
+### Loop fire 51 — 2026-04-29 08:19 PT — max_grad_norm cycle-3: lo restricts gradients too hard
+
+**State.** Worker PID 4019322, **14h 49min uptime**, RSS 6.61GB
+plateau holding 12+ consecutive fires. Champion +6 rebound to 1168
+(continuing recovery from -23 dip earlier).
+
+**max_grad_norm cycle-3 progress (NEW axis):**
+
+| run | max_grad_norm | Elo | wins/24 |
+|---|---|---|---|
+| -lo (0.25) | **1010** | 6 |
+| -mid (0.50 baseline) | 1020 | (race condition) |
+| -hi (1.00) | running, just started | — |
+
+**mid > lo by 10 Elo so far.** Range 10 Elo (small). Will see hi.
+
+**max_grad_norm-lo cycle-3 game review:**
+- WIN: 38 ticks, 47% noop, 100%/75% backup — moderate-passive
+- LOSS: **11 ticks, 50% noop, ONLY 100%/noop** (binary action set!),
+  value drop +7.49 (panicked)
+- **Only 6/24 wins** — among the lowest of cycle-3 cells
+
+**max_grad_norm=0.25 (small grad clip)** = restrict gradient updates
+aggressively → cautious learning. Result:
+- middling-passive WIN
+- panicked-binary LOSS (no 75%-sends, no 50%-sends)
+- only 6 wins
+
+Restricting gradients too hard hurts both action diversity AND
+resilience. **Same theme as fire-50's "mid is the worst" pattern
+on value_coef** — but here lo (not mid) is worst because the axis
+direction reversed (low max_grad_norm = MORE restrictive, not less).
+
+**Queue.** 1 running + 0 queued = 1. After hi finishes, backstop
+will pick reward_version (already done as A/B) or cycle through
+again. **The loop has now covered all 11 axes** at least once in
+cycle-3 (gae_lambda, update_epochs, minibatch_size, value_coef,
+max_grad_norm = 5 NEW axes added this cycle).
+
+**Skipped queueing.**
+
 ## Code changes during loop
 
 ### 2026-04-29 01:55 PT — fix scripts/karp_review_games.py for tied created_at
