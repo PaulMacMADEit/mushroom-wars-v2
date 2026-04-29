@@ -2845,6 +2845,73 @@ random_close_4_5, reward_version=2. Worker fresh, GPU 18% (between iters).
 This sweep will tell us whether **fewer-but-smaller-rollouts** or
 **more-rollouts-bigger** wins under v2 bootstrap.
 
+### Loop fire 62 — 2026-04-29 13:11 PT — 🟢 FIRST KARPV2 ABOVE ANCHOR (Elo 1030); update density change WORKED
+
+**State.** Worker PID 1710960 (NEW — restarted again ~13:05 PT, 5min
+elapsed). RSS 3.89GB (fresh JAX cache, much smaller than old worker's
+6.6GB plateau). GPU 0% between iters. Champion **+3 to 1190**.
+
+Two new commits since fire 61 (Paul's): `2913a42 levels: single source
+of truth` and `a1ed6e8 play.html chunked level picker`. Worker restart
+likely triggered by the levels code change.
+
+**🟢 First karpv2- run ABOVE THE ANCHOR:**
+
+| run | rs | Elo | rate | sps | updates |
+|---|---|---|---|---|---|
+| rollout_steps-lo | **4** | **1030** | **0.423** | 275 | **21** |
+| rollout_steps-mid | 8 | failed (worker restart cleanup) | — | — | — |
+| rollout_steps-hi | 16 | 962 | 0.157 | 288 | 6 |
+
+**The update density change WORKED.** Going from 3 → 21 updates per
+cell pushed training rate from 13.4% → 42.3% vs the champion. Elo
+crossed the 1000 anchor for the first time under v2.
+
+**Direction confirmed:** rs=4 (1030, 21 updates) > rs=16 (962, 6 updates).
+Fewer rollouts → more updates → better learning. Same theme as v1's
+"smaller-fewer-faster wins" but at smaller absolute values.
+
+**🚨 THREE new loop records on rollout_steps-lo game review:**
+
+| metric | value | prior record |
+|---|---|---|
+| WIN value-drop | **-8.30** | -3.74 (fire 60) |
+| **LOSS value-drop** | **+46.40 ⚠️** | +12.93 (fire 59) |
+| LOSS type-collapse | **75%-sends 73%** | first 75%-dominant 67% (fire 57) |
+
+**+46.40 LOSS value-drop is wildly out of band** — every prior LOSS
+sample was +0 to +13. The value head is finally LEARNING (both
+directions: -8 in win = underestimated; +46 in loss = massively
+overestimated) but also becoming UNCALIBRATED. Likely v14 per-tick
+shaping accumulating across 30 ticks of losing position interacts
+with the now-learning value head in unexpected ways.
+
+**WIN sample:** 7 ticks, 50% noop, 100%/75%-sends balanced 25%/25%.
+Fast win via balanced action selection.
+**LOSS sample:** 30 ticks, 75%-sends 73% — agent committed to medium
+sends repeatedly and lost.
+
+**Other karpv2 progress this session:**
+
+| run | rs | lr | Elo | rate | updates |
+|---|---|---|---|---|---|
+| n_envs-lo (1305) | 8 | 1e-3 | 1000 (unrated) | **0.404** | 18 |
+| n_envs-hi (1305) | (running) | — | — | — | — |
+
+n_envs-lo got 18 updates and 40.4% rate — confirms the 21-update
+rs=4 result wasn't a fluke. **The new config consistently produces
+12-21 updates/cell with 40%+ training rates.**
+
+**Some failed runs from transient worker-restart races:**
+- karpv2-260429-1249-n_envs-lo/mid: `make_neural_opponent() got an
+  unexpected keyword argument 'opponent_run_id'` — but the opponent_kwargs
+  were IDENTICAL to runs that succeeded. **Transient race during worker
+  claim, not a real bug.** Per project memory ("don't burn >5min on
+  diagnostics") — logged and moved on.
+
+**Queue:** 2 queued (n_envs-mid + n_envs-hi second batch), 1 running
+(n_envs-hi from earlier batch). Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
