@@ -718,10 +718,21 @@ class PPOTrainer:
             self._fused_bookkeeping["opponent_fn"] = new_opponent
 
         # Update the dashboard label so the run page shows which opponent
-        # the agent is currently training against. The basename of the
-        # weights_path's parent dir is the run_id-derived tempdir name.
+        # the agent is currently training against. PFSP downloader writes
+        # files as `{champ_id[:8]}-weights.pt` in a SHARED tempdir, so we
+        # extract the champ_id from the filename, not the dirname (which
+        # would be the same for every archive member → all labels collapse).
         weights_path = self._leaderboard[idx][0]
-        opp_id = os.path.basename(os.path.dirname(str(weights_path))) if weights_path else "?"
+        if weights_path:
+            fname = os.path.basename(str(weights_path))
+            # Strip suffix to recover the {champ_id[:8]} prefix.
+            for suffix in ("-weights.pt", ".pt"):
+                if fname.endswith(suffix):
+                    fname = fname[: -len(suffix)]
+                    break
+            opp_id = fname
+        else:
+            opp_id = "?"
         if self._initial_opponent_kwargs is None:
             self._initial_opponent_kwargs = {}
         self._initial_opponent_kwargs["_label_opponent_run_id"] = opp_id
