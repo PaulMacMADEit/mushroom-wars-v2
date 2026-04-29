@@ -28,17 +28,17 @@ from cli.db import connect, PROJECT
 from cli.loop_config import load
 
 
-_KARP_AXIS_RE = re.compile(r"^karp-\d{6}-\d{4}-([a-z_]+)-(?:lo|mid|hi)$")
+_KARP_AXIS_RE = re.compile(r"^karpv2-\d{6}-\d{4}-([a-z_]+)-(?:lo|mid|hi)$")
 
 
 def _last_karp_axis() -> str | None:
-    """Most-recent karp- run's axis (from labels), or None if no karp- runs yet."""
+    """Most-recent karpv2- run's axis (from labels), or None if no karpv2- runs yet."""
     with connect() as c, c.cursor() as cur:
         cur.execute(
             """
             SELECT label
               FROM runs
-             WHERE project = %s AND label LIKE 'karp-%%'
+             WHERE project = %s AND label LIKE 'karpv2-%%'
              ORDER BY queued_at DESC
              LIMIT 30
             """,
@@ -118,7 +118,7 @@ def queue_sweep(axis: str | None, dry_run: bool, baseline_overrides: dict) -> No
     rows = []
     for cell in cells:
         hp = {**base_hp, axis_obj.axis: cell["value"]}
-        label = f"karp-{stamp}-{axis_obj.axis}-{cell['label']}"
+        label = f"karpv2-{stamp}-{axis_obj.axis}-{cell['label']}"
         desc  = f"Karpathy sweep: {axis_obj.axis}={cell['value']}"
         rows.append((cell, label, desc, hp))
 

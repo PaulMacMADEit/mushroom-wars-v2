@@ -22,7 +22,7 @@
 # ---------------------------------------------------------------------------
 schedule:
   fire_interval_seconds: 1800     # 30min between Claude-side wakeups
-  cell_budget_seconds:   1200     # per-cell wall-time → 3 cells × 20min = 60min/sweep
+  cell_budget_seconds:   600      # per-cell wall-time → 10min cells (small maps, fast iter)
   max_karp_queue_depth:  6        # skip queueing if >= this many karp-* are pending
   idle_fires_before_stop: 0       # 0 = never stop on idleness
 
@@ -31,7 +31,7 @@ schedule:
 # ---------------------------------------------------------------------------
 queue_policy:
   stale_running_minutes:    90    # 'running' for longer than this → mark failed
-  protected_label_prefix:   "karp-"  # only these survive non-karp purge
+  protected_label_prefix:   "karpv2-"  # NEW REGIME 2026-04-29: vs-champion + curriculum, no random_legal
   protected_label_patterns: []    # additional regexes never to cancel
 
 # ---------------------------------------------------------------------------
@@ -51,8 +51,8 @@ model:
 #   latest_champion  — sugar; queue_karp_sweep.py resolves to opponent_name=neural
 #                      with opponent_kwargs.opponent_run_id = champions[0].source_run_id
 training_opponent:
-  name: "random_legal"
-  kwargs: {}                      # e.g. for neural: {device: cuda, opponent_run_id: <uuid>}
+  name: "latest_champion"         # 2026-04-29 regime change: NO random_legal. Train vs the live champion always.
+  kwargs: {}                      # queue_karp_sweep.py auto-resolves to neural+champion's run_id
 
 # ---------------------------------------------------------------------------
 # Baseline PPO hyperparameters
@@ -105,19 +105,18 @@ baseline_hyperparams:
   #   v1.2 (0): legacy; capture 0.10, win 1.0, no speed bonus
   #   v1.3 (1): 5x WIN/LOSE, halved capture, draw -0.5, 4x speed bonus
   #   v1.4 (2): v1.3 + per-tick shaping for buildings_owned + units_held deltas
-  #             (designed to break mutual-noop equilibrium under random_legal)
-  # `reward_version` is canonical (overrides reward_v13 when ≥0). Keep
-  # reward_v13 around for back-compat with older runs.
+  # `reward_version` is canonical (overrides reward_v13 when ≥0).
+  # 2026-04-29: v14 baked as new regime default — produces active varied policies
+  # (fire 55: 19/24 wins, full 4-action vocabulary in losses).
   reward_v13: true
-  reward_version: 1
+  reward_version: 2
 
   # ----- Level distribution (per-env sampling on each reset) -----
-  level_name: "random_full_mix"
-  level_mix:
-    random_4_8:   0.50              # easy maps; biased here per Paul 2026-04-28
-    random_6_10:  0.40
-    random_8_16:  0.10
-    random_16_24: 0.00              # zeroed out; bring back if generalist matters
+  # 2026-04-29 curriculum reset: 4-5 building close-map games only. Master
+  # the basics first, ramp up later. Close map = 350x350 (vs 700x700 default)
+  # = ~half travel time = many more episodes per wall-second. Fast iteration.
+  level_name: "random_close_4_5"
+  # level_mix removed — single level only at this curriculum stage.
 
 # ---------------------------------------------------------------------------
 # Sweep axes (round-robin, one per fire)

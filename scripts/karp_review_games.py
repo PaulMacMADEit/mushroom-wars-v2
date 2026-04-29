@@ -32,7 +32,7 @@ def _latest_rated_karp_label(sb) -> str | None:
     res = (
         sb.table("runs")
         .select("label,queued_at")
-        .like("label", "karp-%")
+        .like("label", "karpv2-%")
         .eq("elo_status", "rated")
         .order("queued_at", desc=True)
         .limit(1)

@@ -36,16 +36,16 @@ from cli.db import connect, PROJECT
 # limit pile-up.
 
 def _karp_is_active() -> tuple[bool, str]:
-    """True iff there's a queued or running karp- run. Anything else is idle."""
+    """True iff there's a queued or running karpv2- run. Anything else is idle."""
     with connect() as c, c.cursor() as cur:
         cur.execute("""
             SELECT count(*) FROM runs
-             WHERE project=%s AND label LIKE 'karp-%%'
+             WHERE project=%s AND label LIKE 'karpv2-%%'
                AND status IN ('queued','running')
         """, (PROJECT,))
         n_live = cur.fetchone()[0]
     if n_live > 0:
-        return True, f"{n_live} karp- run(s) queued/running"
+        return True, f"{n_live} karpv2- run(s) queued/running"
     return False, "queue empty"
 
 
