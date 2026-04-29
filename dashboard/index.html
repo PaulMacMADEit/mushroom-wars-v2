@@ -314,7 +314,7 @@
       // in-progress run is the first thing you see when you land.
       const { data, error } = await sb
         .from('runs')
-        .select('id, label, status, machine, model_id, simulator_id, wall_ms, queued_at, started_at, finished_at, result, hyperparams, elo_score, elo_n_matches')
+        .select('id, label, status, machine, model_id, simulator_id, wall_ms, games_played, queued_at, started_at, finished_at, result, hyperparams, elo_score, elo_n_matches')
         .in('status', ['running', 'done', 'failed'])
         .order('finished_at', { ascending: false, nullsFirst: true })  // nulls (running) first
         .order('started_at',  { ascending: false, nullsFirst: false })
@@ -343,6 +343,7 @@
           `<span class="mono">${esc(r.machine ?? '')}</span>`,
           fmtDuration(wallMs),
           `<span class="mono">${esc(String(r.result?.updates ?? '—'))}</span>`,
+          `<span class="mono">${(r.games_played ?? 0).toLocaleString()}</span>`,
           fmtPct(r.result?.rate),
           `<span class="mono">${fmtElo(r.elo_score, r.elo_n_matches)}</span>`,
           `<span class="mono">${ticksPerMin(sps)}</span>`,
@@ -353,7 +354,7 @@
         <table>
           <thead><tr>
             <th>status</th><th>label</th><th>model</th><th>sim</th><th>machine</th>
-            <th>wall</th><th>updates</th><th>rate</th><th>Elo (n)</th><th>ticks/min</th><th>updated</th>
+            <th>wall</th><th>updates</th><th>games</th><th>rate</th><th>Elo (n)</th><th>ticks/min</th><th>updated</th>
           </tr></thead>
           <tbody>${rows.join('')}</tbody>
         </table>`;
