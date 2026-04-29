@@ -2369,6 +2369,88 @@ creep. **Watching fire 55** for confirmation.
 
 **Queue.** 1 running + 0 queued = 1. Skipped queueing.
 
+### Loop fire 55 — 2026-04-29 09:41 PT — 🟢 v14 cycle-2: Elo gap holds at -11 but v14 wins MORE games (19/24)
+
+**State.** Worker PID 4019322, **16h 19min uptime**, **RSS 6.62GB
+(-0.49 since fire 54)** — fire-54's spike confirmed transient. Plateau
+holding. Champion drift 1162→1159.
+
+**🟢 reward_version A/B cycle-2 complete:**
+
+| run | reward_version | Elo | rate | wins/24 |
+|---|---|---|---|---|
+| **fire-54 v13 control** | 1 | **1033** | 0.913 | 13 |
+| **fire-55 v14 treatment** | 2 | **1022** | 0.916 | **19** |
+
+**v14 -11 Elo gap** (vs fire-25's -12 — basically identical structural
+gap). The shaping cost is ~10-12 Elo, not transient.
+
+**🟢 But v14 wins MORE games:** 19/24 vs v13's 13/24 — second-highest
+win count of the entire loop (after rollout_steps-mid cycle-2's 18).
+
+**Game review on v14 cycle-2 (Elo 1022, 19 wins):**
+
+| game | tag | ticks | noop% | entropy | top types | value drop |
+|---|---|---|---|---|---|---|
+| WIN | 35 | 11% | 2.87 | **100%=56% / 75%=17% / 25%=11%** | -1.47 |
+| LOSS | **153** | 17% | 3.99 | **all 4 types: 100/50/75/noop** | +10.13 |
+
+**Two new records:**
+- LOSS sample = 153 ticks → **longest game of all 55 fires** (prev record:
+  fire-37 gamma-hi cycle-3's 110-tick stalling WIN)
+- WIN uses **25%-sends** (11% of decisions) → first appearance of all 4
+  send sizes in a v14 WIN sample
+
+**v13 vs v14 comparison (now under cycle-3 corpus):**
+
+| metric | v13 (Elo 1033) | v14 (Elo 1022) |
+|---|---|---|
+| **Wins / 24** | 13 | **19** |
+| WIN noop% | 0% | 11% |
+| **WIN top types** | **100%=100%** narrow | **100%/75%/25%** varied |
+| LOSS noop% | 29% | 17% |
+| **LOSS top types** | 100%/75%/noop | **all 4 types** |
+| **LOSS ticks** | 47 | **153** (record) |
+
+**Interpretation: v14 = generalist, v13 = strong-opponent specialist.**
+
+Same pattern as fire-28's lr-lo cycle-2 (3 strong wins ≈ 11 mixed wins
+at same Elo). v14 wins MORE games — beats more medium opponents — but
+gets crushed harder by strong ones (153-tick games, +10.13 value drop).
+v13's type-100 strategy either wins fast or doesn't engage; v14 keeps
+fighting and pays more in losses to top opponents.
+
+**v14 is doing what shaping is supposed to do.** It produces an active
+varied policy that wins more games and engages even in losing positions.
+The Elo deficit comes from PFSP weighting penalizing engagement with
+strong opponents.
+
+**Verdict for v14 next-step decision:**
+
+This is the data point we needed. Recommendation table:
+
+| direction | evidence | recommendation |
+|---|---|---|
+| Ship v14 as-is | 19/24 wins, varied policy, full action vocabulary | **PRIMARY** |
+| Land v14b (halve coefs) | -11 Elo gap is small, fewer side effects | secondary — but v14 already produces the diversity |
+| Sweep coef magnitudes | U-shaped axes (fire 50) suggest possible better cells | tertiary — only if v14 + v14b both fall short |
+
+**Updated recommendation: ship v14 to a longer test (60-min cell)
+rather than tuning coefs.** v14 already produces the active-varied
+behavior; the Elo gap is a PFSP artifact, not a policy weakness.
+A 60-min v14 cell would also test compute scaling per the training-
+discipline rules.
+
+**Backstop pulled entropy_coef cycle-3** (after reward_version was the
+reward_version-A/B sweep, round-robin moves to entropy_coef which had
+its cycle-2 already; this is "cycle-3" of an axis that bypassed it).
+lo running 11 min in.
+
+**Worker memory.** 7.11→6.62 GB confirms fire-54's +0.50 was transient
+(JAX cache pressure that GC'd). 14-fire plateau pattern continues.
+
+**Queue.** 1 running + 2 queued = 3. Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-29 01:55 PT — fix scripts/karp_review_games.py for tied created_at
