@@ -1313,6 +1313,59 @@ range was 64 Elo). Will let it run — high diagnostic value.
 something v14-related autonomously would step on Paul's pending
 decision (5 options surfaced fire 25, no call yet).
 
+### Loop fire 28 — 2026-04-28 20:41 PT — lr cycle-2 in flight; lo Elo holds via 3-strong-wins not 11-mixed-wins
+
+**State.** Worker PID 4019322, 3h 19min uptime, RSS 5.79GB (slow
+0.04GB growth over 30 min — slight climb but well below previous
+worker's 9GB ceiling). Champion **+5 to 1171** (drift, identity
+unchanged).
+
+**Backstop pulled lr cycle-2.**
+
+| run | cycle 1 | cycle 2 | Δ |
+|---|---|---|---|
+| -lo (1e-4) | 1073 | **1054** | -19 |
+| -mid (3e-4) | 1036 | running, 4 min in | — |
+| -hi (1e-3) | 1009 | queued | — |
+
+-19 Elo deflation, **biggest single-cell drop** of the cycles seen
+so far (entropy_coef-lo was -9, rollout_steps-lo went unrated).
+
+**🟢 Surprising game-review on lr-lo cycle-2:**
+
+| metric | v13 control (fire 24) | lr-lo cycle-2 (this) |
+|---|---|---|
+| Elo | 1052.7 | 1053.7 |
+| Wins / 24 | **11** | **3** |
+| WIN noop% | 62% | **27%** |
+| WIN ticks | 52 | 22 |
+| LOSS value drop | +6.06 | +9.08 |
+
+**Same Elo, very different policy.** lr-lo cycle-2 wins fewer games
+but those 3 wins are against *stronger opponents* (PFSP weight raises
+the value of beating tough opponents). The agent is more aggressive
+(27% noop in WIN vs 62%), uses 100%-dominant attacks, and concedes
+hard when losing (+9 value drop is largest of the loop).
+
+**Insight:** Elo and win-count are decoupling. The bench corpus has
+matured to where **policy quality ≠ win rate**. A specialist that
+beats 3 strong opponents can score the same as a generalist that
+beats 11 medium ones.
+
+**Implication for v14 next-step.** This makes the v14-vs-v13 -12 Elo
+gap from fire 25 even less meaningful — they could be measuring
+different things. v14 might be a strong-opponent specialist (8 wins
+but high-value), v13 a medium-opponent generalist (11 wins low-value).
+**Recommendation: when Paul re-runs the v14 A/B, also pull per-game
+opponent Elos to compare strong-vs-weak win patterns.**
+
+**Worker memory note.** RSS 5.79GB after 3h 19min — first sustained
+slow growth observed since the early plateau. Prior worker died at
+9GB / 5h. Current trajectory ≈ 0.04GB / 30 min = 0.08GB/hr =
+expected to hit 7GB by 6h, 8GB by 8h. Well within bounds.
+
+**Queue:** 1 running + 1 queued = 2. Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
