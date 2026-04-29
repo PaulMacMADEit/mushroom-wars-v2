@@ -17,6 +17,7 @@
       <a href="./training.html">Training</a>
       <a href="./replays.html">Replays</a>
       <a href="./play.html">Play</a>
+      <a href="./process.html">Process</a>
     </nav>
   </header>
 
@@ -69,19 +70,13 @@
     </div>
 
     <h2>Runs</h2>
-    <div class="card" id="run-tabs">
-      <div style="display:flex; gap:8px; margin-bottom:12px; border-bottom:1px solid var(--border); padding-bottom:8px;">
-        <button class="tab-btn active" data-tab="completed"
-                style="background:var(--accent); color:#000; border:0; padding:6px 14px; border-radius:6px; cursor:pointer;">
-          Completed <span class="muted small" id="completed-count"></span>
-        </button>
-        <button class="tab-btn" data-tab="upcoming"
-                style="background:var(--bg-card); color:var(--fg); border:1px solid var(--border); padding:6px 14px; border-radius:6px; cursor:pointer;">
-          Upcoming <span class="muted small" id="upcoming-count"></span>
-        </button>
-      </div>
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Active &amp; completed <span class="muted small" id="completed-count"></span></h3>
       <div id="tab-completed"><div class="muted">Loading…</div></div>
-      <div id="tab-upcoming" style="display:none;"><div class="muted">Loading…</div></div>
+    </div>
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Upcoming <span class="muted small" id="upcoming-count"></span></h3>
+      <div id="tab-upcoming"><div class="muted">Loading…</div></div>
     </div>
   </main>
 
@@ -99,22 +94,6 @@
     const $tabUpcoming  = document.getElementById('tab-upcoming');
     const $countCompleted = document.getElementById('completed-count');
     const $countUpcoming  = document.getElementById('upcoming-count');
-
-    // Tab switching.
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const tab = btn.getAttribute('data-tab');
-        document.querySelectorAll('.tab-btn').forEach(b => {
-          const isActive = b === btn;
-          b.classList.toggle('active', isActive);
-          b.style.background = isActive ? 'var(--accent)' : 'var(--bg-card)';
-          b.style.color      = isActive ? '#000' : 'var(--fg)';
-          b.style.border     = isActive ? '0' : '1px solid var(--border)';
-        });
-        $tabCompleted.style.display = tab === 'completed' ? '' : 'none';
-        $tabUpcoming.style.display  = tab === 'upcoming'  ? '' : 'none';
-      });
-    });
 
     // Friendly labels for the two known machines. Anything else still shows
     // with its raw hostname.
@@ -331,12 +310,14 @@
     }
 
     async function loadCompleted() {
-      // Done + failed runs, most recent first.
+      // Active (running) + done + failed. Running goes on top so an
+      // in-progress run is the first thing you see when you land.
       const { data, error } = await sb
         .from('runs')
-        .select('id, label, status, machine, model_id, simulator_id, wall_ms, queued_at, finished_at, result, hyperparams, elo_score, elo_n_matches')
-        .in('status', ['done', 'failed'])
-        .order('finished_at', { ascending: false, nullsFirst: false })
+        .select('id, label, status, machine, model_id, simulator_id, wall_ms, queued_at, started_at, finished_at, result, hyperparams, elo_score, elo_n_matches')
+        .in('status', ['running', 'done', 'failed'])
+        .order('finished_at', { ascending: false, nullsFirst: true })  // nulls (running) first
+        .order('started_at',  { ascending: false, nullsFirst: false })
         .limit(30);
       if (error) {
         $tabCompleted.innerHTML = `<div class="error">error: ${esc(error.message)}</div>`;
@@ -344,41 +325,46 @@
       }
       $countCompleted.textContent = data.length ? `(${data.length})` : '';
       if (!data.length) {
-        $tabCompleted.innerHTML = `<div class="muted">no completed runs yet</div>`;
+        $tabCompleted.innerHTML = `<div class="muted">no runs yet</div>`;
         return;
       }
       const rows = data.map(r => {
         const sps = r.result?.steps_per_sec;
+        // For running rows, "wall" is now-vs-started so progress reads live.
+        const wallMs = (r.status === 'running' && r.started_at)
+          ? (Date.now() - new Date(r.started_at).getTime())
+          : r.wall_ms;
+        const tsLabel = r.finished_at ?? r.started_at ?? r.queued_at;
         return tr([
           statusPill(r.status),
           `<a href="./run.html?id=${esc(r.id)}">${esc(r.label)}</a>`,
           `<span class="mono">${esc(r.model_id)}</span>`,
           `<span class="mono small">${esc(r.simulator_id ?? '')}</span>`,
           `<span class="mono">${esc(r.machine ?? '')}</span>`,
-          fmtDuration(r.wall_ms),
+          fmtDuration(wallMs),
           `<span class="mono">${esc(String(r.result?.updates ?? '—'))}</span>`,
           fmtPct(r.result?.rate),
           `<span class="mono">${fmtElo(r.elo_score, r.elo_n_matches)}</span>`,
           `<span class="mono">${ticksPerMin(sps)}</span>`,
-          `<span class="muted">${fmtTime(r.finished_at ?? r.queued_at)}</span>`,
+          `<span class="muted">${fmtTime(tsLabel)}</span>`,
         ]);
       });
       $tabCompleted.innerHTML = `
         <table>
           <thead><tr>
             <th>status</th><th>label</th><th>model</th><th>sim</th><th>machine</th>
-            <th>wall</th><th>updates</th><th>rate</th><th>Elo (n)</th><th>ticks/min</th><th>finished</th>
+            <th>wall</th><th>updates</th><th>rate</th><th>Elo (n)</th><th>ticks/min</th><th>updated</th>
           </tr></thead>
           <tbody>${rows.join('')}</tbody>
         </table>`;
     }
 
     async function loadUpcoming() {
-      // Running + queued runs.
+      // Queued only — `running` lives in the active/completed table now.
       const { data, error } = await sb
         .from('runs')
         .select('id, label, status, machine, model_id, simulator_id, wall_ms, budget_ms, queued_at, started_at, hyperparams')
-        .in('status', ['running', 'queued'])
+        .eq('status', 'queued')
         .order('queued_at', { ascending: true })
         .limit(40);
       if (error) {
@@ -395,6 +381,14 @@
         const opp = r.hyperparams?.opponent_name ?? 'random_legal';
         const K   = r.hyperparams?.action_repeat ?? 1;
         const budget = r.budget_ms ? fmtDuration(r.budget_ms) : '—';
+        // Inline ❌ button — clears the run via Supabase. Confirms first
+        // because deletes are irreversible and a fat-fingered click on a
+        // queued sweep is annoying to recover from.
+        const delBtn = `<button class="run-del btn-danger"
+                                data-id="${esc(r.id)}"
+                                data-label="${esc(r.label)}"
+                                title="delete this queued run"
+                                style="padding:2px 8px; font-size:13px; line-height:1; cursor:pointer;">×</button>`;
         return tr([
           statusPill(r.status),
           `<a href="./run.html?id=${esc(r.id)}">${esc(r.label)}</a>`,
@@ -403,18 +397,35 @@
           `<span class="mono">K=${K}</span>`,
           `<span class="mono">${esc(opp)}</span>`,
           `<span class="mono">${budget}</span>`,
-          `<span class="muted">${r.started_at ? fmtTime(r.started_at) : '—'}</span>`,
           `<span class="muted">${fmtTime(r.queued_at)}</span>`,
+          delBtn,
         ]);
       });
       $tabUpcoming.innerHTML = `
         <table>
           <thead><tr>
             <th>status</th><th>label</th><th>sim</th><th>level</th><th>K</th>
-            <th>opponent</th><th>budget</th><th>started</th><th>queued</th>
+            <th>opponent</th><th>budget</th><th>queued</th><th></th>
           </tr></thead>
           <tbody>${rows.join('')}</tbody>
         </table>`;
+
+      // Wire up delete buttons. One click → confirm → DELETE row → refresh.
+      $tabUpcoming.querySelectorAll('button.run-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.getAttribute('data-id');
+          const label = btn.getAttribute('data-label');
+          if (!confirm(`Delete queued run "${label}"?\n\nThis cannot be undone.`)) return;
+          btn.disabled = true;
+          btn.textContent = '…';
+          // Defensive: only delete rows that are still queued, in case the
+          // worker picked it up between page-load and click.
+          const { error } = await sb.from('runs').delete()
+            .eq('id', id).eq('status', 'queued');
+          if (error) { alert(`delete failed: ${error.message}`); btn.disabled = false; btn.textContent = '×'; return; }
+          loadUpcoming();
+        });
+      });
     }
 
     // ---- Host utilization chart -------------------------------------------

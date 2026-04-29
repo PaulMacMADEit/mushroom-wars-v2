@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mushroom Wars v2 — Process</title>
+  <link rel="stylesheet" href="lib/style.css">
+  <style>
+    /* Page-local styling; keeps style.css clean. */
+    main.process { max-width: 1100px; }
+    .process h2 { margin-top: 32px; }
+    .process h3 { font-size: 14px; margin: 18px 0 8px; color: var(--fg); font-weight: 600; }
+    .process .card p { margin: 8px 0; }
+    .process .card ul, .process .card ol { padding-left: 22px; margin: 8px 0; }
+    .process .card li { margin: 4px 0; }
+    .process .card li code,
+    .process .card p code { font-family: var(--mono); font-size: 12px;
+      background: #0b0d12; padding: 1px 5px; border-radius: 4px;
+      border: 1px solid var(--border); color: var(--fg); }
+    .process table.kpi td:first-child,
+    .process table.kpi th:first-child { width: 38%; }
+    .process .step-num {
+      display: inline-block; width: 22px; height: 22px; line-height: 22px;
+      text-align: center; border-radius: 50%; background: var(--accent);
+      color: #000; font-size: 11px; font-weight: 700; margin-right: 8px;
+    }
+    .process .pill {
+      display: inline-block; font-size: 11px; padding: 1px 8px;
+      border-radius: 10px; margin-left: 8px; vertical-align: middle;
+    }
+    .pill.code   { background: rgba(96,165,250,0.15);  color: var(--accent); }
+    .pill.db     { background: rgba(52,211,153,0.15);  color: var(--accent-2); }
+    .pill.warn   { background: rgba(248,113,113,0.15); color: var(--danger); }
+    .process .toc { columns: 2; column-gap: 24px; }
+    .process .toc a { display: block; padding: 2px 0; font-size: 13px; }
+    .process .footnote { font-size: 11px; color: var(--fg-muted); margin-top: 16px; }
+    .process dl { margin: 8px 0; }
+    .process dt { font-weight: 600; margin-top: 8px; }
+    .process dd { margin-left: 16px; color: var(--fg-muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Mushroom Wars v2</h1>
+    <nav>
+      <a href="./index.html">Overview</a>
+      <a href="./runs.html">Runs</a>
+      <a href="./models.html">Models</a>
+      <a href="./elo.html">Leaderboard</a>
+      <a href="./training.html">Training</a>
+      <a href="./replays.html">Replays</a>
+      <a href="./play.html">Play</a>
+      <a href="./process.html" style="color: var(--fg);">Process</a>
+    </nav>
+  </header>
+
+  <main class="process">
+    <h2 style="margin-top:0;">Process — what one training run actually does</h2>
+    <div class="card">
+      <p>
+        This page walks one training run from the moment something queues it to the
+        moment it lands on the leaderboard. Every number on this page comes from the
+        actual config / code — see the file references at the bottom of each section.
+      </p>
+      <p class="muted small">
+        Last updated: 2026-04-29. If a number here disagrees with the code, the code wins.
+      </p>
+
+      <div class="toc">
+        <a href="#sec-spawn">1. Where runs come from</a>
+        <a href="#sec-cfg">2. Config: what gets set per run</a>
+        <a href="#sec-pick">3. Picking the level + opponent</a>
+        <a href="#sec-rollout">4. Collecting one rollout</a>
+        <a href="#sec-update">5. PPO update</a>
+        <a href="#sec-loop">6. The training loop</a>
+        <a href="#sec-finish">7. End of training</a>
+        <a href="#sec-bench">8. bench_eval — Elo + promotion</a>
+        <a href="#sec-rerate">9. Periodic re-rating</a>
+        <a href="#sec-kpi">10. KPIs — compute budget per run</a>
+        <a href="#sec-noise">11. Where measurement noise comes from</a>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="sec-spawn">1. Where runs come from</h2>
+    <div class="card">
+      <p>
+        There are three sources that drop a row into the <code>runs</code> table with
+        <code>status = "queued"</code>. A worker daemon then picks it up.
+      </p>
+
+      <h3><span class="step-num">A</span>cron-agent (every 3h) <span class="pill code">scripts/cron_agent_pulse.py</span></h3>
+      <p>
+        A systemd timer fires every 3 hours and runs the cron-agent. The agent
+        checks the curriculum phase (phase1_full_mix or phase2_selfplay) and queues
+        a batch shaped like:
+      </p>
+      <ul>
+        <li>6 short cells (~15 min each)</li>
+        <li>4 medium cells (~30 min each)</li>
+        <li>3 long cells (~60 min each)</li>
+        <li>1 endurance cell (~60 min)</li>
+      </ul>
+      <p>
+        Total wall budget per cron fire is roughly 6 hours of compute. The cron-agent
+        also runs Elo review and curriculum graduation checks, but only AFTER queuing
+        the batch (so the worker never sits idle waiting for analysis).
+      </p>
+
+      <h3><span class="step-num">B</span>karpathy-loop (Claude self-paced) <span class="pill code">configs/karpathy_loop.yaml + scripts/queue_karp_sweep.py</span></h3>
+      <p>
+        A separate sweep loop fires roughly every 30 minutes. It reads
+        <code>karpathy_loop.yaml</code>, takes the next sweep axis (e.g. lr, entropy_coef,
+        gamma, reward_version), and queues 3 cells (lo / mid / hi) at
+        <code>cell_budget_seconds = 600</code>. One variable changes; everything else
+        is held at baseline. This is where most of the recent <code>karpv2-*</code>
+        runs come from.
+      </p>
+
+      <h3><span class="step-num">C</span>manual <span class="pill code">scripts/queue_b6.py / queue_v13_validation.py / etc.</span></h3>
+      <p>
+        Hand-written scripts for one-off experiments — for example "queue 4 endurance
+        runs at 90 min vs the b3 champion across seeds 1/2/3/42".
+      </p>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="sec-cfg">2. Config: what gets set per run</h2>
+    <div class="card">
+      <p>
+        Every queued run carries a JSON blob of hyperparameters. Whatever is set
+        there overrides <code>training/trainer.py:PPOConfig</code> defaults. Unknown
+        keys are silently dropped by <code>workers/worker.py</code> — typos = silent
+        no-op. The current karp baseline:
+      </p>
+
+      <table class="kpi">
+        <tr><th>Group</th><th>Field</th><th>Baseline</th><th>What it controls</th></tr>
+        <tr><td rowspan="3">Rollout shape</td>
+          <td>n_envs</td><td>1024</td><td>parallel games per rollout step</td></tr>
+        <tr><td>rollout_steps</td><td>64</td><td>agent decisions per env per update</td></tr>
+        <tr><td>action_repeat (K)</td><td>2</td><td>sim ticks per agent decision</td></tr>
+
+        <tr><td rowspan="2">Engine</td>
+          <td>sim_backend</td><td>jax</td><td>JAX-vmap'd sim on GPU</td></tr>
+        <tr><td>fused_rollout</td><td>true</td><td>step + encode + mask + sample inside one JIT</td></tr>
+
+        <tr><td rowspan="6">PPO</td>
+          <td>update_epochs</td><td>4</td><td>passes over the rollout buffer per update</td></tr>
+        <tr><td>minibatch_size</td><td>512</td><td>samples per SGD step</td></tr>
+        <tr><td>lr</td><td>3e-4</td><td>Adam learning rate</td></tr>
+        <tr><td>gamma / gae_lambda</td><td>0.97 / 0.95</td><td>discount + GAE smoothing</td></tr>
+        <tr><td>clip_range</td><td>0.2</td><td>PPO ratio clip</td></tr>
+        <tr><td>value_coef / entropy_coef</td><td>0.5 / 0.01</td><td>critic + exploration weight</td></tr>
+
+        <tr><td rowspan="2">Reward</td>
+          <td>reward_version</td><td>2 (= v1.4)</td>
+          <td>5× WIN/LOSE, halved capture, draw -0.5, 4× speed bonus, per-tick building+units shaping</td></tr>
+        <tr><td>shaping coefs (v1.4)</td>
+          <td>0.0010 / 0.0002</td>
+          <td>per-tick reward = building_count × 0.001 + units_held × 0.0002</td></tr>
+
+        <tr><td>Level</td>
+          <td>level_name <i>or</i> level_mix</td>
+          <td><code>random_close_4_5</code> (karp) or full mix (cron)</td>
+          <td>each env independently samples a level on reset</td></tr>
+
+        <tr><td>Opponent</td>
+          <td>opponent name</td>
+          <td><code>latest_champion</code> (karp v2) or <code>random_legal</code></td>
+          <td>see §3</td></tr>
+      </table>
+
+      <p class="footnote">
+        Source: <code>configs/karpathy_loop.yaml</code>, <code>training/trainer.py:PPOConfig</code>,
+        <code>scripts/cron_agent_pulse.py:DEFAULT_CFG</code>.
+      </p>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="sec-pick">3. Picking the level + opponent</h2>
+    <div class="card">
+      <h3>3a. Level — what map you train on</h3>
+      <p>
+        Each of the 1024 envs samples a level <i>independently</i> on reset, so a
+        single rollout step can have envs running 4-building games and envs running
+        24-building games at the same time. Two ways to specify:
+      </p>
+      <ul>
+        <li><b>Single level</b> via <code>level_name</code> — e.g. <code>random_close_4_5</code>
+            (350×350 map, 4–5 buildings, ~half travel time of full map).</li>
+        <li><b>Mix</b> via <code>level_mix</code> — e.g.
+            <code>{random_4_8: 0.20, random_6_10: 0.20, random_8_16: 0.30, random_16_24: 0.30}</code>.
+            That's the b6 phase1_full_mix recipe.</li>
+      </ul>
+      <p>
+        Generators live in <code>sim/levels.py</code>. <code>random_close_*</code> is
+        a small map; <code>random_*</code> is the full 700×700 map; <code>asym_*</code>
+        is intentionally unfair (P1 starts closer to neutrals).
+      </p>
+
+      <h3>3b. Opponent — who plays P2 against the learner's P1</h3>
+      <p>
+        Set by <code>opponent_name</code> on the queue row. Five legal values:
+      </p>
+      <dl>
+        <dt><code>random_legal</code></dt>
+        <dd>JAX-on-device uniform-random pick over legal moves. Free (no extra net
+            inference). The default opponent until 2026-04-29.</dd>
+        <dt><code>noop</code></dt>
+        <dd>P2 does nothing. Never used in real training; only for sanity checks.</dd>
+        <dt><code>neural</code></dt>
+        <dd>A frozen past checkpoint loaded once at run start. P2 obs go through
+            the opponent net to pick a move every <code>action_repeat</code> ticks.
+            Currently scalar-per-env on host — this is the karp v2 bottleneck.</dd>
+        <dt><code>latest_champion</code></dt>
+        <dd>Sugar. <code>queue_karp_sweep.py</code> resolves it to
+            <code>opponent_name=neural</code> with the current top
+            <code>champions[0].source_run_id</code>.</dd>
+        <dt><code>self-play pool</code> (when <code>self_play=true</code>)</dt>
+        <dd>The trainer keeps a pool of past snapshots of itself.
+            With probability <code>leaderboard_bias</code> (default 0.30) it samples
+            from the <i>champion archive</i> with PFSP weights (target 50%-win-rate
+            opponents); otherwise it samples from the run's own self-play pool, with
+            <code>latest_bias = 0.8</code> favouring the most recent snapshot.
+            <i>Note:</i> requires <code>self_play=true</code>; karp v2 has it
+            <code>false</code>, so PFSP is currently inactive in karp.</dd>
+      </dl>
+
+      <p class="footnote">
+        Source: <code>training/trainer.py:_refresh_opponents()</code>,
+        <code>training/fused_rollout.py:_pack_action_batch_*</code>,
+        <code>sim/levels.py</code>.
+      </p>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="sec-rollout">4. Collecting one rollout</h2>
+    <div class="card">
+      <p>
+        With <code>n_envs = 1024</code> and <code>rollout_steps = 64</code>, one
+        rollout produces <b>1024 × 64 = 65,536 (obs, action, reward, value, mask)
+        samples</b> before any learning happens. The per-step inner loop:
+      </p>
+
+      <ol>
+        <li><b>Encode</b> the 1024 P1 obs from device-side state to a fixed-shape
+            tensor (<code>training/encoder_jax.py</code>).</li>
+        <li><b>Compute mask</b> of legal actions per env, on device
+            (<code>compute_mask_batched_jax</code>).</li>
+        <li><b>Learner forward pass</b> — the v9.0-1024 net runs on all 1024 P1 obs
+            in one batched torch call. Outputs source / type / target logits + value.</li>
+        <li><b>Sample P1 actions</b> under the legal mask.</li>
+        <li><b>P2 actions</b> — depends on opponent:
+          <ul>
+            <li><code>random_legal</code> → JAX uniform sample over the P2 mask, on
+                device. Free.</li>
+            <li><code>neural / latest_champion</code> → snapshot 1024 states to host,
+                loop scalar over each env, encode P2-mirrored obs, run opponent net,
+                pack actions back. <span class="pill warn">slow path</span></li>
+          </ul></li>
+        <li><b>step_chunk</b> — sim advances K=2 ticks per env, returns
+            <code>(next_state, reward, done)</code>. Auto-resets done envs.</li>
+        <li>Append to rollout buffer. Repeat 64 times.</li>
+      </ol>
+
+      <p>
+        With <code>random_legal</code> opponent on a JIT-warm RTX 3070, this loop
+        runs at ~2.7-4.7K sim-steps/sec end to end. With <code>latest_champion</code>
+        in the current scalar-per-env path it drops to ~322 steps/sec.
+      </p>
+
+      <p class="footnote">
+        Source: <code>training/fused_rollout.py:collect_rollout_fused()</code>.
+      </p>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="sec-update">5. PPO update — what learning means here</h2>
+    <div class="card">
+      <p>
+        After the 65,536-sample rollout buffer is full, the trainer does ONE PPO
+        update. That update is <code>update_epochs = 4</code> passes over the buffer,
+        chopped into <code>minibatch_size = 512</code> chunks → 4 × 128 = 512 SGD
+        steps per update. Each step:
+      </p>
+      <ol>
+        <li>Compute advantages (GAE λ=0.95, γ=0.97), normalize across the buffer.</li>
+        <li>Forward pass on the minibatch → new log-probs, entropy, value.</li>
+        <li>Clipped policy loss: <code>min(r·A, clip(r, 1-ε, 1+ε)·A)</code>, ε = 0.2.</li>
+        <li>Critic loss: plain MSE between predicted value and GAE return.
+            <span class="pill warn">no value-clipping yet</span></li>
+        <li>Total loss = policy + 0.5 · value − 0.01 · entropy.</li>
+        <li>Adam step. Gradient norm clipped at 0.5.</li>
+      </ol>
+
+      <p>What gets logged per update (you can plot any of these):</p>
+      <ul>
+        <li>policy_loss, value_loss, entropy_loss</li>
+        <li>approx_kl, clip_fraction, grad_norm</li>
+        <li>explained_variance — <code>1 − Var(returns − values) / Var(returns)</code>.
+            ~1.0 = critic perfect, ~0 = no better than mean, &lt; 0 = critic worse than
+            predicting the mean. The early-warning signal for value-head collapse.</li>
+        <li>mean_reward, win_rate (over completed episodes in the rollout)</li>
+        <li>episode_return min / max / p10 / p50 / p90 — variance bands, not just the mean.</li>
+      </ul>
+
+      <p class="footnote">
+        Source: <code>training/trainer.py:_update_from_batch()</code> ~line 480-570.
+      </p>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="sec-loop">6. The training loop — how a "cell" actually runs</h2>
+    <div class="card">
+      <p>
+        A cell has a wall budget (<code>cell_budget_seconds</code>) — 600s for karp
+        cells, 900-3600s for cron cells. The trainer just loops:
+      </p>
+      <ol>
+        <li>Refresh opponents (resample champion archive every 16 updates by default).</li>
+        <li>Collect one rollout (§4).</li>
+        <li>Run one PPO update (§5).</li>
+        <li>Every <code>SNAPSHOT_INTERVAL_S = 600s</code>, save a snapshot to
+            <code>models/snapshots/&lt;run_id&gt;/&lt;n&gt;/weights.pt</code>. Available
+            for later PFSP sampling but NOT auto-evaluated.</li>
+        <li>Check wall clock. If &gt; budget → break.</li>
+      </ol>
+
+      <p>
+        At <code>random_legal</code> + 1024 envs + 64 rollout_steps, one update takes
+        roughly 15-25 seconds, so a 600s cell gets ~25-40 updates and ~1.6M-2.6M
+        decision samples. At <code>latest_champion</code> (current scalar path), the
+        same cell gets only 3-5 updates — that is the karpv2 problem.
+      </p>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="sec-finish">7. End of training — what happens at <code>mark_done()</code></h2>
+    <div class="card">
+      <ol>
+        <li>Trainer writes the final weights + obs_norm to S3 / Supabase storage.</li>
+        <li>Worker calls <code>mark_done(run_id)</code> → status = <code>done</code>.</li>
+        <li>Worker calls <code>_auto_rate_run(run_id)</code> — runs 3 matches × 64 games
+            vs <code>random_legal</code>, writes initial Elo. So every run lands on
+            the dashboard with a rating within ~5 minutes.</li>
+        <li>Worker calls <code>workers.bench_eval.run_bench_eval(run_id)</code> — see §8.</li>
+      </ol>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="sec-bench">8. bench_eval — Elo + promotion <span class="pill db">workers/bench_eval.py</span></h2>
+    <div class="card">
+      <p>
+        bench_eval is the truth-of-record for "is this run any good?". It runs every
+        finished training run through three stages:
+      </p>
+
+      <h3>8a. Bootstrap gate (skipped once archive ≥ 3)</h3>
+      <ul>
+        <li>30 games vs <code>random_legal</code>.</li>
+        <li>Win-rate ≥ 0.70 → seed into champion archive.</li>
+        <li>Below → <code>elo_status = "did_not_perform"</code>; the run is shown but
+            not used as an opponent.</li>
+        <li>Once the archive has 3 entries, this gate is never queried again.
+            <code>random_legal</code> stops being a yardstick.</li>
+      </ul>
+
+      <h3>8b. Archive sweep — fills <code>bench_vector</code></h3>
+      <ul>
+        <li>For each champion in the archive (cap 20): play <code>SWEEP_GAMES = 8</code>
+            games head-to-head. Sides alternate every game so P1-advantage cancels.</li>
+        <li>Result is written to <code>runs.bench_vector</code> as
+            <code>{champion_id: win_rate}</code>.</li>
+        <li>Each match also fires <code>update_elo_from_match</code> with K = 32 — so
+            each pair of runs nudges Elo once per sweep based on its 8-game aggregate.</li>
+      </ul>
+
+      <h3>8c. Promotion vs current champion</h3>
+      <ul>
+        <li><code>PROMO_GAMES = 16</code> head-to-head vs the most-recent champion.</li>
+        <li><code>PROMO_THRESHOLD = 0.60</code> → promote (snapshot OLD champion into
+            the archive, NEW becomes the live champion). Archive is pruned to cap 20,
+            soft-cap 10 per arch_era; busiest era's oldest is evicted first.</li>
+        <li>Below 0.60 → no promotion, run still has its bench_vector + Elo.</li>
+      </ul>
+
+      <h3>8d. PFSP weight</h3>
+      <p>
+        After the sweep, the trainer computes <code>pfsp_weight = harmonic_mean(1 - |wr - 0.5|)</code>
+        across the bench_vector. Peaks at 50% win-rate (max info), drops toward 0 / 1
+        (already-solved or hopeless). Used by future training runs that have
+        <code>self_play=true</code> to bias opponent sampling toward "interesting"
+        archive members.
+      </p>
+
+      <p class="footnote">
+        Tunables at <code>workers/bench_eval.py:52-65</code>:
+        <code>SWEEP_GAMES=8, PROMO_GAMES=16, PROMO_THRESHOLD=0.60, BOOTSTRAP_GATE_GAMES=30,
+        BOOTSTRAP_GATE_THRESHOLD=0.70, MAX_ARCHIVE_SIZE=20, ELO_K=32,
+        LEVEL=random_8_16, MAX_TICKS=200</code>.
+      </p>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="sec-rerate">9. Periodic re-rating</h2>
+    <div class="card">
+      <ul>
+        <li><b>Anchor at 1000.</b> 1000 = pure-random_legal play. &gt; 1000 = beats random.
+            &lt; 1000 = worse than random.</li>
+        <li><b>Sunday weekly rerate</b> (<code>mushroom-rerate.timer</code>, Sun 02:13 PT)
+            — top 30 runs play 4 matches × 64 games against each other. Refreshes the
+            leaderboard against drift.</li>
+        <li><b>Version-triggered rerate.</b> Calling
+            <code>register_model.py ... --trigger-rerate</code> sets
+            <code>kv['needs_rerate']='1'</code>. Next cron-agent fire kicks off
+            <code>rate_all_runs.py</code> once and clears the flag. Use after a major
+            model bump.</li>
+      </ul>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="sec-kpi">10. KPIs — compute budget per run</h2>
+    <div class="card">
+      <p>
+        Per-run resource use, measured on PaulLinux (RTX 3070, 8GB VRAM). Numbers
+        are from training-loop telemetry; "cell" = one karp 600s slot, "endurance"
+        = one ~3600s cron slot.
+      </p>
+
+      <table class="kpi">
+        <tr><th>KPI</th><th>karp cell (600s)</th><th>cron endurance (3600s)</th><th>Source</th></tr>
+        <tr><td>Wall time</td><td>~10 min</td><td>~60 min</td><td>cell_budget_seconds</td></tr>
+        <tr><td>PPO updates</td><td>3-40</td><td>~120-180</td><td>logs (varies w/ opponent)</td></tr>
+        <tr><td>Episodes (games) trained on</td><td>~2K-15K</td><td>~50K-90K</td><td>episode_count metric</td></tr>
+        <tr><td>Decision samples</td><td>~200K-2.6M</td><td>~10M+</td><td>n_envs × rollout_steps × updates</td></tr>
+        <tr><td>Sim ticks</td><td>~400K-5.2M</td><td>~20M+</td><td>×2 (action_repeat=K)</td></tr>
+        <tr><td>GPU SM utilization</td><td>~5-15%</td><td>~5-15%</td><td>nvidia-smi via host_telemetry</td></tr>
+        <tr><td>VRAM</td><td>~2.5-3.5GB</td><td>~2.5-3.5GB</td><td>const (1024 envs × state size)</td></tr>
+        <tr><td>Worker RAM</td><td>~4-7GB</td><td>~5-8GB (creep)</td><td>host_telemetry</td></tr>
+        <tr><td>Snapshots written</td><td>0-1</td><td>5-6</td><td>SNAPSHOT_INTERVAL_S = 600</td></tr>
+        <tr><td>Bench games at finish</td><td colspan="2">8 × N_archive + 16 promo + 3×64 auto-rate</td>
+            <td>bench_eval.py</td></tr>
+        <tr><td>Bench wall time at finish</td><td colspan="2">~3-8 min depending on archive size</td>
+            <td>SWEEP_GAMES=8 × ~20 champions @ ~1s/game</td></tr>
+      </table>
+
+      <p class="muted small">
+        SM% is the actual ceiling — even on the JAX path, host-side mask+pack work
+        and rollout architecture leave ~85-95% of the GPU idle. Phase G shipped
+        device-side mask + action pack and lifted SM from 2.8% → 4.6%; further
+        gains need the neural-opponent path batched.
+      </p>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="sec-noise">11. Where measurement noise comes from</h2>
+    <div class="card">
+      <p>
+        Useful framing when you read the dashboard: every Elo number is the output
+        of a small number of games, and small-sample win-rates have wide confidence
+        intervals.
+      </p>
+
+      <table class="kpi">
+        <tr><th>Decision</th><th>Games used</th><th>95% CI on a measured 0.50</th><th>95% CI on a measured 0.60</th></tr>
+        <tr><td>Auto-rate at finish (vs random_legal)</td><td>3 × 64 = 192</td><td>±7 pp</td><td>±7 pp</td></tr>
+        <tr><td>bench_vector entry (per archive member)</td><td>8</td><td>±35 pp</td><td>±34 pp</td></tr>
+        <tr><td>Promotion vs current champion</td><td>16</td><td>±25 pp</td><td>±24 pp</td></tr>
+        <tr><td>Bootstrap gate (one-time)</td><td>30</td><td>±18 pp</td><td>±18 pp</td></tr>
+        <tr><td>Sunday rerate match</td><td>4 × 64 = 256</td><td>±6 pp</td><td>±6 pp</td></tr>
+      </table>
+
+      <p>
+        Reading: with PROMO_GAMES = 16, a measured 0.60 win-rate against the champion
+        has a 95% CI of roughly [0.36, 0.81]. That means a single 16-game promotion
+        decision is barely distinguishable from random fluctuation, especially when
+        most candidate runs cluster near 0.50. The auto-rate-at-finish is much more
+        stable because it uses 192 games.
+      </p>
+      <p>
+        K-factor is 32 in bench, so each match nudges Elo by up to ±16 points based
+        on an 8-game or 16-game aggregate. A single unlucky 8-game block can shift a
+        run's rating by 10-15 Elo for reasons unrelated to learning.
+      </p>
+    </div>
+
+    <p class="footnote" style="margin-top:32px;">
+      Source code references throughout this page point at the actual files. If you
+      change a tunable in <code>workers/bench_eval.py</code> or
+      <code>configs/karpathy_loop.yaml</code>, please update this page in the same
+      commit.
+    </p>
+  </main>
+</body>
+</html>

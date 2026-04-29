@@ -201,7 +201,22 @@
           <div id="permap-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:12px; margin-top:8px;"></div>
         </div>
 
-        <h2>Matchups (evaluation games)</h2>
+        <h2>Eval matches (during training)</h2>
+        <div class="card" id="eval-matches">
+          <div class="muted">no eval matches yet — populated as the run executes archive_eval_every steps.</div>
+        </div>
+
+        <h2>Training opponent over time</h2>
+        <div class="card" id="training-opp">
+          <div class="muted">no opponent labels recorded yet.</div>
+        </div>
+
+        <h2>Level distribution</h2>
+        <div class="card" id="level-mix">
+          <div class="muted">no level data recorded yet.</div>
+        </div>
+
+        <h2>Matchups (post-run evaluation)</h2>
         <div class="card" id="matchups"><div class="muted">Loading matchups…</div></div>
 
         <h2>Hyperparams</h2>
