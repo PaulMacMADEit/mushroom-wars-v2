@@ -2912,6 +2912,65 @@ rs=4 result wasn't a fluke. **The new config consistently produces
 **Queue:** 2 queued (n_envs-mid + n_envs-hi second batch), 1 running
 (n_envs-hi from earlier batch). Skipped queueing.
 
+### Loop fire 64 — 2026-04-29 13:41 PT — n_envs sweep complete; lo wins; mid degenerated to 100% noop; new karpv2 champion
+
+**State.** Worker PID 1768780, **3min 8s elapsed** (restarted at 13:38
+PT for METRICS_UPLOAD_EVERY=1). RSS 3.33GB. GPU 13%. Champion identity
+changed: **cron-260428-0407-phase2_selfplay-med-00** still #1 at Elo
+**1134** (-56 over the last few fires) but **karpv2-260429-1305-n_envs-lo
+at 1040 is the new karpv2 champion** and the active training opponent.
+
+**🟢 n_envs sweep complete under v2-tuned config:**
+
+| run | n_envs | Elo | rate | updates | wins/24 |
+|---|---|---|---|---|---|
+| -lo (512) | **1040** | 0.404 | 18 | (TBD) |
+| -mid (1024) | **1006** | 0.211 | 10 | **0** |
+| -hi (2048) | 942 | 0.107 | 5 | — |
+
+**Two above-anchor runs.** The v2-tuned config is producing real signal.
+Direction: smaller n_envs → more updates per cell → better learning.
+Same theme as rs sweep (rs=4 won with 21 updates).
+
+**🚨 n_envs-mid degenerated to PURE NOOP (Elo 1005, 0 wins):**
+
+| game | tag | ticks | noop% | top types | value drop |
+|---|---|---|---|---|---|
+| LOSS | 34 | **94%** | noop=94% / 75%=6% | +14.54 |
+| EXTRA | 52 | **100%** | **noop=100%** ⚠️ | +20.60 |
+
+**TWO new loop records:**
+- **First complete-noop game** (100% noop for 52 ticks) across all 64 fires
+- LOSS value-drop **+20.60** — 3rd-largest of all loop
+
+**How does Elo 1005 with 0 wins happen?** Bench_eval gives Elo updates
+based on each match outcome. With 0 wins / 24 losses, Elo should drop
+hard. But it landed at 1005 — close to anchor. **The bench corpus is
+full of fellow-noop policies; mutual-stall doesn't lose Elo points.**
+
+This is **the same passivity collapse as fire 26 under v1, but now under
+v2.** Even vs-champion training + v14 reward + 5-min cells doesn't
+guarantee active policies — when the cell only gets 10 updates, the
+noop attractor wins.
+
+**Update density still matters more than anything else.** 18-update lo
+run is a real policy (40% rate, 1040 Elo). 10-update mid run is a
+degenerate noop machine.
+
+**🚨 b6 champion losing Elo on close-4-5:** cdcc0826 went 1190 → 1134
+(-56) over last few fires as karpv2- runs grade vs it on the new bench
+level. The b6 champion was a big-map specialist; doesn't transfer to
+close-4-5.
+
+**Queue:** gamma-mid running, gamma-hi queued, gamma-lo-redo queued.
+Skipped queueing — 3 in queue, gamma sweep will finish ~15 min.
+
+**Pending Paul-asked work** (held until gamma sweep completes, won't
+edit code mid-sweep):
+- Move worker constants (METRICS_UPLOAD_EVERY etc.) to configs/worker.yaml
+- Implement rotating-champion training (1 champion per update, sampled
+  from archive — addresses opponent-diversity gap; see fire 63 reply)
+
 ## Code changes during loop
 
 ### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
