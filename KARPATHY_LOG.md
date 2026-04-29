@@ -2046,6 +2046,54 @@ No restart pressure. 11h 55min uptime confirms previous worker's
 
 **Queue.** 1 running + 2 queued = 3. Skipped queueing.
 
+### Loop fire 46 — 2026-04-29 05:45 PT — minibatch_size cycle-3: mid wins, lo sub-anchor with active-loss behavior
+
+**State.** Worker PID 4019322, 12h 24min uptime, RSS 6.61GB plateau
+holding 8+ fires. Champion drift 1173→1170.
+
+**minibatch_size cycle-3 progress (NEW axis):**
+
+| run | minibatch_size | Elo |
+|---|---|---|
+| -lo (256) | **998** (sub-anchor!) |
+| -mid (512) | 1019 |
+| -hi (1024) | running |
+
+**mid > lo by 21 Elo, lo sub-anchor.** First cycle-3 axis where mid
+edges lo (will see hi).
+
+**🟢 minibatch_size-lo cycle-3 game review — "active losing":**
+
+| game | tag | ticks | noop% | top types | value drop |
+|---|---|---|---|---|---|
+| WIN | 11 | 50% | 100%=50%/noop=50% | -1.37 |
+| LOSS | 49 | **16%** | **100%/50%/75% (varied!)** | +6.94 |
+
+**Active even in defeat** — only 16% noop in LOSS, 4 different action
+types used (100/75/50/noop). 50%-sends *in a LOSS sample* — first
+time we've seen the smallest-non-noop send size dominate during a loss.
+The agent stayed engaged but couldn't break the opponent.
+
+**Pattern confirmed across "cautious update" axes:**
+
+| axis cell | Elo | WIN noop% | sends used in WIN | sends used in LOSS |
+|---|---|---|---|---|
+| clip_range-lo cycle-3 | 958 | 0% | 100/75/50 | noop/100/75 |
+| **minibatch_size-lo cycle-3** | **998** | 50% | 100/noop | **100/50/75** |
+| reward_version-hi (v14) | 1040 | 0% | 100/75/50 | 100/noop/75 |
+
+**Small-batch / small-clip axes produce v14-like ACTIVE behavior under
+v13, but at sub-anchor Elo (~960-1000). v14 reaches the same active
+attractor at +42 to +82 Elo.** Three independent v13 mechanisms now
+confirm v14's efficiency (clip_range-lo, minibatch_size-lo, gae_lambda-lo).
+
+**Worker memory.** 6.61GB at 12h 24min — plateau confirmed across 8+
+fires. The previous worker's 9GB-at-5h crash was workload-specific.
+**No restart pressure.**
+
+**Queue:** 1 running + 0 queued = 1. Skipped queueing. Backstop ticks
+next, picks value_coef cycle-3 (NEW axis).
+
 ## Code changes during loop
 
 ### 2026-04-29 01:55 PT — fix scripts/karp_review_games.py for tied created_at
