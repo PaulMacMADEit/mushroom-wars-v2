@@ -1266,6 +1266,53 @@ but Elo dipped 12 → tune coefs down." Today's data adds nuance:
 **Queue:** 1 running + 1 queued = 2. Skipped queueing — let
 entropy_coef cycle-2 finish for full noise estimate.
 
+### Loop fire 27 — 2026-04-28 20:11 PT — entropy_coef cycle-2 complete; high entropy is partial-v14-substitute
+
+**State.** Worker idle (GPU 0%), queue empty after entropy_coef cycle-2
+finished. PID 4019322, 2h 49min uptime, RSS 5.75GB plateau. Champion
+drift 1160→1166 (+6, identity unchanged).
+
+**entropy_coef cycle-2 complete:**
+
+| run | cycle 1 | cycle 2 | Δ |
+|---|---|---|---|
+| -lo (0.003) | 1057 | **1048** | -9 |
+| -mid (0.01) | 1058 | **1041** | -17 |
+| -hi (0.03) | 1036 | **1035** | -1 |
+
+Average -9 Elo deflation, with **hi nearly flat** (-1) while lo + mid
+dropped 9-17. Range narrowed from cycle-1's 22 Elo (1057-1036) to
+cycle-2's 13 Elo (1048-1035). **Direction holds (lo > mid > hi) but
+the high-entropy floor is more stable** vs the bench corpus changes.
+
+**🟢 Game-review finding: high entropy is a partial v14 substitute.**
+
+| approach | WIN noop% | wins/24 | mechanism |
+|---|---|---|---|
+| v13 + low entropy (passive baseline) | 69% | 11 | converges to noop equilibrium |
+| v13 + high entropy | **20%** | 8 | explores out of equilibrium |
+| **v14 + low entropy** | **0%** | 8 | **shaping forces non-passive** |
+
+entropy_coef-hi cycle-2 WIN sample: 29 ticks, 20% noop, **100%/75%/noop
+mix** (75% sends DO appear here). LOSS: 61% noop, value-drop +1.49
+(vs v13-lo's +5.57). High entropy *partially* breaks the passivity
+equilibrium even under v13.
+
+This re-frames the v14 design space:
+- v14 is one path to non-passive behavior (reward shaping)
+- High entropy is another (exploration pressure)
+- They could **combine** — v14 + entropy_coef=0.03 might compound the
+  effect AND tune the over-aggression
+
+**Backstop next.** Queue empty; backstop ticks at :15 (~4 min away).
+Round-robin will pick `lr` (last_used was entropy_coef, lr is next in
+YAML). Cycle-2 noise estimate on the strongest-signal axis (cycle-1
+range was 64 Elo). Will let it run — high diagnostic value.
+
+**Skipped queueing** — backstop has it covered, and pre-queueing
+something v14-related autonomously would step on Paul's pending
+decision (5 options surfaced fire 25, no call yet).
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
