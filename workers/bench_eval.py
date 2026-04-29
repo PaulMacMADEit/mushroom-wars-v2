@@ -42,26 +42,30 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from cli.db import connect, PROJECT
+from cli.bench_config import load as _load_bench_config
 
 
 # ---------------------------------------------------------------------------
-# Tunables
+# Tunables — loaded from configs/bench_eval.yaml at module import.
+# Edit the YAML, not this file. Reload requires worker restart (same as
+# karpathy_loop.yaml — config is read once per process).
 # ---------------------------------------------------------------------------
+_BENCH_CFG = _load_bench_config()
 
-LEVEL           = "random_8_16"
-MAX_TICKS       = 200
-ELO_K           = 32
+LEVEL           = _BENCH_CFG.match["level_name"]
+MAX_TICKS       = int(_BENCH_CFG.match["max_ticks"])
+ELO_K           = int(_BENCH_CFG.match["elo_k"])
 
-SWEEP_GAMES     = 8    # games per archive member in the sweep
-PROMO_GAMES     = 16   # extra games vs current champion for promotion decision
-PROMO_THRESHOLD = 0.60 # win-rate needed to promote
+SWEEP_GAMES     = int(_BENCH_CFG.sweep["games_per_champion"])
+PROMO_GAMES     = int(_BENCH_CFG.promotion["games"])
+PROMO_THRESHOLD = float(_BENCH_CFG.promotion["threshold"])
 
-BOOTSTRAP_GATE_GAMES     = 30
-BOOTSTRAP_GATE_THRESHOLD = 0.70
-MIN_ARCHIVE_FOR_GATE     = 3   # once archive has this many, skip bootstrap gate
+BOOTSTRAP_GATE_GAMES     = int(_BENCH_CFG.bootstrap_gate["games"])
+BOOTSTRAP_GATE_THRESHOLD = float(_BENCH_CFG.bootstrap_gate["threshold"])
+MIN_ARCHIVE_FOR_GATE     = int(_BENCH_CFG.bootstrap_gate["min_archive_for_gate"])
 
-MAX_ARCHIVE_SIZE = 20
-ERA_SOFT_CAP     = 10  # max champions per arch_era before pruning oldest in era
+MAX_ARCHIVE_SIZE = int(_BENCH_CFG.archive["max_size"])
+ERA_SOFT_CAP     = int(_BENCH_CFG.archive["era_soft_cap"])
 
 
 # ---------------------------------------------------------------------------

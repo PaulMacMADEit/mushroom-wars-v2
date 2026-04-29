@@ -1,0 +1,53 @@
+# Bench-eval configuration
+#
+# Tunables for `workers/bench_eval.py` (post-run archive sweep + PFSP +
+# champion promotion). Loaded by `cli/bench_config.py`.
+#
+# Edit this file (NOT Python) when you want to change bench-eval behaviour.
+# Reload cost: zero — read fresh per run.
+
+# ---------------------------------------------------------------------------
+# Match settings
+# ---------------------------------------------------------------------------
+match:
+  # Level distribution for ALL bench_eval matches (sweep + promo + bootstrap).
+  # Should match (or include) the training distribution to avoid measurement
+  # bias. 2026-04-29: aligned to karpv2- training on random_close_4_5.
+  level_name:    "random_close_4_5"
+  max_ticks:     200
+
+  # Elo K-factor for rating updates from each match.
+  elo_k:         32
+
+# ---------------------------------------------------------------------------
+# Archive sweep (the main bench_eval pass)
+# ---------------------------------------------------------------------------
+sweep:
+  games_per_champion: 8     # games vs each archive member
+
+# ---------------------------------------------------------------------------
+# Champion promotion
+# ---------------------------------------------------------------------------
+promotion:
+  games:     16              # extra games vs current champion
+  threshold: 0.60            # win-rate required to promote
+
+# ---------------------------------------------------------------------------
+# Bootstrap gate
+#
+# When archive size < min_archive_for_gate, a new run must beat random_legal
+# at >= threshold over `games` games before it's allowed into the archive.
+# Once the archive is bootstrapped (>= min_archive_for_gate champions) this
+# gate is skipped entirely — measurement becomes purely champion-relative.
+# ---------------------------------------------------------------------------
+bootstrap_gate:
+  games:                30
+  threshold:            0.70
+  min_archive_for_gate: 3
+
+# ---------------------------------------------------------------------------
+# Archive size policy
+# ---------------------------------------------------------------------------
+archive:
+  max_size:     20      # absolute cap across all eras
+  era_soft_cap: 10      # max champions in any single arch_era before pruning

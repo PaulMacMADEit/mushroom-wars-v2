@@ -22,7 +22,9 @@
 # ---------------------------------------------------------------------------
 schedule:
   fire_interval_seconds: 1800     # 30min between Claude-side wakeups
-  cell_budget_seconds:   600      # per-cell wall-time → 10min cells (small maps, fast iter)
+  cell_budget_seconds:   300      # 2026-04-29 fire 61: 5-min cells. Tight iteration loop.
+                                  # Smaller maps, fewer params per game = should learn fast.
+                                  # Adjust update count via rollout_steps, NOT cell length.
   max_karp_queue_depth:  6        # skip queueing if >= this many karp-* are pending
   idle_fires_before_stop: 0       # 0 = never stop on idleness
 
@@ -65,7 +67,13 @@ baseline_hyperparams:
   # ----- Rollout shape -----
   n_envs:        1024              # parallel envs in the vec env
   vec_mode:      "sync"            # sync (in-process) or async (subprocs)
-  rollout_steps: 64                # per-env steps per update; total samples = n_envs*rollout_steps
+  rollout_steps: 8                 # 2026-04-29 fire 61: cut hard from 64 → 8. Aggressive.
+                                   # Under v2 (vs-champion @ ~322 sps) with 5-min cells:
+                                   # 1024 envs × 8 rs = 8k samples/update.
+                                   # 96k env steps / 8k = ~12 updates/cell (was 3 with rs=64).
+                                   # Trade-off: smaller rollout = less GAE horizon depth per
+                                   # update. Acceptable on close 4-5 building maps where games
+                                   # are short anyway.
 
   # ----- Engine -----
   sim_backend:   "jax"             # jax (fast) | numpy (only path for self_play=true per-env opponents)
@@ -75,7 +83,11 @@ baseline_hyperparams:
   # ----- PPO update -----
   update_epochs:  4                # PPO inner-loop passes over the rollout buffer
   minibatch_size: 512              # samples per SGD step
-  lr:             3.0e-4
+  lr:             1.0e-3           # 2026-04-29 fire 61: 10× v1 baseline (was 3e-4). v1 cycle-1
+                                   # found lo=1e-4 wins vs random_legal — but that was fine-tuning.
+                                   # v2 bootstrap (vs-champion, 3% win rate, only 3 updates/cell)
+                                   # needs faster policy movement. If this diverges (NaN losses
+                                   # or Elo drops) → revert.
   gamma:          0.97             # discount factor
   gae_lambda:     0.95             # GAE smoothing
   clip_range:     0.2              # PPO clipped-surrogate epsilon
@@ -138,9 +150,9 @@ sweep_axes:
 
   - axis: "rollout_steps"
     cells:
-      - { label: "lo",  value: 32  }
-      - { label: "mid", value: 64  }
-      - { label: "hi",  value: 128 }
+      - { label: "lo",  value: 4   }
+      - { label: "mid", value: 8   }   # 2026-04-29 fire 61: matches v2 baseline. Was 32/64/128.
+      - { label: "hi",  value: 16  }   # Bigger values would give <2 updates per 5-min cell.
 
   - axis: "n_envs"
     cells:
