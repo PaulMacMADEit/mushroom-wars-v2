@@ -1143,6 +1143,77 @@ this fire to keep v14 path clear.
 - If v14 Elo < v13: investigate whether shaping coefs are too high
   / too distracting from terminal signal.
 
+### Loop fire 25 — 2026-04-28 19:11 PT — 🟢 v14 BROKE PASSIVITY but Elo dipped 12
+
+**🟢 V14 result is in. Headline: v14 changed the policy completely
+but Elo went down 12.**
+
+**A/B summary:**
+
+| metric | v13 control | v14 treatment | Δ |
+|---|---|---|---|
+| Wins / 24 | 11 | 8 | -3 |
+| Elo | **1052.7** | **1040.6** | **-12** |
+| Training rate | 0.911 | 0.917 | +0.6 pp |
+| Updates | 49 | 50 | ~same |
+| Steps/sec | 2664 | 2701 | ~same |
+
+**🔥 BEHAVIOR DIFFERENCE IS DRAMATIC:**
+
+| metric | v13 WIN sample | v14 WIN sample | Δ |
+|---|---|---|---|
+| **noop%** | **62%** | **0%** | **-62 pp** |
+| ticks | 52 | 12 | -40 (-77%) |
+| top types | noop > 100% > 75% | **100% / 75% / 50%** | new mix |
+| value drop | -0.61 | -1.56 | (more confident) |
+
+| metric | v13 LOSS sample | v14 LOSS sample | Δ |
+|---|---|---|---|
+| noop% | 42% | 31% | -11 pp |
+| ticks | 38 | 32 | -6 |
+| value drop | +6.06 | +7.73 | bigger collapse |
+
+**v14 introduced a NEW behavior class** — 0% noop, fast 12-tick wins
+using all three send sizes (100%/75%/50%). **First time across the
+whole loop that 50%-sends appear in a sample.** The passivity
+equilibrium IS broken. But the policy now over-commits and loses
+more games (16/24 losses vs v13's 13/24).
+
+**Diagnosis: shaping coefs are too aggressive.** Per-game shaping
+budget ±1.0 was 20% of WIN(5.0); evidence suggests this is large
+enough to push the policy past optimal aggression. The agent learned
+that staying active = +shaping > terminal cost of losing fast.
+
+**Strategic next moves (Paul to call):**
+1. **Halve coefs (v14b)** — try 0.0005/0.0001 to keep the nudge but
+   smaller. Closer to terminal-dominant.
+2. **Add shaping-magnitude axis** — sweep 3 cells at 0.5x/1x/2x
+   coefs, find the sweet spot.
+3. **Asymmetric — drop units shaping** — units fires every tick on
+   ~50 real-unit deltas (dominant); buildings fires more sparsely.
+   Try keeping coef_b=0.001 and coef_u=0.
+4. **Combine v14 + gamma 0.95** — gamma was the strongest single
+   axis; lower gamma + shaping may compound.
+5. **Accept** — v14 added policy diversity to the bench corpus; even
+   if Elo dipped, future self-play could benefit from non-passive
+   strategies in the archive.
+
+**v14 hypothesis confirmed structurally** even though Elo went the
+wrong way. The agent's *capacity* for active play was being shaped by
+v13's terminal-only signal — change the signal, change the policy.
+What we learned: **the passivity wasn't a learning bug, it was a
+correct response to v13's reward landscape.** v14 found a different
+attractor; we just need to tune coefs so it's a *better* attractor.
+
+**Worker state.** PID 4019322, 1h 49min uptime, RSS 5.77GB (+0.02 since
+fire 24, plateau holding). Champion 1167 (drift +5 since fire 24,
+identity unchanged). Backstop pulled `entropy_coef` for cycle-2 (lo
+running 10 min in, mid + hi queued; rv=1, all v13).
+
+**Queue:** 1 running + 2 queued = 3. Skipped queueing — entropy_coef
+re-sweep (cycle 2) is fine noise data; want to wait for Paul's call
+on v14 next-step before adding more.
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
