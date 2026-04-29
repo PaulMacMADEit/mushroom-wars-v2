@@ -1627,6 +1627,69 @@ for the GC pattern.
 
 **Queue:** 1 running + 1 queued = 2. Skipped queueing.
 
+### Loop fire 34 — 2026-04-28 23:41 PT — n_envs-mid cycle-3 emerges aggressive; 3 archetypes within 20 Elo
+
+**State.** Worker PID 4019322, **6h 19min uptime**, RSS **6.32GB
+(-0.12 since fire 33's 6.44 spike, partial GC)**. VRAM 6533 MiB
+(+520 vs fire 33). Champion **+9 to 1180** — biggest single-fire
+jump in many fires (identity unchanged).
+
+**n_envs cycle-3 progression:**
+
+| run | cycle 1 | cycle 3 | Δ |
+|---|---|---|---|
+| -lo (512) | 1083 | 1035 | -48 |
+| -mid (1024) | 1087 | **1023** | **-64** |
+| -hi (2048) | 1081 | running, 12 min in | — |
+
+Cycle-3 -mid deflation -64, biggest n_envs cell drop. Bench corpus
+continuing to harden.
+
+**🟢 n_envs-mid cycle-3 emerged AGGRESSIVE:**
+
+| game | tag | ticks | decisions | noop% | top types | value drop |
+|---|---|---|---|---|---|---|
+| WIN | 14 | 7 | **14%** | **100%=86%** noop=14% | **-2.28 (record!)** |
+| LOSS | 21 | 11 | 18% | 100%/noop/50% | +5.83 |
+
+WIN value-drop **-2.28 is the LARGEST negative drop of all 30+ fires**
+(prev record ~-1.6 from v14). Policy was *very* confident throughout
+the win. 100%-sends are 86% of decisions in the win — just below the
+type-collapse threshold (85%); only 7 decisions so small-sample,
+genuinely high concentration.
+
+**🟢 Three different policy archetypes clustered within 20 Elo:**
+
+| run | archetype | Elo |
+|---|---|---|
+| n_envs-lo cycle-3 | passive: 69% noop / 25-tick WIN | 1035 |
+| **n_envs-mid cycle-3** | **aggressive: 14% noop / 14-tick WIN / type-100=86%** | **1023** |
+| rollout_steps-hi cycle-3 | calm: 44% noop / +0.35 LOSS drop | 1043 |
+
+**The bench corpus is averaging across very different strategies.**
+Same Elo window (~1020-1045) reached via three completely different
+paths. This is *exactly* the equilibrium v14 should break — by
+rewarding a *single* coherent active strategy rather than letting
+policies drift to whichever local equilibrium each run lands on.
+
+**v14 thesis strengthens.** What we're seeing under v13:
+- Policy diversity is *high* (good for bench corpus richness)
+- Policy *coherence per run* is low (bad for actually getting better)
+- Each run finds its own local-optimum basin
+- Bench Elo measures "average across opposing basins", not "raw skill"
+
+v14's per-tick shaping should pull all runs toward a *common*
+non-passive attractor — at the cost of some Elo (per fire 25's
+v14 result), but with the upside of compounding skill rather than
+oscillating between archetypes.
+
+**Worker memory.** 5.79 → 6.44 (spike) → 6.32 (partial GC). Net
++0.53 since plateau, slight long-term creep. Still under 7GB at 6h+
+uptime. Watching but no restart pressure.
+
+**Queue:** 1 running + 0 queued = 1. Skipped queueing. Backstop ticks
+:45 PT next; round-robin from n_envs picks **gamma** for cycle-3.
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
