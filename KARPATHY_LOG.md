@@ -2285,6 +2285,41 @@ bench_eval phase).
 
 **Queue:** 1 running + 0 queued. Skipped queueing.
 
+### Loop fire 53 — 2026-04-29 08:41 PT — max_grad_norm cycle-3 complete; backstop will re-run reward_version A/B next
+
+**State.** Worker idle (GPU 0%), queue empty. PID 4019322, 15h 19min
+uptime, RSS 6.60GB plateau (14 fires of flat readings). Champion drift
+1168→1169.
+
+**max_grad_norm cycle-3 complete (NEW axis):**
+
+| run | max_grad_norm | Elo | wins/24 |
+|---|---|---|---|
+| -lo (0.25) | 1010 | 6 |
+| -mid (0.50 baseline) | **1020** | (race) |
+| -hi (1.00) | 1016 | 8 |
+
+**mid > hi > lo. Range 10 Elo (small).** Flat-ish curve with a slight
+edge to mid. Tight clipping (lo) is the only clear loser — over-
+restricts gradients, forces binary action set in LOSS.
+
+max_grad_norm-hi game review:
+- WIN: 17 ticks, 11% noop, **100%/75%/noop varied** — active
+- LOSS: 43 ticks, 32% noop, 100%/noop/**50%-sends** appear, value
+  drop +8.82 (panicked)
+- Allows action diversity that lo's 0.25 clip suppressed
+
+**🟢 Backstop will pick reward_version next (round-robin from
+max_grad_norm).** This is **valuable** — re-runs the v13/v14 A/B
+under the harder cycle-3 bench corpus. Tests whether v14's -12 Elo
+gap from fire 25 holds, shrinks, or grows under deflation.
+
+If v14 holds or improves vs the harder corpus → strong signal to
+land v14b with refined coefs. If v14 falls further → diagnosis
+shifts to "v14 coefs are absolutely too strong, not just relatively."
+
+**Queue:** empty. Skipped queueing — backstop's :45 tick handles it.
+
 ## Code changes during loop
 
 ### 2026-04-29 01:55 PT — fix scripts/karp_review_games.py for tied created_at
