@@ -1744,6 +1744,48 @@ avoid a zombie.
 
 **Queue:** 1 running + 2 queued = 3. Skipped queueing.
 
+### Loop fire 36 — 2026-04-29 00:41 PT — gamma cycle-3 mid done; second 3-tick WIN of the loop
+
+**State.** Worker PID 4019322, **7h 19min uptime**, RSS **6.59GB
+(-0.02 since fire 35)** — first downtick of the creep, GC nudged off
+20 MB. Holding around 6.6GB ceiling for now. Champion **+5 to 1185**
+(identity unchanged, steadily climbing).
+
+**gamma cycle-3 progression:**
+
+| run | cycle 1 | cycle 3 | Δ |
+|---|---|---|---|
+| -lo (0.95) | **1095** | queued | — |
+| -mid (0.97) | 1080 | **1043** | -37 |
+| -hi (0.99) | 1070 | running, 19 min in | — |
+
+Cycle-1 had the cleanest monotone signal of the whole loop (lo > mid > hi,
+range 25 Elo). Will see if cycle-3 confirms.
+
+**🟢 New record: 3-tick WIN — second of the entire loop.**
+
+gamma-mid cycle-3 game review:
+- WIN: **3 ticks**, **50%=50% / noop=50%** — fastest WIN tied with
+  rollout_steps-hi cycle-2 (also 3-tick, also used 50% sends)
+- LOSS: 23 ticks, 50% noop, 100%/75% backup, value-drop +4.94
+
+**Pattern: 3-tick wins use 50%-sends.** Both observed 3-tick wins
+across 36 fires used 50%-sends. **Commit-50%-immediately is a viable
+opening exploit** when the opponent is fragile (cycle-2/3 deflation
+regime). Agent has discovered an aggressive opener.
+
+**v13 cycle-3 is producing increasingly diverse winning paths.** Adds
+to fire-34's "4 archetypes within 20 Elo" finding — short-passive
+(25-tick, 69% noop), aggressive (14-tick, 86% type-100), and now
+**ultra-fast 50%-rush (3 ticks)** all coexist around Elo 1023-1043.
+
+**Worker memory creep update.** 5.79→6.44→6.32→6.61→6.59 across 5
+fires. Net +0.80 since fire-32 plateau, but creep is *slowing*: last
+fire's first downtick. May plateau at ~6.6GB without restart.
+**Holding off restart this fire — will check trajectory fire 37.**
+
+**Queue:** 1 running + 1 queued = 2. Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
