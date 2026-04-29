@@ -3088,6 +3088,65 @@ Mid edges hi if it rates similarly. Backstop next axis: minibatch_size.
 
 **Skipped queueing.** Worker idle, backstop ticks ~14:45.
 
+### Loop fire 68 — 2026-04-29 15:29 PT — minibatch_size + update_epochs cont. → new champion #3; clip_range got killed-for-restart (not a real failure); value_coef in flight
+
+**State.** Worker active, backstop active (last fire 15:15 PT, next 15:30). Karp
+queue: value_coef-lo running, value_coef-{mid,hi} queued, max_grad_norm-{lo,mid,hi} queued by this fire = depth 6 (cap).
+
+**Recent finished karp- runs since fire 67 (sorted by queue time):**
+
+| label | swept_var | dur | Elo | n | PFSP | promoted? |
+|---|---|---|---|---|---|---|
+| `karpv2-...1419-update_epochs-lo` | update_epochs=2 | 5.8m | 957.0 | 11 | 0.776 | no |
+| `karpv2-...1419-update_epochs-mid` | update_epochs=4 | 12.6m | unrated (986.7) | 5 | — | no |
+| `karpv2-...1419-update_epochs-hi` | update_epochs=8 | 19.2m | 977.0 | 11 | 0.819 | no (rematch ⭐) |
+| `karpv2-...1414-clip_range-{lo,mid,hi}` | clip_range | 5.4m × 3 | killed-for-restart | — | — | n/a |
+| `karpv2-...1445-minibatch_size-lo` | minibatch_size=256 | 5.8m | **1029.0** | 11 | 0.721 | no |
+| `karpv2-...1445-minibatch_size-mid` | minibatch_size=512 | 12.5m | 1008.8 | 11 | 0.815 | no |
+| `karpv2-...1445-minibatch_size-hi` | minibatch_size=1024 | 19.3m | 949.7 | 11 | 0.795 | no |
+| `karpv2-...1448-cont-update_epochs-hi-20min` | continuation | 38.5m | **1055.2** | 12 | 0.662 | ⭐ **#3 champion** |
+
+**Key reads:**
+- **minibatch_size: lo wins (256 → 1029).** Smaller batches → more SGD steps per
+  cell → faster policy movement. Mirrors the n_envs=lo finding from fire 64
+  (more updates per cell = better in 5-min budget). Combined: agent benefits
+  from update *density*, not breadth.
+- **update_epochs: hi (8) wins on rematch (+16pp avg fire 67), but mid (4) wins
+  on training rate (0.531).** Stayed at 4 (baseline) given the noise in 5-min
+  cells and the rematch result was a one-off.
+- **20-min continuation of update_epochs-hi** *did* climb to **1055** — proof
+  that long compute on a working config (rotation + 4 epochs + larger horizon)
+  pays. Becomes new champion archive entry #3.
+- clip_range sweep wasn't real data — the runs were killed at the start of
+  fire 66.5 (worker restart for label-fix code commit 3998608). Not a sweep
+  failure. Should re-queue clip_range later in the round-robin.
+
+**Karp leaderboard (top karpv2 champions, by source-run elo_score):**
+
+| run | elo | n | when |
+|---|---|---|---|
+| `karpv2-260429-1305-n_envs-lo` | 1057.7 | 25 | fire 64 |
+| `karpv2-260429-1448-cont-update_epochs-hi-20min` | 1055.2 | 12 | fire 68 (this) |
+| `karpv2-260429-1244-rollout_steps-lo` | 1030.2 | 10 | fire 62 |
+
+karpv2 ceiling holding around 1050-1060. The cron-era champion
+`cron-260428-0407-phase2_selfplay-med-00` at **1147** is still untouched.
+
+**Review games (most-recent rated, `karpv2-...1448-cont-update_epochs-hi-20min`):**
+
+| game | tag | ticks | decisions | noop% | entropy | value drop | top types | flags |
+|---|---|---|---|---|---|---|---|---|
+| `bdcc3e13` | WIN | 31 | 16 | 38% | 2.11 | -1.36 | noop=38% 50%=19% 75%=19% | ok |
+| `b869a8af` | LOSS | 55 | 28 | 64% | 2.69 | +8.90 | noop=64% 100%=21% 50%=11% | high noop rate 64% |
+
+🚩 *Loss has 64% noop + value drop +8.9.* The agent didn't anticipate the loss —
+critic was over-confident. Worth watching this in future losses; if value-drop
+sign stays inverted across cells, the critic is mis-calibrated under rotation.
+
+**Queued.** max_grad_norm sweep ({0.25, 0.5, 1.0}) via round-robin. Queue
+depth at cap (6); next fire will likely skip queueing if value_coef + max_grad_norm
+are still in flight.
+
 ## Code changes during loop
 
 ### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
