@@ -104,6 +104,60 @@ def _mirror_ownership(obs: dict) -> dict:
     return mirrored
 
 
+def preload_state_dict(weights_path: str, device: str = "cpu") -> dict:
+    """Read a weights .pt file once into RAM. Pair with `make_neural_opponent_cached`
+    for fast per-update swaps under opponent_pool_mode=rotate_per_update.
+
+    2026-04-29 fire 65: avoids re-reading the file on every swap; the trainer
+    pre-loads every archive member at init, then cycles in-memory.
+    """
+    import os
+    if device == "cpu":
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    import torch
+    return torch.load(str(weights_path), map_location=device, weights_only=True)
+
+
+def preload_obs_norm(obs_norm_path: Optional[str]):
+    """Read an obs_norm .pt file once into a RunningNorm instance, or None
+    if path is missing/null."""
+    if not obs_norm_path:
+        return None
+    if not Path(str(obs_norm_path)).exists():
+        return None
+    from training.encoder import OBS_DIM
+    from training.obs_norm import RunningNorm
+    norm = RunningNorm(OBS_DIM)
+    norm.load(str(obs_norm_path))
+    return norm
+
+
+def make_neural_opponent_cached(
+    state_dict: dict,
+    obs_norm,                            # already-loaded RunningNorm or None
+    device: str = "cpu",
+    recorder=None,
+) -> Opponent:
+    """Build an Opponent callable from a pre-loaded state_dict + obs_norm.
+
+    Faster than `make_neural_opponent` for hot-swap paths because no disk
+    I/O happens here — caller is expected to have called `preload_state_dict`
+    + `preload_obs_norm` once at init time.
+
+    Per-call cost: ~10-50ms (net construct + state_dict copy + .to(device)).
+    Compare to ~30-100ms for the full disk-read variant.
+    """
+    import torch
+    from training.agent import PPOAgent
+    from training.net import ActorCritic, infer_body_dim
+
+    body_dim = infer_body_dim(state_dict)
+    net = ActorCritic(body_dim=body_dim)
+    net.load_state_dict(state_dict)
+    agent = PPOAgent(net, device=device)
+    return _build_opponent_callable(agent, obs_norm, recorder)
+
+
 def make_neural_opponent(
     weights_path: str,
     obs_norm_path: Optional[str] = None,
@@ -125,32 +179,14 @@ def make_neural_opponent(
     waiting for subprocs stuck on `futex_do_wait`). We hide the GPU from
     the subproc's torch *before* importing it so opponents stay CPU-only.
     """
-    import os
+    state_dict = preload_state_dict(weights_path, device=device)
+    obs_norm = preload_obs_norm(obs_norm_path)
+    return make_neural_opponent_cached(state_dict, obs_norm, device=device, recorder=recorder)
 
-    if device == "cpu":
-        # Unconditional override — setdefault leaves parent's value in place.
-        os.environ["CUDA_VISIBLE_DEVICES"] = ""
-    # Lazy imports: we don't want random-legal / noop paths to pull torch or
-    # training code into every subprocess that doesn't need it.
-    import torch
 
-    from training.agent import PPOAgent
-    from training.encoder import OBS_DIM, encode_obs
-    from training.net import ActorCritic, infer_body_dim
-    from training.obs_norm import RunningNorm
-
-    state_dict = torch.load(str(weights_path), map_location=device, weights_only=True)
-    # Capacity-sweep snapshots (v9.0-256 etc) have wider trunks; infer from
-    # trunk.0.weight so we construct the right-sized net for load_state_dict.
-    body_dim = infer_body_dim(state_dict)
-    net = ActorCritic(body_dim=body_dim)
-    net.load_state_dict(state_dict)
-    agent = PPOAgent(net, device=device)
-
-    obs_norm: Optional[RunningNorm] = None
-    if obs_norm_path and Path(str(obs_norm_path)).exists():
-        obs_norm = RunningNorm(OBS_DIM)
-        obs_norm.load(str(obs_norm_path))
+def _build_opponent_callable(agent, obs_norm, recorder):
+    """Closure factory shared between cached + uncached opponent makers."""
+    from training.encoder import encode_obs
 
     def opponent(state: State, rng: np.random.Generator) -> int:
         obs_dict = _state_to_obs(state, mask_player=C.OWNER_P2)

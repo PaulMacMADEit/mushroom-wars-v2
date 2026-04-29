@@ -171,6 +171,21 @@ class PPOTrainer:
         else:
             self._lb_weights = None
 
+        # 2026-04-29 fire 65: pre-load every leaderboard archive member's
+        # state_dict + obs_norm into RAM at init. Lets _rotate_opponent_for_update
+        # avoid disk I/O on every swap (~10-30ms saving). RAM cost: ~5MB per
+        # archive member × 10-20 members = trivial.
+        self._lb_state_dicts: list[dict] = []
+        self._lb_obs_norms: list = []
+        if self._leaderboard and self.cfg.opponent_pool_mode == "rotate_per_update":
+            from sim.envs.opponents import preload_state_dict, preload_obs_norm
+            opp_device = (opponent_kwargs or {}).get("device", "cpu")
+            for w_path, n_path, _w in self._leaderboard:
+                self._lb_state_dicts.append(preload_state_dict(str(w_path), device=opp_device))
+                self._lb_obs_norms.append(preload_obs_norm(str(n_path) if n_path else None))
+            print(f"[trainer] pre-loaded {len(self._lb_state_dicts)} archive members "
+                  f"into RAM for per-update rotation (device={opp_device})")
+
         # Initial opponent: simple name for the very first rollout. After
         # the first snapshot registers (every cfg.snapshot_every updates),
         # the vec env gets rebuilt with neural opponents drawn from the pool.
@@ -663,9 +678,9 @@ class PPOTrainer:
         """Pick a random archive member and swap the opponent callable in-place.
 
         Called at the start of update() when cfg.opponent_pool_mode ==
-        'rotate_per_update'. Uses self._leaderboard which the worker pre-
-        populated via _download_pfsp_champions — all archive members already
-        on local disk. So this is just file load + net construct (~50ms).
+        'rotate_per_update'. Uses self._lb_state_dicts (pre-loaded into RAM
+        at trainer init) so the per-swap cost is just net-construct +
+        state_dict copy (~10-30ms; no disk I/O).
 
         Updates:
           - self.vec._opponent (used by the legacy per-tick path in backend.py)
@@ -674,24 +689,24 @@ class PPOTrainer:
             the swap on dashboard)
         """
         import os
-        from sim.envs.opponents import make_neural_opponent
+        from sim.envs.opponents import make_neural_opponent_cached
 
-        if not self._leaderboard:
-            return  # nothing to rotate to
+        if not self._leaderboard or not self._lb_state_dicts:
+            return  # nothing to rotate to (or pre-load skipped)
 
         # Weighted pick using the cached PFSP weights (or uniform if missing).
         if self._lb_weights is not None:
             idx = int(np.random.choice(len(self._leaderboard), p=self._lb_weights))
         else:
             idx = int(np.random.randint(0, len(self._leaderboard)))
-        weights_path, obs_norm_path, _weight = self._leaderboard[idx]
 
-        # Build a fresh opponent callable. make_neural_opponent loads the net
-        # state_dict, instantiates the right body width, and returns a closure.
+        # Cached state_dict + obs_norm — already in RAM from init.
+        state_dict = self._lb_state_dicts[idx]
+        obs_norm = self._lb_obs_norms[idx]
         device = (self._initial_opponent_kwargs or {}).get("device", "cpu")
-        new_opponent = make_neural_opponent(
-            weights_path=weights_path,
-            obs_norm_path=obs_norm_path,
+        new_opponent = make_neural_opponent_cached(
+            state_dict=state_dict,
+            obs_norm=obs_norm,
             device=device,
         )
 
@@ -704,10 +719,9 @@ class PPOTrainer:
 
         # Update the dashboard label so the run page shows which opponent
         # the agent is currently training against. The basename of the
-        # weights_path is enough — the worker-side download names files with
-        # the run_id prefix.
-        opp_id = os.path.basename(os.path.dirname(weights_path)) if weights_path else "?"
-        # Mutate (not replace) so any held references still work.
+        # weights_path's parent dir is the run_id-derived tempdir name.
+        weights_path = self._leaderboard[idx][0]
+        opp_id = os.path.basename(os.path.dirname(str(weights_path))) if weights_path else "?"
         if self._initial_opponent_kwargs is None:
             self._initial_opponent_kwargs = {}
         self._initial_opponent_kwargs["_label_opponent_run_id"] = opp_id
