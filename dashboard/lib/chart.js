@@ -125,7 +125,7 @@ export function bandChart(canvas, points, opts = {}) {
  * opts:   { yLabel, yMin, yMax, xLabel, label } — optional axis tweaks
  */
 export function lineChart(canvas, points, keys, opts = {}) {
-  const { yLabel = 'value', yMin, yMax, xLabel = 'update' } = opts;
+  const { yLabel = 'value', yMin, yMax, xLabel = 'update', yPct = false } = opts;
   const labels = points.map((_, i) => i + 1);
   const datasets = keys.map(k => ({
     label: k,
@@ -143,6 +143,11 @@ export function lineChart(canvas, points, keys, opts = {}) {
   };
   if (yMin !== undefined) yAxis.min = yMin;
   if (yMax !== undefined) yAxis.max = yMax;
+  if (yPct) {
+    yAxis.ticks = {
+      callback: (v) => `${(v * 100).toFixed(0)}%`,
+    };
+  }
   return new Chart(canvas, {
     type: 'line',
     data: { labels, datasets },
@@ -157,6 +162,15 @@ export function lineChart(canvas, points, keys, opts = {}) {
       },
       plugins: {
         legend: { position: 'bottom', labels: { padding: 10, boxWidth: 10, boxHeight: 10 } },
+        tooltip: yPct ? {
+          callbacks: {
+            label: (ctx) => {
+              const v = ctx.parsed.y;
+              return v == null ? `${ctx.dataset.label}: —`
+                               : `${ctx.dataset.label}: ${(v * 100).toFixed(1)}%`;
+            },
+          },
+        } : undefined,
       },
     },
   });

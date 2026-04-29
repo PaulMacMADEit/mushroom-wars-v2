@@ -258,7 +258,7 @@
         for (const id of chartIds) replaceCanvasWith(id, text, true);
       }
 
-      await refreshCharts(logUrl, chartIds, failAllCharts);
+      await refreshCharts(logUrl, chartIds, failAllCharts, run);
 
       // While the run is still in flight, poll for new metrics + status every
       // 8s. The worker uploads metrics.json every few updates to the same
@@ -268,7 +268,7 @@
       }
     }
 
-    async function refreshCharts(logUrl, chartIds, failAllCharts) {
+    async function refreshCharts(logUrl, chartIds, failAllCharts, run) {
       if (!logUrl) {
         failAllCharts('no metrics yet — waiting for first upload…');
         return;
@@ -301,7 +301,7 @@
       };
 
       renderOne('chart-win',    ['win_rate_vs_leaderboard', 'win_rate'],
-                { yLabel: 'win rate', yMin: 0, yMax: 1 });
+                { yLabel: 'win rate', yMin: 0, yMax: 1, yPct: true });
       renderOne('chart-loss',   ['value_loss', 'entropy_loss'],
                 { yLabel: 'loss' });
       renderOne('chart-signal', ['policy_loss', 'approx_kl'],
@@ -365,7 +365,7 @@
       // so old runs (pre-2026-04-29) render the empty-state cleanly.
       renderEvalMatches(points);
       renderTrainingOpp(points);
-      renderWinRateProgression(points);
+      renderWinRateProgression(points, run ?? {});
       renderLevelMix(points);
     }
 
@@ -771,12 +771,17 @@
     }
 
     /** Win rate progression in 10% buckets across the run.
+     * Buckets are pinned to budget wall-clock, NOT to the current point count —
+     * so the first bucket is always "first 10% of the budgeted run", and old
+     * points don't migrate buckets as new ones come in. Mid-run, late buckets
+     * are simply empty until that wall-clock window is reached.
+     *
      * Two parallel breakdowns:
      *   1. Training-rollout (B): aggregate win_rate per bucket, grouped by
      *      training_opp_label so opponent swaps mid-run are visible.
      *   2. Eval-matches (A): per-opponent eval win rate per bucket, sorted by
      *      Elo. Sparse — only the buckets that contained eval updates light up. */
-    function renderWinRateProgression(points) {
+    function renderWinRateProgression(points, run) {
       const $card = document.getElementById('win-rate-progression');
       if (!$card) return;
       if (!points || !points.length) {
@@ -786,7 +791,21 @@
 
       const N_BUCKETS = 10;
       const total = points.length;
-      const bucketOf = (i) => Math.min(N_BUCKETS - 1, Math.floor(N_BUCKETS * i / total));
+      // Bucket by fraction-of-budget. We don't have per-point wall_ms, so we
+      // assume points are emitted at a roughly steady cadence and project
+      // each point's index onto the budget timeline:
+      //   fraction = (i / (total-1)) * (run.wall_ms / run.budget_ms)
+      // For a completed run (wall_ms ≈ budget_ms) this collapses to i/total
+      // (the old behaviour). Mid-run it pins early points to early buckets.
+      const wallMs   = run?.wall_ms;
+      const budgetMs = run?.budget_ms;
+      const denom    = Math.max(total - 1, 1);
+      const useBudget = wallMs > 0 && budgetMs > 0;
+      const progress  = useBudget ? Math.min(1, wallMs / budgetMs) : 1;
+      const bucketOf = (i) => {
+        const frac = (i / denom) * progress;
+        return Math.min(N_BUCKETS - 1, Math.floor(N_BUCKETS * frac));
+      };
 
       // ---- (B) Training-rollout: per-(bucket, opponent) win rate ----------
       // Each metrics row has training_opp_label + win_rate (vs that opp this update).
@@ -1101,7 +1120,7 @@
        // METRICS_UPLOAD_EVERY=1, so 3s polling captures most uploads.
       const POLL_MS = 3000;
       const timer = setInterval(async () => {
-        const { data: run, error } = await sb.from('runs').select('status, log_url, games_played, wall_ms, result, hyperparams, elo_score, elo_n_matches').eq('id', runId).single();
+        const { data: run, error } = await sb.from('runs').select('status, log_url, games_played, wall_ms, budget_ms, result, hyperparams, elo_score, elo_n_matches').eq('id', runId).single();
         if (error) return;
         // Update header stats row.
         const gamesPerMin = (run.games_played && run.wall_ms) ? (run.games_played / (run.wall_ms / 60000)) : null;
@@ -1123,7 +1142,7 @@
           statEls[8].textContent = run.wall_ms ? fmtDurationShort(run.wall_ms) : '—';
         }
         // Refresh charts with the latest live log.
-        await refreshCharts(signedUrl(run.log_url), chartIds, failAllCharts);
+        await refreshCharts(signedUrl(run.log_url), chartIds, failAllCharts, run);
         // Stop polling once terminal.
         if (run.status === 'done' || run.status === 'failed') {
           clearInterval(timer);
