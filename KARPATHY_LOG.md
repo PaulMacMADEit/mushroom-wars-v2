@@ -849,8 +849,46 @@ Possible causes of no-op preference:
 3. Action mask gates valid sends conservatively (need a min-garrison
    to send) and noop is the only legal action a lot of the time.
 
-Worth investigating root cause before next config bump. Paul's ask
-was prescient — aggregate Elo metrics never would have surfaced this.
+**Hypothesis 3 REJECTED — investigation 2026-04-28 17:00 PT.**
+
+Counted 443 decisions across 24 lr-lo bench games:
+| Reading | Count | % |
+|---|---|---|
+| Picked noop | 160 | 36% |
+| Picked noop *because forced* (no send types legal) | 5 | **1.1%** |
+| Picked noop *by choice* (sends were legal) | 155 | 35% |
+| Decisions with 3+ send types legal | 419 | **94.6%** |
+
+Mask is essentially permissive — almost every tick, 3 or 4 of the 4
+send-percentage options are legal. **35% of decisions are noop-by-choice.**
+
+Comparison with bench opponents (other karp/cron PPO runs) in the
+same 24 games:
+
+| action | lr-lo | opponents | diff |
+|---|---|---|---|
+| 25%  | 1.4% | 0.5% | ~same |
+| 50%  | 3.6% | 6.5% | -3pp |
+| 75%  | 18.7% | 14.0% | +5pp |
+| 100% | 40.2% | 44.7% | -4pp |
+| **noop** | **36.1%** | **34.3%** | **+2pp** |
+
+**Passivity is fleet-wide.** Every PPO model trained under this config
+converges to "noop ~35%, send 100% when sending". Not lr-lo specific.
+
+This re-points investigation to:
+- **Hypothesis 1 (reward shape)** — primary suspect. Passive
+  consolidation produces a positive reward signal under random_legal.
+- **Hypothesis 2 (random_legal is also passive)** — likely
+  compounding factor. Random_legal samples uniformly over legal
+  actions including noop, so it's also ~20% noop minimum (1/5
+  action types when 4 send types are legal).
+
+**Implication for the loop's strategic moves:** the karp ceiling
+(~1095 Elo) and the passivity may be the same problem. Switching to
+`opponent_name=neural` (train vs champion) would likely break this
+equilibrium because the champion isn't passive enough to make
+mutual-noop a viable strategy.
 
 ## Code changes during loop
 
