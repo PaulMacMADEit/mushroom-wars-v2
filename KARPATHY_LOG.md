@@ -1690,6 +1690,60 @@ uptime. Watching but no restart pressure.
 **Queue:** 1 running + 0 queued = 1. Skipped queueing. Backstop ticks
 :45 PT next; round-robin from n_envs picks **gamma** for cycle-3.
 
+### Loop fire 35 — 2026-04-29 00:11 PT — n_envs cycle-3 complete; 4 archetypes within ~20 Elo
+
+**State.** Worker PID 4019322, **6h 49min uptime**, RSS **6.61GB
+(+0.29 since fire 34)** — long-term creep continues despite partial
+GCs. MEM% 10%. Champion 1180 (identity unchanged).
+
+**n_envs cycle-3 complete:**
+
+| run | cycle 1 | cycle 3 | Δ |
+|---|---|---|---|
+| -lo (512)  | 1083 | 1035 | -48 |
+| -mid (1024) | 1087 | 1023 | -64 |
+| -hi (2048) | 1081 | **1041** | -40 |
+
+Range cycle-3 = 18 Elo. Same flat-ish direction as cycle-1 (range 6
+Elo). n_envs is the only axis where cycle-1 and cycle-3 still agree
+(no inversion). hi edged lo, mid worst.
+
+**Game review on n_envs-hi cycle-3 — less-passive policy emerges:**
+
+| game | tag | ticks | noop% | top types | value drop |
+|---|---|---|---|---|---|
+| WIN | 30 | **13%** | 100%/noop/75% | -0.40 |
+| LOSS | 51 | 23% | **100%=31% / 75%=27% / noop=23%** | +8.63 |
+
+LOSS sample uses **75%-sends 27%** — first time we've seen 75%-sends
+as a meaningful share in a LOSS. Combined with low noop (23%), this
+is a less-passive losing policy.
+
+**🟢 4 archetypes within ~20 Elo under v13 cycle-3:**
+
+| run | archetype | WIN noop% | Elo |
+|---|---|---|---|
+| n_envs-lo cycle-3 | passive (short wins) | 69% | 1035 |
+| **n_envs-hi cycle-3** | **less-passive** | **13%** | **1041** |
+| n_envs-mid cycle-3 | aggressive (type-100=86%) | 14% | 1023 |
+| rollout_steps-hi cycle-3 | calm (LOSS drop +0.35) | 44% | 1043 |
+
+**The bench corpus rewards a continuum of playstyles.** Elo no longer
+discriminates strategy. v14 thesis strengthens: shaping is needed to
+pull all runs toward a single coherent attractor instead of letting
+each run drift into its own basin.
+
+**Backstop pulled gamma cycle-3.** mid running 10 min in (started
+00:01 PT). lo + hi queued.
+
+**Worker memory creep 🚩.** 5.79→6.44→6.32→6.61 GB across fires
+32/33/34/35. Net +0.82 over 4 fires (2h). At this rate (+0.27/30min
+avg), worker hits 9GB by ~5 AM PT — within session window. **Restart
+should happen within next 2-3 fires.** Will time it between runs to
+avoid a zombie.
+
+**Queue:** 1 running + 2 queued = 3. Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
