@@ -42,12 +42,15 @@ def _latest_rated_karp_label(sb) -> str | None:
 
 
 def _games_for_run(sb, run_id: str, limit: int = 12):
+    # Bench_eval queues all match rows in one transaction, so created_at
+    # ties are common — fetch ALL matches for the run, then filter to
+    # the ones that have actually been populated with games.
     matches = (
         sb.table("matches")
         .select("id,model_a_run_id,model_b_run_id,summary")
         .or_(f"model_a_run_id.eq.{run_id},model_b_run_id.eq.{run_id}")
         .order("created_at", desc=True)
-        .limit(5)
+        .limit(20)
         .execute()
     ).data
     if not matches:

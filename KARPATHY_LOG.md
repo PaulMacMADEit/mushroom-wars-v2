@@ -1853,7 +1853,95 @@ workload-specific.
 **Queue empty.** Backstop ticks :15 PT (4 min), picks **gae_lambda**
 for cycle-3.
 
+### Loop fires 38-41 — 2026-04-29 01:52-03:14 PT — consolidated entry
+
+Fires 38-40 had state-pulls and analysis but never landed a commit
+(interrupted mid-fire each time). Consolidating with fire 41 here.
+
+**State at fire 41.** Worker PID 4019322, **9h 52min uptime**, RSS
+6.58GB plateau holding (bounced 6.59→6.61→6.62→6.61→6.58 across
+fires 37-41 — no creep). Champion drift 1189→1178→1179 across
+the 4-fire window (small noise, identity unchanged).
+
+**🐛 Bug fix to scripts/karp_review_games.py (fire 38).** When pulling
+matches for a run, all 10 bench-eval matches share the same `created_at`
+(queued in one transaction). The script's `order(created_at desc)
+.limit(5)` was non-deterministically picking 5 ties — sometimes hitting
+the 5 matches that hadn't been populated with games yet, returning 0.
+**Fixed:** removed implicit limit, fetch up to 20 matches and let the
+games-table query filter to the populated ones. Game review on
+gae_lambda-lo cycle-3 worked correctly after fix.
+
+**gae_lambda cycle-3 (NEW axis, never run before):**
+
+| run | gae_lambda | Elo | rate | updates |
+|---|---|---|---|---|
+| -lo | 0.90 | **1046** | 0.926 | 46 |
+| -mid | 0.95 | 1015 | 0.916 | 49 |
+| -hi | 0.98 | 1018 | 0.896 | 52 |
+
+**lo > hi > mid, range 31 Elo.** Lower gae_lambda wins (shorter advantage
+horizon, less variance per update). Same direction as cycle-1's gamma
++ lr findings: **karp config wants conservative, stable updates**.
+gae_lambda-lo game review: 36% noop in 22-tick WIN, balanced 45/45/9
+LOSS. Moderately active, balanced.
+
+**clip_range cycle-3 in progress:**
+
+| run | clip_range | cycle 1 | cycle 3 | Δ |
+|---|---|---|---|---|
+| -lo (0.10) | 1085 | **958** | **-127 ⚠️** |
+| -mid (0.20) | 1089 | 1014 (unrated, in bench_eval) | TBD |
+| -hi (0.30) | unrated | queued | — |
+
+**clip_range-lo cycle-3 crashed to Elo 958 (sub-anchor).** -127 Elo
+deflation vs cycle-1 — **biggest single-cell drop of the entire loop**
+(prior record: lr-hi cycle-2 -55, n_envs-mid cycle-3 -64). cycle-1
+clip_range was flat (1085/1089). cycle-3 is opening up dramatically.
+
+**🟢 clip_range-lo cycle-3 game review — v14-LIKE behavior under v13:**
+
+| game | tag | ticks | decisions | noop% | top types | value drop |
+|---|---|---|---|---|---|---|
+| WIN | **9** | 5 | **0%** | **100%/75%/50%** | -0.79 |
+| LOSS | 23 | 12 | 42% | noop/100%/75% | +8.90 |
+
+**This is the FIRST single-WIN-sample with 0% noop AND a three-way
+send mix (100%/75%/50%) under v13.** It's exactly v14's signature:
+active, varied send-vocabulary. Difference: v14 hit Elo 1040; this
+clip_range-lo cycle-3 is sub-anchor at 958.
+
+**Why?** Low clip_range = small per-step PPO update = cautious but
+exploratory. Same theme as gae_lambda-lo (which scored 1046). But
+under cycle-3 corpus deflation, the exploration didn't pay off in
+wins — the policy is varied but lossy.
+
+**Implication:** v14's per-tick shaping reaches the same active-varied
+attractor as low-clip_range, but **stays at higher Elo** (1040 vs
+958). v14 trades less Elo for the same behavior diversity. This
+reframes fire-25's "v14 -12 Elo" verdict more favorably:
+- v13 + low-clip-range: -127 Elo for active-varied policy
+- **v14 + baseline clip-range: -12 Elo for active-varied policy**
+
+**v14 is a 10× more efficient path to the same diversity.**
+
+**Worker memory.** No restart pressure. 9h 52min uptime, plateau at
+~6.6GB. Net +0.80 since fire-32 plateau then flat. Previous worker's
+9GB-at-5h crash was workload-specific (since fixed by code changes
+or simply different seed).
+
+**Queue.** clip_range-mid done (in bench_eval, will rate next fire),
+clip_range-hi queued.
+
 ## Code changes during loop
+
+### 2026-04-29 01:55 PT — fix scripts/karp_review_games.py for tied created_at
+
+Bench_eval inserts all match rows in one transaction → identical
+created_at. Old query `.order('created_at', desc=True).limit(5)`
+non-deterministically grabbed 5 ties; sometimes 0/5 had populated
+games. Increased limit to 20 (10 matches per run typical, well
+below threshold). Game review now works on freshly-rated runs.
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
 
