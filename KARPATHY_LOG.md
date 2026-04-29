@@ -956,7 +956,65 @@ run for noise estimates while reward_v14 design lands.
 - Strategic moves from fire 18 (gamma 0.95 baseline, opponent axis,
   cell budget bump) all pending.
 
+### Loop fire 21 — 2026-04-28 17:20 PT — implemented reward_v14, queued v13/v14 A/B sweep
+
+**Major code change.** Added `reward_v14` per Paul sign-off this fire:
+- v1.4 keeps v1.3 terminal/capture rewards
+- Adds per-tick shaping: `coef_b * (b_p1 - b_p2) + coef_u * (u_real_p1 - u_real_p2)`
+- Coefficients: `coef_b = 0.0010` (per building diff), `coef_u = 0.0002` (per real-unit diff)
+- Symmetric: p1 gets +delta, p2 gets -delta
+- Per-tick shaping skipped on terminal tick (terminal reward already encodes outcome)
+- Designed for total per-game shaping ≈ ±1.0 = ~20% of REWARD_WIN(5.0)
+
+**Wiring** (committed `d813ce8`):
+- `sim/config.py`: REWARD_VERSION_V14=2, *_BY_VERSION extended, new
+  REWARD_TICK_{BUILDINGS,UNITS}_COEF_BY_VERSION
+- `sim/engine.py` + `sim/engine_jax.py`: shaping injection point after
+  victory check, byte-identical between numpy and JAX
+- `training/trainer.py`: `cfg.reward_version: int` overrides legacy
+  `cfg.reward_v13: bool` when ≥0
+- `configs/karpathy_loop.yaml`: new 2-cell sweep axis `reward_version`
+  (lo=1 v13 control, hi=2 v14 treatment)
+- `tests/test_rewards_v14.py`: 6 new tests, all 37 existing tests pass
+
+**State:** Worker healthy 3h 18min uptime, RSS 5.80GB plateau.
+Champion 1155, identity unchanged. rollout_steps-lo still running
+(~20 min in, finishing now). rollout_steps-mid + hi queued.
+
+**Queued reward_version sweep** as next axis after the rollout_steps
+cycle-2 wraps up:
+
+| label | reward_version |
+|---|---|
+| karp-260428-1719-reward_version-lo | 1 (v13 control) |
+| karp-260428-1719-reward_version-hi | 2 (v14 treatment) |
+
+**Pre-deployment caveat.** The running worker (PID 3680495) imported
+modules at startup (~14:03 PT). It will NOT pick up the new reward_v14
+code until it restarts. Until then, the v14 cell will reference an
+import that doesn't exist in worker memory → crash on entering training.
+
+**Options for fire 22:**
+- (A) Restart worker after rollout_steps cycle-2 finishes (~60 min)
+  → cleanest, only zombies the cycle-2 last run if mid-bench
+- (B) Restart now, zombie rollout_steps-lo + mid+hi
+- (C) Wait for natural OOM (worker died last time at 5h CPU / 9GB peak;
+  currently 3h CPU / 5.8GB plateau — could be hours)
+
+Plan: fire 22 will check rollout_steps cycle-2 status; if done, do (A);
+if still in flight and reward_version-lo about to start, restart with
+controlled timing.
+
 ## Code changes during loop
+
+### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
+
+Per Paul: rewards holding more buildings + units, penalties for
+losing same. Symmetric delta-based (option i) chosen for smoother
+PPO learning vs event-based loss penalties. Magnitudes tuned to
+~20% of WIN total per game so terminal signal stays dominant.
+Sweepable axis added (`reward_version` 2-cell A/B). Tests + docstrings
+in place. Worker requires restart to pick up new code (planned fire 22).
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
 
