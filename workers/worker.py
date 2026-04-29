@@ -1340,11 +1340,16 @@ def main():
                     continue
 
                 # 1) Try queued runs. matches_only mode: admin jobs only
-                # (rerate, etc.). Full mode: any queued run.
+                # (rerate, etc.). Full mode: training first, then admin.
+                # claim_next_run server-side excludes sim_id='admin' so old
+                # workers can't accidentally claim a job they can't run;
+                # new full-mode workers fall back to claim_one_job here.
                 if matches_only:
                     job = claim_one_job(conn, args.machine)
                 else:
                     job = claim_one(conn, args.machine)
+                    if job is None:
+                        job = claim_one_job(conn, args.machine)
                 if job is None:
                     # 2) Fall back to queued eval matches. Filter by
                     # `summary.target_machine` so interactive-play matches

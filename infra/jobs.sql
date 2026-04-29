@@ -35,6 +35,31 @@ CREATE OR REPLACE FUNCTION claim_next_job(
    RETURNING *;
 $$ LANGUAGE sql;
 
+-- Filter admin jobs out of the training-claim path so an OLD worker (one
+-- not yet upgraded to the job dispatcher) can't accidentally claim a
+-- rerate row, fail to build_net_for_model('admin'), and mark it failed.
+-- New workers go through claim_one then fall back to claim_one_job, so
+-- full-mode workers still pick up admin work.
+CREATE OR REPLACE FUNCTION claim_next_run(
+  p_project TEXT,
+  p_machine TEXT
+) RETURNS SETOF runs AS $$
+  UPDATE runs
+     SET status     = 'running',
+         machine    = p_machine,
+         started_at = now()
+   WHERE id = (
+     SELECT id FROM runs
+      WHERE project = p_project
+        AND status  = 'queued'
+        AND simulator_id <> 'admin'
+      ORDER BY queued_at
+      FOR UPDATE SKIP LOCKED
+      LIMIT 1
+   )
+   RETURNING *;
+$$ LANGUAGE sql;
+
 -- ---------------------------------------------------------------------------
 -- Anon INSERT policy on runs — admin jobs only.
 -- The dashboard's anon key can queue rerate / bench_eval jobs but cannot
@@ -50,5 +75,13 @@ CREATE POLICY anon_insert_admin_jobs ON runs FOR INSERT TO anon, authenticated
   );
 
 GRANT INSERT ON runs TO anon, authenticated;
+
+-- The runs_bump_counts and runs_update_best_rate triggers UPDATE the
+-- models / simulators tables on INSERT. Anon doesn't have UPDATE on
+-- those tables (RLS revoke for safety), so without SECURITY DEFINER
+-- the trigger fires as anon and fails with "permission denied for
+-- table models". Run them as the postgres owner instead.
+ALTER FUNCTION runs_bump_counts()      SECURITY DEFINER;
+ALTER FUNCTION runs_update_best_rate() SECURITY DEFINER;
 
 COMMIT;
