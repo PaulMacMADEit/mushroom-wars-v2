@@ -1029,8 +1029,35 @@ First chance to start ~17:55 PT after rollout_steps-mid + hi wrap.
 Since the worker is post-restart, **both cells will use the new code**
 (v14 module is importable). Fire 23 should have first results.
 
-**Game review skipped** — most-recent-rated karp run unchanged
-(still lr-lo Elo 1073 from fire 19). Nothing new to inspect.
+**Game review** (correction — Paul caught fire-22 skipping this; should
+have run regardless of "newest run" status). Two new rated runs since
+fire 21:
+
+| run | rollout_steps | wins/24 | Elo | sample-WIN noop% | sample-WIN top type |
+|---|---|---|---|---|---|
+| rollout_steps-mid (cycle 2) | 64  | **18** | 1053 | 67% | noop |
+| rollout_steps-hi (cycle 2)  | 128 | 15 | 1048 | **50%** | **50%-send** |
+
+**rollout_steps-hi shows NOVEL behavior** — first time we've seen a
+non-100%-non-noop send dominate (50% sends were 50% of decisions in
+the WIN sample). 3-tick wins. The longer effective horizon (128
+vs 32 rollout steps) may have given the policy room to discover
+that smaller sends preserve garrison for follow-up.
+
+**rollout_steps-mid wins MORE games (18/24) but is more passive** —
+67% noop in WIN sample, 41-tick games. Different strategy, similar
+Elo. Bench_eval is averaging over both regimes.
+
+**Cycle 1 → cycle 2 Elo shift:** rollout_steps results dropped 30-50
+Elo (cycle 1: 1082-1107; cycle 2: 1048-1053). Champion advanced
+~10 Elo over the same window (1145→1155); bench corpus is also
+tougher. Real "Elo deflation" — same policy quality is graded harsher.
+
+**v14 hypothesis check.** This passive-vs-aggressive Elo-tie is exactly
+the equilibrium reward_v14 is designed to break. Expect v14 cells to:
+- Push noop rate down across decisions
+- Compress game length toward the "active" regime (8-42 ticks vs 80-92)
+- Differentiate the two strategies on Elo (one should win clearly)
 
 **Worker memory note.** New worker is at 5.57GB / 19:41 elapsed —
 slightly faster ramp than the previous restart (5.32GB at similar
