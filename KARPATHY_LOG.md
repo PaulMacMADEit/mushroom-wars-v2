@@ -2159,6 +2159,70 @@ failure modes.
 
 **Queue:** 1 running + 1 queued = 2. Skipped queueing.
 
+### Loop fires 49-50 — 2026-04-29 07:12-07:47 PT — value_coef cycle-3 = U-SHAPED axis (first observed); max_grad_norm cycle-3 in flight
+
+**State.** Worker PID 4019322, **14h 25min uptime**, RSS 6.61GB
+plateau holding 11+ consecutive fires (since fire 37). Rock-solid.
+Champion drift 1157→1162 (+5 rebound from prior decline 1180→1157).
+
+**🟢 value_coef cycle-3 complete (NEW axis) — FIRST U-SHAPED axis of the loop:**
+
+| run | value_coef | Elo | rate |
+|---|---|---|---|
+| -lo (0.25) | **1020** | 0.923 |
+| -mid (0.50 baseline) | **1001** | 0.906 |
+| -hi (1.00) | **1025** | 0.898 |
+
+**hi > lo > mid.** mid (the *baseline* value!) is the **worst cell**.
+Both extremes (very-low or very-high value-loss weight) produce
+better policies. Range 24 Elo.
+
+**Mechanism hypothesis:**
+- mid (0.5): standard PPO weighting → no specialization, middle gets stuck
+- lo (0.25): value head undertrained → policy ignores noisy value → exploratory
+- hi (1.0): value head heavily trained → policy gets accurate value → deterministic
+
+**Game review on value_coef-hi cycle-3 — extreme deterministic policy:**
+
+| game | tag | ticks | noop% | entropy | top types |
+|---|---|---|---|---|---|
+| WIN | **10** | **0%** | **0.93** | **100%=80%** / 75%=20% |
+| LOSS | 46 | 39% | 3.35 | varied |
+
+**Entropy 0.93 is the LOWEST WIN-sample entropy of all 49+ fires.**
+Typical WIN entropy is 1.5-3.0. 0.93 = near-deterministic policy.
+
+**Game review on value_coef-mid (fire 49, captured but uncommitted):**
+- WIN: 29 ticks, 33% noop, 100%/noop/75% (moderate)
+- LOSS: 19 ticks, **10% noop**, 100%=60% / 75%=30% — most active LOSS sample
+  of all 49 fires (10% is below all prior records)
+
+**The two basins of the U-curve produce opposite policies:**
+
+| run | value_coef | WIN noop% | WIN entropy | strategy |
+|---|---|---|---|---|
+| value_coef-lo (Elo 1020) | 0.25 | 33% | 2.17 | exploratory mixed |
+| value_coef-hi (Elo 1025) | 1.00 | 0% | **0.93** | deterministic aggressive |
+
+**Same Elo, opposite policies.** Reinforces fire-37/42's fragmented-
+strategy-space picture from yet another angle. **U-shaped axes can
+hide the best cells if you only run 2-cell A/B.**
+
+**max_grad_norm cycle-3 in flight (NEW axis).** lo running 16 min in,
+mid + hi queued. After this, the round-robin will have hit every
+informative axis at least once in cycle-3 (or once total for the new
+ones). The next cycle would either repeat or — if Paul calls v14
+next-step — pivot to v14 testing.
+
+**Champion Elo dynamics.** Tracked 1180 → 1157 (-23 over 2h, fire
+44-49) then **+5 rebound to 1162**. Identity unchanged throughout.
+Bench corpus continues averaging the champion against new karp- runs.
+
+**Worker memory.** 11+ fires at 6.61GB. Plateau is real. **Previous
+worker's 9GB-at-5h crash was workload-specific, not a leak.**
+
+**Queue:** 1 running + 2 queued = 3. Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-29 01:55 PT — fix scripts/karp_review_games.py for tied created_at
