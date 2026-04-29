@@ -1005,6 +1005,40 @@ Plan: fire 22 will check rollout_steps cycle-2 status; if done, do (A);
 if still in flight and reward_version-lo about to start, restart with
 controlled timing.
 
+### Loop fire 22 — 2026-04-28 17:41 PT — worker restart confirmed; reward_version sweep up next
+
+**State after restart.** Worker PID 4019322 (new), elapsed 19:41,
+RSS 5.57GB. v14 code loaded — confirmed by running v14 tests on
+PaulLinux post-pull (6/6 pass). Champion 1155, unchanged.
+
+**rollout_steps cycle-2 status:**
+- lo: done but **stuck unrated** (Elo=1000, bv=0). Bench_eval queue
+  was wiped by the worker restart. Same pattern as clip_coef-hi at
+  fire 15. Lost data point.
+- mid: running 19m 49s (started 17:21 PT, just past 20-min budget,
+  in bench_eval phase now)
+- hi: queued
+
+**Reward_version sweep ready.** Queued at fire 21:
+| label | reward_version |
+|---|---|
+| reward_version-lo | 1 (v13 control) |
+| reward_version-hi | 2 (v14 treatment, will use new code) |
+
+First chance to start ~17:55 PT after rollout_steps-mid + hi wrap.
+Since the worker is post-restart, **both cells will use the new code**
+(v14 module is importable). Fire 23 should have first results.
+
+**Game review skipped** — most-recent-rated karp run unchanged
+(still lr-lo Elo 1073 from fire 19). Nothing new to inspect.
+
+**Worker memory note.** New worker is at 5.57GB / 19:41 elapsed —
+slightly faster ramp than the previous restart (5.32GB at similar
+point), probably JAX cache + slightly different working set. Will
+keep watching for the 9GB ceiling that killed the previous worker.
+
+**Queue:** 1 running + 3 queued = 4. Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
