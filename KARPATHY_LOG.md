@@ -2661,6 +2661,66 @@ config/labels changed).
 table for reference. Anyone querying `like 'karp-%'` will still get
 v1-regime data. New regime is `karpv2-` only.
 
+### Loop fire 59 — 2026-04-29 11:41 PT — 🚨 First karpv2- result: agent is BAD (Elo 798, 0 wins / 24)
+
+**State.** Worker PID 4019322, 18h 19min uptime, RSS 6.62GB plateau.
+GPU 18% (mid-iter). Champion 1170 (identity unchanged, +9 from regime
+change point).
+
+**🚨 First karpv2- run finished — confirms bootstrap problem.**
+
+| metric | value | interpretation |
+|---|---|---|
+| Elo | **797.8** | sub-anchor, worse than random_legal baseline |
+| Training rate | **0.134** | 13.4% wins vs champion during training (was 91% under v1) |
+| sps | **322** | ~10× slowdown vs random_legal — fire-58 estimate accurate |
+| updates | **3** | Only 3 PPO updates in 10-min cell |
+| Wins / 24 bench | **0** | Zero wins. New record for failure. |
+
+**Game review on the LOSS samples:**
+- LOSS 1: 40 ticks, 55% noop, value-drop **+10.45**
+- LOSS 2 (extra): 134 ticks, 69% noop, value-drop **+12.93 ⚠️ NEW LOOP RECORD**
+  (prev: lr-hi cycle-2's +11.31)
+
+Agent regressed to passive behavior + catastrophic value-head failure.
+Value estimate starts high and collapses by 10-12 points — agent thinks
+it's winning then gets crushed.
+
+**🚨 The bootstrap problem.**
+
+Pure vs-champion training is too hard for a fresh agent:
+1. **3 updates ≈ uninitialized.** PPO needs hundreds of updates. We're
+   doing 3 per cell. New agent has barely moved from random init.
+2. **Champion is overpowered.** Trained 90+ min vs another champion.
+   New agent has 10 min vs same champion. Mismatch.
+3. **v14 shaping over-weighted at 13% win rate.** Per-tick deltas
+   compound negatively when the opponent dominates the board.
+
+**Three paths to fix:**
+
+| option | effort | mechanism |
+|---|---|---|
+| A. Longer cells (30 min) | 1-line YAML | 9 updates/cell, may help converge |
+| B. Smaller rollout_steps (32) + 20-min cells | 2-line YAML | ~12 updates/cell, faster per-update |
+| C. Curriculum mixing (older champions + current) | bigger rewrite | weaker opponents at start, harder later |
+| D. **Batch the neural opponent forward pass** | ~2-4h code | 10× speedup → 30+ updates/cell |
+
+**Recommendation: B + D combined.**
+
+Option B is a 2-line YAML change — instant. Option D was the speedup
+discussion in the prior turn. Together: 12-30+ updates per cell at
+20-min budget, vs the current 3.
+
+C is the more principled long-term fix (bootstrap from weaker opponents)
+but adds complexity now. Defer until we see if B+D unblocks training.
+
+**Recommend implementing B (YAML) immediately, deferring D to after
+the next karpv2- result confirms the diagnosis.**
+
+**Queue.** entropy_coef-mid running, hi queued. Will let entropy_coef
+sweep complete to see if the 3-update problem is consistent across
+cells before changing config.
+
 ## Code changes during loop
 
 ### 2026-04-29 11:25 PT — regime change v1→v2 (see above)
