@@ -60,6 +60,16 @@ def features_blob() -> dict:
             "draw":        C.REWARD_DRAW_BY_VERSION[1],
             "speed_bonus": C.REWARD_SPEED_BONUS_BY_VERSION[1],
         },
+        "reward_v14": {
+            "capture":         C.REWARD_CAPTURE_BY_VERSION[2],
+            "loss":            C.REWARD_LOSS_BY_VERSION[2],
+            "win":             C.REWARD_WIN_BY_VERSION[2],
+            "lose":            C.REWARD_LOSE_BY_VERSION[2],
+            "draw":            C.REWARD_DRAW_BY_VERSION[2],
+            "speed_bonus":     C.REWARD_SPEED_BONUS_BY_VERSION[2],
+            "tick_buildings":  C.REWARD_TICK_BUILDINGS_COEF_BY_VERSION[2],
+            "tick_units_real": C.REWARD_TICK_UNITS_COEF_BY_VERSION[2],
+        },
     }
 
 

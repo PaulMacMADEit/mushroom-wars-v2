@@ -93,23 +93,38 @@ PHASE_DRAW            = 3
 # ---------------------------------------------------------------------------
 # Rewards (training-time only; sim emits these on step)
 # ---------------------------------------------------------------------------
-# Two reward schemes are supported; State carries an int8 `reward_version`
-# (0 = v1.2 default, 1 = v1.3) and the engine indexes into the lookup arrays
-# below. v1.3 rebalances toward winning quickly: WIN/LOSE 5×, halved capture/
-# loss, mildly-bad draw, and a 4× speed bonus. See CURRICULUM_PLAN.md §3.1.
+# Three reward schemes are supported; State carries an int8 `reward_version`
+# (0 = v1.2 default, 1 = v1.3, 2 = v1.4) and the engine indexes into the
+# lookup arrays below. v1.3 rebalances toward winning quickly: WIN/LOSE 5×,
+# halved capture/loss, mildly-bad draw, and a 4× speed bonus. v1.4 keeps
+# v1.3 terminal/event rewards and adds per-tick shaping based on the
+# (own − opponent) delta in buildings owned and real units held — designed
+# to break the mutual-noop equilibrium observed under v1.3 + random_legal.
+# See CURRICULUM_PLAN.md §3.1.
 REWARD_VERSION_V12 = 0
 REWARD_VERSION_V13 = 1
+REWARD_VERSION_V14 = 2
 
 # Per-version reward tables. Index with REWARD_VERSION_V*.
-REWARD_CAPTURE_BY_VERSION     = (0.1,   0.05)
-REWARD_LOSS_BY_VERSION        = (-0.1,  -0.05)
-REWARD_WIN_BY_VERSION         = (1.0,   5.0)
-REWARD_LOSE_BY_VERSION        = (-1.0,  -5.0)
-REWARD_DRAW_BY_VERSION        = (0.0,   -0.5)
+REWARD_CAPTURE_BY_VERSION     = (0.1,   0.05,  0.05)
+REWARD_LOSS_BY_VERSION        = (-0.1,  -0.05, -0.05)
+REWARD_WIN_BY_VERSION         = (1.0,   5.0,   5.0)
+REWARD_LOSE_BY_VERSION        = (-1.0,  -5.0,  -5.0)
+REWARD_DRAW_BY_VERSION        = (0.0,   -0.5,  -0.5)
 # Bonus added to the winner that scales linearly with how quickly they won.
 # Final terminal reward (winner) = REWARD_WIN + REWARD_SPEED_BONUS * (1 - tick / GAME_TIMEOUT_TICKS)
 # At tick=0 the bonus is REWARD_SPEED_BONUS; at timeout it is 0.
-REWARD_SPEED_BONUS_BY_VERSION = (0.5,   2.0)
+REWARD_SPEED_BONUS_BY_VERSION = (0.5,   2.0,   2.0)
+
+# Per-tick shaping (v1.4 only — zero for v1.2/v1.3). Symmetric: at end of
+# each tick the engine adds COEF_B*(b_p1−b_p2) + COEF_U*(u_p1_real−u_p2_real)
+# to r1 and the negation to r2. Coefficients are tuned so total per-game
+# shaping is ~±1.0 = ~20% of REWARD_WIN(v14)=5.0, big enough to bias toward
+# active play without dominating terminal outcomes.
+#   buildings: ±4 typical × 80 ticks × 0.0010 ≈ ±0.32 per game
+#   units:     ±50 real typical × 80 ticks × 0.0002 ≈ ±0.80 per game
+REWARD_TICK_BUILDINGS_COEF_BY_VERSION = (0.0, 0.0, 0.0010)
+REWARD_TICK_UNITS_COEF_BY_VERSION     = (0.0, 0.0, 0.0002)
 
 # Module-level scalar constants (= v1.2). Kept for backward-compat reads from
 # any code path that doesn't yet thread `reward_version` through; new code

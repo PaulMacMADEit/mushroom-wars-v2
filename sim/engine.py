@@ -32,7 +32,7 @@ import numpy as np
 
 from sim import config as C
 from sim.actions import Action, is_valid, send_amount
-from sim.state import State, count_owned_buildings, has_in_flight
+from sim.state import State, count_owned_buildings, count_owned_units, has_in_flight
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +93,23 @@ def step_tick(
     r2 += dr2
     tb = time.perf_counter_ns()
     state.perf["victory_ns"] += tb - ta
+
+    # v1.4 per-tick shaping: rewards holding more buildings + units than the
+    # opponent. Skipped on terminal tick (terminal rewards already encode
+    # the outcome) and zero-coefficient for v1.2/v1.3 (so callers on those
+    # versions are unchanged).
+    if not done:
+        rv = int(state.reward_version)
+        coef_b = C.REWARD_TICK_BUILDINGS_COEF_BY_VERSION[rv]
+        coef_u = C.REWARD_TICK_UNITS_COEF_BY_VERSION[rv]
+        if coef_b != 0.0 or coef_u != 0.0:
+            b1 = count_owned_buildings(state, C.OWNER_P1)
+            b2 = count_owned_buildings(state, C.OWNER_P2)
+            u1_real = count_owned_units(state, C.OWNER_P1) / C.SCALE
+            u2_real = count_owned_units(state, C.OWNER_P2) / C.SCALE
+            delta = coef_b * (b1 - b2) + coef_u * (u1_real - u2_real)
+            r1 += delta
+            r2 -= delta
 
     if done and events is not None:
         events.append({"kind": "end", "phase": int(state.phase)})

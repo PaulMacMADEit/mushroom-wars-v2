@@ -48,6 +48,8 @@ _REWARD_WIN_VEC         = jnp.asarray(C.REWARD_WIN_BY_VERSION,         dtype=jnp
 _REWARD_LOSE_VEC        = jnp.asarray(C.REWARD_LOSE_BY_VERSION,        dtype=jnp.float32)
 _REWARD_DRAW_VEC        = jnp.asarray(C.REWARD_DRAW_BY_VERSION,        dtype=jnp.float32)
 _REWARD_SPEED_BONUS_VEC = jnp.asarray(C.REWARD_SPEED_BONUS_BY_VERSION, dtype=jnp.float32)
+_REWARD_TICK_BUILDINGS_COEF_VEC = jnp.asarray(C.REWARD_TICK_BUILDINGS_COEF_BY_VERSION, dtype=jnp.float32)
+_REWARD_TICK_UNITS_COEF_VEC     = jnp.asarray(C.REWARD_TICK_UNITS_COEF_BY_VERSION,     dtype=jnp.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -527,8 +529,31 @@ def _step_tick_impl(
     # Phase 5: victory check → terminal rewards + new phase.
     s, r1_v, r2_v, done = _check_victory(s)
 
-    r1 = r1_combat + r1_v
-    r2 = r2_combat + r2_v
+    # v1.4 per-tick shaping (zero-coefficient on v1.2/v1.3): rewards holding
+    # more buildings + units than the opponent. Skipped on terminal tick to
+    # keep the terminal signal clean.
+    rv = s.reward_version.astype(jnp.int32)
+    coef_b = _REWARD_TICK_BUILDINGS_COEF_VEC[rv]
+    coef_u = _REWARD_TICK_UNITS_COEF_VEC[rv]
+    alive = s.buildings_alive == 1
+    owned_p1 = alive & (s.buildings_owner == C.OWNER_P1)
+    owned_p2 = alive & (s.buildings_owner == C.OWNER_P2)
+    b1 = owned_p1.sum().astype(jnp.float32)
+    b2 = owned_p2.sum().astype(jnp.float32)
+    g_alive = s.groups_alive == 1
+    p1_garrison = jnp.where(owned_p1, s.buildings_garrison, jnp.int16(0)).sum()
+    p2_garrison = jnp.where(owned_p2, s.buildings_garrison, jnp.int16(0)).sum()
+    p1_flight = jnp.where(g_alive & (s.groups_owner == C.OWNER_P1), s.groups_count, jnp.int16(0)).sum()
+    p2_flight = jnp.where(g_alive & (s.groups_owner == C.OWNER_P2), s.groups_count, jnp.int16(0)).sum()
+    u1_real = (p1_garrison.astype(jnp.float32) + p1_flight.astype(jnp.float32)) / jnp.float32(C.SCALE)
+    u2_real = (p2_garrison.astype(jnp.float32) + p2_flight.astype(jnp.float32)) / jnp.float32(C.SCALE)
+    shaping_delta = coef_b * (b1 - b2) + coef_u * (u1_real - u2_real)
+    shaping_delta = jnp.where(done, jnp.float32(0.0), shaping_delta)
+    r1_shape = shaping_delta
+    r2_shape = -shaping_delta
+
+    r1 = r1_combat + r1_v + r1_shape
+    r2 = r2_combat + r2_v + r2_shape
 
     # If we entered step_tick already terminal, the numpy path returns
     # (0.0, 0.0, True) without advancing. Mirror that via select_pytree.

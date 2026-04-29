@@ -79,11 +79,14 @@ class PPOConfig:
     # byte-identical to the per-tick path under the same seed.
     fused_rollout:        bool  = False
     action_repeat:        int   = 1     # K: env ticks per agent decision under fused
-    # Reward scheme (CURRICULUM_PLAN.md §3.1). False (default) = sim-v1.2 rewards
-    # (back-compat). True = v1.3 rebalance (5x WIN/LOSE, halved capture, draw
-    # -0.5, 4x speed bonus). Set the per-state reward_version flag at env
-    # construction; engine indexes into REWARD_*_BY_VERSION accordingly.
+    # Reward scheme. Two ways to set this:
+    #   - reward_version: int   — canonical, supports v1.2(0)/v1.3(1)/v1.4(2)
+    #   - reward_v13: bool      — back-compat shim. True → v1.3, False → v1.2.
+    # If both are set, reward_version wins. v1.4 = v1.3 + per-tick shaping
+    # for buildings_owned and units_held deltas (sim/config.py
+    # REWARD_TICK_*_COEF_BY_VERSION). See KARPATHY_LOG.md fire 21 + 22.
     reward_v13:           bool  = False
+    reward_version:       int   = -1     # -1 = unset (use reward_v13)
     # Optional per-env level distribution. None → all envs use cfg.level_name
     # (back-compat). Otherwise: list of (name, weight) pairs; each env (re)reset
     # samples from this mix. Only honoured by SIM_BACKEND=jax — the numpy
@@ -193,7 +196,7 @@ class PPOTrainer:
         N = self.cfg.n_envs
         backend = get_backend_name()
 
-        rv = 1 if self.cfg.reward_v13 else 0
+        rv = self.cfg.reward_version if self.cfg.reward_version >= 0 else (1 if self.cfg.reward_v13 else 0)
         # Normalise level_mix from a possibly-jsonified dict into a list of
         # (name, weight) tuples. Accept dict {name: weight} or list[[name, w]].
         level_mix = None

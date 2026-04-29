@@ -101,9 +101,15 @@ baseline_hyperparams:
   leaderboard_top_k:  10
 
   # ----- Reward shape -----
-  # See sim/config.py REWARD_*_BY_VERSION for the table. v1.3 = 5x WIN/LOSE,
-  # halved capture, draw -0.5, 4x speed bonus.
+  # See sim/config.py REWARD_*_BY_VERSION for the table.
+  #   v1.2 (0): legacy; capture 0.10, win 1.0, no speed bonus
+  #   v1.3 (1): 5x WIN/LOSE, halved capture, draw -0.5, 4x speed bonus
+  #   v1.4 (2): v1.3 + per-tick shaping for buildings_owned + units_held deltas
+  #             (designed to break mutual-noop equilibrium under random_legal)
+  # `reward_version` is canonical (overrides reward_v13 when ≥0). Keep
+  # reward_v13 around for back-compat with older runs.
   reward_v13: true
+  reward_version: 1
 
   # ----- Level distribution (per-env sampling on each reset) -----
   level_name: "random_full_mix"
@@ -184,3 +190,13 @@ sweep_axes:
       - { label: "lo",  value: 0.25 }
       - { label: "mid", value: 0.50 }
       - { label: "hi",  value: 1.00 }
+
+  # 2-cell A/B (control vs treatment). v1.3 = current baseline (terminal-only
+  # rewards + speed bonus). v1.4 = + per-tick shaping for buildings/units
+  # deltas, designed to break mutual-noop equilibrium under random_legal
+  # (KARPATHY_LOG fire 19-20). Override `reward_version` directly; baseline
+  # `reward_v13: true` is overridden by reward_version when ≥0.
+  - axis: "reward_version"
+    cells:
+      - { label: "lo",  value: 1 }     # v1.3 control
+      - { label: "hi",  value: 2 }     # v1.4 treatment
