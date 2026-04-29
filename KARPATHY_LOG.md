@@ -1579,6 +1579,54 @@ Current worker stable. **No restart pressure.**
 **Backstop next.** Queue empty, ticks at :45 PT (~4 min). Round-robin
 from rollout_steps picks **n_envs** for cycle-3.
 
+### Loop fire 33 — 2026-04-28 23:11 PT — n_envs cycle-3 in flight; new pattern: short passive wins
+
+**State.** Worker PID 4019322, **5h 49min uptime**, RSS **6.44GB
+(+0.68 since fire 32)** — second mem spike (similar to fire 29's
++0.49). Consistent with transient JAX cache pressure pattern. GPU
+45% (mid-iter). Champion drift 1175→1171 (-4, identity unchanged).
+
+**n_envs cycle progression:**
+
+| run | cycle 1 | cycle 3 |
+|---|---|---|
+| -lo (512) | 1083 | **1035 (-48)** |
+| -mid (1024) | 1087 | running |
+| -hi (2048) | 1081 | queued |
+
+Cycle-1 was flat (range 6 Elo). Cycle-3 lo deflation -48 — significant.
+Will see if mid+hi follow.
+
+**🟢 New behavior pattern: short passive wins.**
+
+n_envs-lo cycle-3 game review:
+- WIN: **25 ticks**, **69% noop**, 100%/75% as backup — short passive win
+- LOSS: 26 ticks, 38% noop, +4.34 value drop
+
+Compare to fire 26's entropy_coef-lo cycle-2 (also 69% noop in WIN):
+- fire 26: 69% noop / **116-tick wins** ("survive forever, opponent fades")
+- fire 33: 69% noop / **25-tick wins** ("survive briefly, opponent collapses")
+
+The bench corpus has matured to where opponents also self-destruct
+quickly. Passive-survival now wins in 25 ticks because opponents
+crumble first. **Less about agent skill, more about opponent fragility.**
+
+This is a *negative* sign for v13's path: the policy isn't getting
+better, but the *opposition* is getting worse. Mutual decay.
+
+**v14 implication.** Strengthens the fire-26 thesis (passivity is
+deepening + getting *worse* over time). The fact that 25-tick wins
+exist via 69% noop means **the bench corpus is rewarding passivity
+more, not less**. Without v14 intervention, expect more cycle-3
+runs to converge to short-passive equilibrium.
+
+**Worker memory note 🚩.** RSS climbed from 5.79 → 6.44 GB this fire
+(+0.68). Same pattern as fire 29's transient spike (which GC'd back
+to 5.79 by fire 30). Still under 9GB ceiling. Will check fire 34
+for the GC pattern.
+
+**Queue:** 1 running + 1 queued = 2. Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
