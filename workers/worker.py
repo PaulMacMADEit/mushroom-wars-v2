@@ -543,6 +543,11 @@ def _resolve_opponent_kwargs(kw: dict) -> dict:
         "opponent_run_id", "weights_url", "obs_norm_url",
         "weights_path", "obs_norm_path",
     )}
+    # Stash the run_id under a sentinel key the trainer can read for
+    # dashboard labelling. Not consumed by `make_neural_opponent` — it strips
+    # any unknown key starting with `_label_`.
+    if "opponent_run_id" in kw:
+        out["_label_opponent_run_id"] = str(kw["opponent_run_id"])
 
     # Path 1: by run id.
     if "opponent_run_id" in kw:

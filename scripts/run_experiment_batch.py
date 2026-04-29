@@ -133,6 +133,19 @@ def _run_one(spec: dict) -> dict:
                 "episodes":       eps_count,
                 "win_rate":       m.get("win_rate"),
                 "env_ticks":      total_env_ticks,
+                # Archive eval — sparse, only present on update_count % archive_eval_every == 0.
+                # `spanGaps: true` in chart.js connects across nulls so the curve renders cleanly.
+                "win_rate_vs_leaderboard":   m.get("win_rate_vs_leaderboard"),
+                "archive_eval_n_opponents":  m.get("archive_eval_n_opponents"),
+                "archive_eval_n_games":      m.get("archive_eval_n_games"),
+                "archive_eval_wall_s":       m.get("archive_eval_wall_s"),
+                # Per-update breadcrumbs (slice 2): who/what is being trained on.
+                "training_opp_label":  m.get("training_opp_label"),
+                "level_mix_resolved":  m.get("level_mix_resolved"),
+                # Sparse: per-opponent eval game records, only on eval updates.
+                # Each entry is {opp_label, opp_id_short, opp_elo, level, p1_wins,
+                # p2_wins, draws, total, win_rate, wall_s}.
+                "eval_matches":        m.get("eval_matches"),
             }
             metrics_history.append(row)
 

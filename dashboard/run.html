@@ -211,6 +211,11 @@
           <div class="muted">no opponent labels recorded yet.</div>
         </div>
 
+        <h2>Win rate progression (10% buckets)</h2>
+        <div class="card" id="win-rate-progression">
+          <div class="muted">no data yet — populated once a few training updates have completed.</div>
+        </div>
+
         <h2>Level distribution</h2>
         <div class="card" id="level-mix">
           <div class="muted">no level data recorded yet.</div>
@@ -220,13 +225,17 @@
         <div class="card" id="matchups"><div class="muted">Loading matchups…</div></div>
 
         <h2>Hyperparams</h2>
-        <pre>${esc(JSON.stringify(run.hyperparams ?? {}, null, 2))}</pre>
+        <div class="card" id="hyperparams-panel"></div>
 
         <h2>Result summary</h2>
         <pre>${esc(JSON.stringify(run.result ?? {}, null, 2))}</pre>
 
         ${run.error ? `<h2>Error</h2><pre class="error">${esc(run.error)}</pre>` : ''}
       `;
+
+      // Render structured hyperparams — driven by run.hyperparams which is
+      // available immediately. No need to wait for metrics.json.
+      renderHyperparams(run.hyperparams ?? {});
 
       // Fill in the matchups panel in parallel with the charts — uses the
       // same `games` table the Elo page does, but filtered to this run.
@@ -346,6 +355,440 @@
       // since the set of levels can grow as a run progresses (rare, but
       // possible if level_mix is added mid-run via an admin tweak).
       renderPerMap(points);
+
+      // Slice 2/3 panels — sourced entirely from metrics.json, so they
+      // populate live as the run progresses. Each is gated on key presence
+      // so old runs (pre-2026-04-29) render the empty-state cleanly.
+      renderEvalMatches(points);
+      renderTrainingOpp(points);
+      renderWinRateProgression(points);
+      renderLevelMix(points);
+    }
+
+    /** Eval match history — flatten metrics.json[*].eval_matches into rows
+     * so you can audit "which champion did we play, when, on what, who won". */
+    function renderEvalMatches(points) {
+      const $card = document.getElementById('eval-matches');
+      if (!$card) return;
+      const matches = [];
+      for (const p of points) {
+        const arr = p.eval_matches;
+        if (Array.isArray(arr)) for (const m of arr) matches.push(m);
+      }
+      if (!matches.length) {
+        $card.innerHTML = '<div class="muted">no eval matches yet — populated as the run executes archive_eval_every steps.</div>';
+        return;
+      }
+      const byOpp = {};
+      for (const m of matches) {
+        const k = m.opp_id_short || m.opp_label || '?';
+        const b = byOpp[k] = byOpp[k] || {
+          label: m.opp_label, id: m.opp_id_short, elo: m.opp_elo,
+          w: 0, l: 0, d: 0, n: 0,
+        };
+        if (m.error) continue;
+        b.w += m.p1_wins || 0;
+        b.l += m.p2_wins || 0;
+        b.d += m.draws   || 0;
+        b.n += m.total   || 0;
+      }
+      const summary = Object.values(byOpp)
+        .map(o => ({ ...o, rate: o.n > 0 ? (o.w + 0.5 * o.d) / o.n : null }))
+        .sort((a, b) => (b.elo ?? -1e9) - (a.elo ?? -1e9));
+
+      const recent = matches.slice(-30).reverse();
+
+      const tot = summary.reduce((s, o) => ({
+        w: s.w + o.w, l: s.l + o.l, d: s.d + o.d, n: s.n + o.n,
+      }), { w: 0, l: 0, d: 0, n: 0 });
+      const overallRate = tot.n > 0 ? (tot.w + 0.5 * tot.d) / tot.n : 0;
+
+      $card.innerHTML = `
+        <div style="display:flex; gap:24px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
+          <div><span class="stat-label">total games</span><div class="stat">${tot.n}</div></div>
+          <div><span class="stat-label">opponents</span><div class="stat">${summary.length}</div></div>
+          <div><span class="stat-label">overall win rate</span><div class="stat">${(overallRate*100).toFixed(1)}%</div></div>
+          <div><span class="stat-label">W / D / L</span><div class="mono">${tot.w} / ${tot.d} / ${tot.l}</div></div>
+        </div>
+
+        <div class="stat-label" style="margin-bottom:6px;">per opponent (sorted by Elo)</div>
+        <table>
+          <thead><tr>
+            <th>opponent</th><th>Elo</th><th>games</th><th>W</th><th>D</th><th>L</th><th>win rate</th>
+          </tr></thead>
+          <tbody>
+            ${summary.map(o => `<tr>
+              <td><span class="mono small">${esc(o.id ?? '')}</span> ${esc(o.label ?? '')}</td>
+              <td><span class="mono">${o.elo != null ? o.elo.toFixed(0) : '—'}</span></td>
+              <td><span class="mono">${o.n}</span></td>
+              <td><span class="win mono">${o.w}</span></td>
+              <td><span class="draw mono">${o.d}</span></td>
+              <td><span class="lose mono">${o.l}</span></td>
+              <td><span class="mono">${o.rate != null ? (o.rate*100).toFixed(0) + '%' : '—'}</span></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+
+        <div class="stat-label" style="margin:14px 0 6px;">recent matches (newest first)</div>
+        <table>
+          <thead><tr>
+            <th>upd</th><th>opponent</th><th>Elo</th><th>level</th>
+            <th>W</th><th>D</th><th>L</th><th>rate</th><th>wall (s)</th>
+          </tr></thead>
+          <tbody>
+            ${recent.map(m => `<tr>
+              <td><span class="mono">${m.update ?? '—'}</span></td>
+              <td><span class="mono small">${esc(m.opp_id_short ?? '')}</span> ${esc(m.opp_label ?? '')}</td>
+              <td><span class="mono">${m.opp_elo != null ? m.opp_elo.toFixed(0) : '—'}</span></td>
+              <td><span class="mono">${esc(m.level ?? '')}</span></td>
+              ${m.error ? `<td colspan="5" class="error mono small">${esc(m.error)}</td>` : `
+                <td><span class="win mono">${m.p1_wins}</span></td>
+                <td><span class="draw mono">${m.draws}</span></td>
+                <td><span class="lose mono">${m.p2_wins}</span></td>
+                <td><span class="mono">${m.win_rate != null ? (m.win_rate*100).toFixed(0) + '%' : '—'}</span></td>
+                <td><span class="muted mono">${m.wall_s != null ? m.wall_s.toFixed(2) : '—'}</span></td>
+              `}
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    /** Training opponent over time — shows what the agent played against
+     * during each phase of training. Compresses runs of the same label. */
+    function renderTrainingOpp(points) {
+      const $card = document.getElementById('training-opp');
+      if (!$card) return;
+      const labeled = points
+        .map((p, i) => ({ update: i + 1, label: p.training_opp_label }))
+        .filter(p => p.label != null);
+      if (!labeled.length) {
+        $card.innerHTML = '<div class="muted">no opponent labels recorded yet.</div>';
+        return;
+      }
+      const spans = [];
+      let cur = null;
+      for (const r of labeled) {
+        if (cur && cur.label === r.label) {
+          cur.end = r.update;
+        } else {
+          if (cur) spans.push(cur);
+          cur = { label: r.label, start: r.update, end: r.update };
+        }
+      }
+      if (cur) spans.push(cur);
+
+      const colors = ['#f472b6', '#60a5fa', '#34d399', '#fbbf24', '#c084fc',
+                      '#22d3ee', '#fb923c', '#a78bfa', '#facc15', '#a3e635'];
+      const labelToColor = {};
+      let ci = 0;
+      for (const s of spans) {
+        if (!(s.label in labelToColor)) labelToColor[s.label] = colors[ci++ % colors.length];
+      }
+
+      const lastUpd = labeled[labeled.length - 1].update;
+      const stripe = spans.map(s => {
+        const left = ((s.start - 1) / lastUpd) * 100;
+        const width = ((s.end - s.start + 1) / lastUpd) * 100;
+        return `<div title="${esc(s.label)} (u${s.start}-u${s.end})" style="
+          position:absolute; left:${left}%; width:${width}%; top:0; bottom:0;
+          background:${labelToColor[s.label]}; opacity:0.85;"></div>`;
+      }).join('');
+
+      const legend = Object.entries(labelToColor).map(([lab, col]) =>
+        `<span style="display:inline-flex; align-items:center; gap:6px; margin-right:14px;">
+          <span style="width:10px; height:10px; background:${col}; display:inline-block; border-radius:2px;"></span>
+          <span class="mono small">${esc(lab)}</span>
+        </span>`).join('');
+
+      $card.innerHTML = `
+        <div class="stat-label" style="margin-bottom:6px;">timeline (x = update, color = opponent)</div>
+        <div style="position:relative; height:32px; border-radius:4px; overflow:hidden; background:#1a1d27;">
+          ${stripe}
+        </div>
+        <div style="margin-top:10px;">${legend}</div>
+        <div class="muted small" style="margin-top:6px;">
+          ${spans.length} segment${spans.length === 1 ? '' : 's'} across ${lastUpd} updates
+        </div>
+      `;
+    }
+
+    /** Level distribution — flat list of every level the agent saw, with the
+     * percentage of updates that level_mix held. Aggregated across the run. */
+    function renderLevelMix(points) {
+      const $card = document.getElementById('level-mix');
+      if (!$card) return;
+      const weighted = {};
+      let nRows = 0;
+      for (const p of points) {
+        const mix = p.level_mix_resolved;
+        if (!Array.isArray(mix) || !mix.length) continue;
+        nRows++;
+        const total = mix.reduce((s, x) => s + (x[1] || 0), 0) || 1;
+        for (const [name, w] of mix) {
+          weighted[name] = (weighted[name] || 0) + (w / total);
+        }
+      }
+      if (!nRows) {
+        $card.innerHTML = '<div class="muted">no level data recorded yet.</div>';
+        return;
+      }
+      const rows = Object.entries(weighted)
+        .map(([name, w]) => ({ name, share: w / nRows }))
+        .sort((a, b) => b.share - a.share);
+
+      $card.innerHTML = `
+        <div class="stat-label" style="margin-bottom:8px;">aggregate level mix across ${nRows} updates</div>
+        <table>
+          <thead><tr><th>level</th><th>share</th></tr></thead>
+          <tbody>
+            ${rows.map(r => `<tr>
+              <td><span class="mono">${esc(r.name)}</span></td>
+              <td>
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <div style="flex:1; height:8px; background:#1a1d27; border-radius:2px; overflow:hidden;">
+                    <div style="width:${(r.share*100).toFixed(1)}%; height:100%; background:#60a5fa;"></div>
+                  </div>
+                  <span class="mono" style="min-width:54px; text-align:right;">${(r.share*100).toFixed(1)}%</span>
+                </div>
+              </td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    /** Hyperparameters panel — groups PPOConfig fields by purpose so it's
+     * skimmable instead of a wall of JSON. Unknown keys (anything not in a
+     * known group) get dumped into a "misc" footer so we never lose info. */
+    function renderHyperparams(hp) {
+      const $card = document.getElementById('hyperparams-panel');
+      if (!$card) return;
+      if (!hp || typeof hp !== 'object') {
+        $card.innerHTML = '<div class="muted">no hyperparams recorded for this run.</div>';
+        return;
+      }
+
+      // Group definitions: [section title, [key, key, ...]]. Order matters.
+      const GROUPS = [
+        ['Rollout',         ['n_envs', 'rollout_steps', 'fused_rollout', 'action_repeat', 'vec_mode']],
+        ['PPO',             ['lr', 'gamma', 'gae_lambda', 'clip_range', 'value_coef', 'entropy_coef',
+                             'max_grad_norm', 'minibatch_size', 'update_epochs']],
+        ['Reward + obs',    ['reward_v13', 'reward_version', 'normalize_obs', 'obs_clip']],
+        ['Self-play',       ['self_play', 'snapshot_every', 'pool_max_size', 'latest_bias',
+                             'initial_opponent', 'leaderboard_bias', 'leaderboard_top_k', 'leaderboard_source']],
+        ['Archive eval',    ['archive_eval_every', 'archive_eval_top_n', 'archive_eval_games',
+                             'archive_eval_level', 'archive_eval_min_pool', 'archive_eval_max_ticks']],
+        ['Opponent',        ['opponent_name', 'opponent_kwargs']],
+        ['Level',           ['level_name', 'level_mix']],
+      ];
+
+      const seen = new Set();
+      let html = '';
+      for (const [title, keys] of GROUPS) {
+        const rows = keys
+          .filter(k => Object.prototype.hasOwnProperty.call(hp, k))
+          .map(k => { seen.add(k); return [k, hp[k]]; });
+        if (!rows.length) continue;
+        html += `
+          <div class="stat-label" style="margin:6px 0 4px;">${esc(title)}</div>
+          <table style="margin-bottom:12px;">
+            <tbody>
+              ${rows.map(([k, v]) => `<tr>
+                <td style="width:200px;"><span class="mono small muted">${esc(k)}</span></td>
+                <td><span class="mono">${esc(formatHpValue(v))}</span></td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        `;
+      }
+
+      const misc = Object.entries(hp).filter(([k]) => !seen.has(k));
+      if (misc.length) {
+        html += `
+          <div class="stat-label" style="margin:6px 0 4px;">Other</div>
+          <table>
+            <tbody>
+              ${misc.map(([k, v]) => `<tr>
+                <td style="width:200px;"><span class="mono small muted">${esc(k)}</span></td>
+                <td><span class="mono">${esc(formatHpValue(v))}</span></td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        `;
+      }
+
+      $card.innerHTML = html;
+    }
+
+    function formatHpValue(v) {
+      if (v === null || v === undefined) return '—';
+      if (typeof v === 'object') return JSON.stringify(v);
+      if (typeof v === 'boolean') return v ? 'true' : 'false';
+      if (typeof v === 'number') {
+        // Trim trailing zeros for floats; leave ints alone.
+        if (Number.isInteger(v)) return String(v);
+        return v.toFixed(6).replace(/\.?0+$/, '');
+      }
+      return String(v);
+    }
+
+    /** Win rate progression in 10% buckets across the run.
+     * Two parallel breakdowns:
+     *   1. Training-rollout (B): aggregate win_rate per bucket, grouped by
+     *      training_opp_label so opponent swaps mid-run are visible.
+     *   2. Eval-matches (A): per-opponent eval win rate per bucket, sorted by
+     *      Elo. Sparse — only the buckets that contained eval updates light up. */
+    function renderWinRateProgression(points) {
+      const $card = document.getElementById('win-rate-progression');
+      if (!$card) return;
+      if (!points || !points.length) {
+        $card.innerHTML = '<div class="muted">no metrics yet.</div>';
+        return;
+      }
+
+      const N_BUCKETS = 10;
+      const total = points.length;
+      const bucketOf = (i) => Math.min(N_BUCKETS - 1, Math.floor(N_BUCKETS * i / total));
+
+      // ---- (B) Training-rollout: per-(bucket, opponent) win rate ----------
+      // Each metrics row has training_opp_label + win_rate (vs that opp this update).
+      // We weight by episodes_completed so a bucket with many episodes weighs more.
+      const trainBuckets = Array.from({length: N_BUCKETS}, () => ({}));
+      let anyTrain = false;
+      points.forEach((p, i) => {
+        const lab = p.training_opp_label;
+        const wr  = p.win_rate;
+        const eps = p.episodes_completed;
+        if (lab == null || wr == null || !eps) return;
+        anyTrain = true;
+        const b = bucketOf(i);
+        const slot = trainBuckets[b][lab] = trainBuckets[b][lab] || { wins: 0, n: 0 };
+        slot.wins += wr * eps;
+        slot.n    += eps;
+      });
+      const trainOpps = new Set();
+      for (const b of trainBuckets) for (const lab of Object.keys(b)) trainOpps.add(lab);
+
+      // ---- (A) Eval matches: per-(bucket, opponent) win rate from eval_matches.
+      // Time bucket is determined by the eval_match's `update` field, mapped to
+      // the metric-row index that holds it.
+      const evalBuckets = Array.from({length: N_BUCKETS}, () => ({}));
+      let anyEval = false;
+      points.forEach((p, i) => {
+        const arr = p.eval_matches;
+        if (!Array.isArray(arr) || !arr.length) return;
+        const b = bucketOf(i);
+        for (const m of arr) {
+          if (m.error) continue;
+          anyEval = true;
+          const k = m.opp_id_short || m.opp_label || '?';
+          const slot = evalBuckets[b][k] = evalBuckets[b][k] || {
+            label: m.opp_label, elo: m.opp_elo, w: 0, l: 0, d: 0, n: 0,
+          };
+          slot.w += m.p1_wins || 0;
+          slot.l += m.p2_wins || 0;
+          slot.d += m.draws   || 0;
+          slot.n += m.total   || 0;
+        }
+      });
+
+      const cellColor = (wr) => {
+        if (wr == null) return 'transparent';
+        // Green-ish for high win rate, red-ish for low. Diverges at 50%.
+        const t = Math.max(0, Math.min(1, wr));
+        const r = Math.round(220 * (1 - t));
+        const g = Math.round(180 * t);
+        return `rgba(${r},${g},120,0.35)`;
+      };
+      const fmtRate = (wr, n) => wr == null
+        ? '<span class="muted small">—</span>'
+        : `<div class="mono" style="font-size:11px; line-height:1.1;">
+             <div>${(wr*100).toFixed(0)}%</div>
+             <div class="muted" style="font-size:9px;">n=${n}</div>
+           </div>`;
+
+      let html = '';
+
+      // ---- (B) Training-rollout table -------------------------------------
+      if (anyTrain) {
+        const opps = Array.from(trainOpps);
+        html += `
+          <div class="stat-label" style="margin-bottom:8px;">
+            (B) Training rollouts — win rate vs the opponent the agent played each update.
+            Buckets weighted by episodes completed.
+          </div>
+          <div style="overflow-x:auto;">
+          <table>
+            <thead><tr>
+              <th>opponent</th>
+              ${trainBuckets.map((_, i) => `<th>${i*10}–${(i+1)*10}%</th>`).join('')}
+            </tr></thead>
+            <tbody>
+              ${opps.map(opp => {
+                const cells = trainBuckets.map(b => {
+                  const s = b[opp];
+                  if (!s || s.n === 0) return `<td style="text-align:center;">${fmtRate(null)}</td>`;
+                  const wr = s.wins / s.n;
+                  return `<td style="text-align:center; background:${cellColor(wr)};">${fmtRate(wr, Math.round(s.n))}</td>`;
+                }).join('');
+                return `<tr><td><span class="mono">${esc(opp)}</span></td>${cells}</tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+          </div>
+        `;
+      }
+
+      // ---- (A) Eval-match table -------------------------------------------
+      if (anyEval) {
+        // Determine the union of opponents across buckets, sorted by Elo desc.
+        const oppMeta = {};
+        for (const b of evalBuckets) {
+          for (const [k, v] of Object.entries(b)) {
+            if (!(k in oppMeta) || (oppMeta[k].elo ?? -1e9) < (v.elo ?? -1e9)) {
+              oppMeta[k] = { id: k, label: v.label, elo: v.elo };
+            }
+          }
+        }
+        const opps = Object.values(oppMeta)
+          .sort((a, b) => (b.elo ?? -1e9) - (a.elo ?? -1e9));
+        html += `
+          <div class="stat-label" style="margin:14px 0 8px;">
+            (A) Archive eval — win rate vs each top-Elo champion, bucketed.
+            Sparse: only buckets containing eval updates light up.
+          </div>
+          <div style="overflow-x:auto;">
+          <table>
+            <thead><tr>
+              <th>opponent</th><th>Elo</th>
+              ${evalBuckets.map((_, i) => `<th>${i*10}–${(i+1)*10}%</th>`).join('')}
+            </tr></thead>
+            <tbody>
+              ${opps.map(o => {
+                const cells = evalBuckets.map(b => {
+                  const s = b[o.id];
+                  if (!s || s.n === 0) return `<td style="text-align:center;">${fmtRate(null)}</td>`;
+                  const wr = (s.w + 0.5 * s.d) / s.n;
+                  return `<td style="text-align:center; background:${cellColor(wr)};">${fmtRate(wr, s.n)}</td>`;
+                }).join('');
+                return `<tr>
+                  <td><span class="mono small">${esc(o.id ?? '')}</span> ${esc(o.label ?? '')}</td>
+                  <td><span class="mono">${o.elo != null ? o.elo.toFixed(0) : '—'}</span></td>
+                  ${cells}
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+          </div>
+        `;
+      }
+
+      if (!anyTrain && !anyEval) {
+        html = '<div class="muted">no win rate data yet — populated as the run produces metrics.</div>';
+      }
+
+      $card.innerHTML = html;
     }
 
     /** Render one mini line chart per level seen in `win_rate_by_level`.

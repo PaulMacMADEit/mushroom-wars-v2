@@ -38,6 +38,10 @@ def make_env(
     only strings + dicts cross the pickle boundary.
     """
     opp_kwargs = dict(opponent_kwargs or {})
+    # Strip dashboard-only labelling keys so make_neural_opponent doesn't
+    # see them. See workers/worker.py:_resolve_opponent_kwargs.
+    _label_kwargs = {k: v for k, v in opp_kwargs.items() if k.startswith("_label_")}
+    opp_kwargs = {k: v for k, v in opp_kwargs.items() if not k.startswith("_label_")}
 
     def _thunk() -> MushroomEnv:
         if opponent_name == "neural":

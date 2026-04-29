@@ -192,7 +192,11 @@ class _JaxVecAdapter:
         elif opponent_name == "noop":
             self._opponent = noop_opponent
         elif opponent_name == "neural":
-            self._opponent = make_neural_opponent(**self._opponent_kwargs)
+            # `_label_*` keys are dashboard-side metadata stashed by the worker
+            # (see workers/worker.py:_resolve_opponent_kwargs). They aren't
+            # consumed by make_neural_opponent — strip before passing through.
+            kw = {k: v for k, v in self._opponent_kwargs.items() if not k.startswith("_label_")}
+            self._opponent = make_neural_opponent(**kw)
         else:
             raise ValueError(f"unknown opponent_name: {opponent_name!r}")
 

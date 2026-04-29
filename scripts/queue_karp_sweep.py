@@ -100,9 +100,16 @@ def queue_sweep(axis: str | None, dry_run: bool, baseline_overrides: dict) -> No
             kwargs = {"device": "cuda", "opponent_run_id": str(row[0]), **kwargs}
             print(f"[karp] training_opponent=latest_champion → {row[1]} ({str(row[0])[:8]})")
         else:
-            print("[karp] training_opponent=latest_champion but no champions yet → random_legal")
-            name = "random_legal"
-            kwargs = {}
+            # 2026-04-29: removed random_legal fallback. Training vs random_legal
+            # produces a curve that climbs to ~95% regardless of real strength,
+            # which is not useful signal. If no champion exists, that's a real
+            # bootstrap problem — seed the archive first.
+            raise RuntimeError(
+                "[karp] training_opponent=latest_champion but no champions in the "
+                "archive. Seed the archive (e.g. via cli/migrate_champion_archive.py "
+                "or workers/bench_eval.py) before queueing sweeps. Refusing to fall "
+                "back to random_legal — it gives no learning signal worth measuring."
+            )
     base_hp["opponent_name"] = name
     if kwargs:
         base_hp["opponent_kwargs"] = kwargs

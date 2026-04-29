@@ -97,9 +97,9 @@ class PPOConfig:
     # saturates at ~95% in <100 updates). Runs `archive_eval_games` games against
     # each of the top-`archive_eval_top_n` champions every `archive_eval_every`
     # updates. Skipped if the archive has fewer than `archive_eval_min_pool` entries.
-    archive_eval_every:    int  = 15
+    archive_eval_every:    int  = 5
     archive_eval_top_n:    int  = 10
-    archive_eval_games:    int  = 2
+    archive_eval_games:    int  = 10
     archive_eval_level:    str  = "random_4_6"
     archive_eval_min_pool: int  = 3
     archive_eval_max_ticks: int = 200
@@ -551,6 +551,11 @@ class PPOTrainer:
             "grad_norm":          float(np.mean(grad_norms)),
             "explained_variance": ev,
             "mean_reward":        float(batch["reward"].mean()),
+            # Run-state breadcrumbs: who the agent played + on which level mix.
+            # Logged every update so a chart can show how training conditions
+            # shifted over time (opponent swaps, level-mix changes).
+            "training_opp_label":  self._current_training_opp_label(),
+            "level_mix_resolved":  self._current_level_mix_resolved(),
         }
         ep = self._completed_episodes
         if ep:
@@ -596,6 +601,44 @@ class PPOTrainer:
 
         self._phase_ns["update_total_ns"] += _time.perf_counter_ns() - _t_update
         return metrics
+
+    def _current_training_opp_label(self) -> str:
+        """Best-effort label for who the agent is currently training against.
+
+        Used by the dashboard to show "training opponent over time" — so a
+        reader can spot opponent swaps mid-run. Three regimes:
+          - Self-play (cfg.self_play=True, pool populated): label is the
+            number of pool snapshots. Once the leaderboard is wired in,
+            we'd surface the dominant champion instead.
+          - Single neural opponent (opponent_name='neural', kwargs has run_id):
+            'champion:<run_id_short>'.
+          - Stateless name (random_legal/noop/latest_champion-not-yet-resolved):
+            return that name verbatim.
+        """
+        if self.cfg.self_play and self.pool is not None and len(self.pool) > 0:
+            return f"self_play:pool_{len(self.pool)}"
+        name = self._initial_opponent_name or "unknown"
+        if name == "neural":
+            kw = self._initial_opponent_kwargs or {}
+            # Worker stashes the source run_id under a _label_ sentinel key so
+            # the dashboard can render "champion:abc12345" rather than just
+            # "neural" or its weights_path. See workers/worker.py.
+            run_id = kw.get("_label_opponent_run_id") or kw.get("opponent_run_id", "")
+            return f"champion:{str(run_id)[:8]}" if run_id else "neural:?"
+        return name
+
+    def _current_level_mix_resolved(self) -> list:
+        """Resolve the trainer's level config to a [(name, weight), ...] list.
+
+        Static level → [(name, 1.0)]. level_mix dict/list → normalised list.
+        Logged each update so a chart can show level-distribution changes.
+        """
+        if self.cfg.level_mix:
+            raw = self.cfg.level_mix
+            if isinstance(raw, dict):
+                return [[str(k), float(v)] for k, v in raw.items()]
+            return [[str(item[0]), float(item[1])] for item in raw]
+        return [[str(self.cfg.level_name), 1.0]]
 
     def _archive_eval(self) -> dict | None:
         """Periodic eval of current policy vs top-N champions in the archive.
@@ -659,7 +702,9 @@ class PPOTrainer:
             cache = getattr(self, "_archive_eval_cache", None)
             if cache is None or cache.get("top_n") != top_n:
                 cache_dir = Path(tempfile.mkdtemp(prefix=f"mw2-eval-{self._update_count}-"))
-                paths: list[tuple[str, str, float | None]] = []  # (dir, label, elo)
+                # Cache entry: (path, label, elo, id_short) — id_short is the
+                # 8-char champion id prefix used in dashboards and logs.
+                paths: list[tuple[str, str, float | None, str]] = []
                 supabase_url = __import__('os').environ.get('SUPABASE_URL')
                 if not supabase_url:
                     print("[archive_eval] SUPABASE_URL not set — disabling archive eval", flush=True)
@@ -690,10 +735,10 @@ class PPOTrainer:
                     except Exception as exc:
                         print(f"[archive_eval] skip {label}: download failed ({exc})", flush=True)
                         continue
-                    paths.append((str(cdir), label, elo))
+                    paths.append((str(cdir), label, elo, short))
                 cache = {"top_n": top_n, "paths": paths, "dir": cache_dir}
                 self._archive_eval_cache = cache
-                elo_strs = [f"{e:.0f}" if e is not None else "—" for _, _, e in paths]
+                elo_strs = [f"{e:.0f}" if e is not None else "—" for _, _, e, _ in paths]
                 print(f"[archive_eval] cached {len(paths)} champion checkpoints in {cache_dir}; "
                       f"elos: {elo_strs}", flush=True)
 
@@ -714,10 +759,14 @@ class PPOTrainer:
             if self.obs_norm is not None:
                 self.obs_norm.save(str(eval_ckpt_dir / "obs_norm.pt"))
 
-            # Sequentially run 2-game (or N-game) batches against each champion.
-            total_p1_wins = 0
+            # Sequentially run N-game batches against each champion. We capture
+            # per-opponent records so the dashboard can show "which champions
+            # did we beat / lose to" rather than a single averaged number.
+            total_p1_wins = 0.0
             total_games = 0
-            for opp_dir, opp_label, _opp_elo in opponents:
+            matches: list[dict] = []
+            for opp_dir, opp_label, opp_elo, opp_id_short in opponents:
+                m_t0 = _time.perf_counter()
                 try:
                     res = tournament.run_match(
                         p1=str(eval_ckpt_dir),
@@ -730,16 +779,43 @@ class PPOTrainer:
                     )
                 except Exception as exc:
                     print(f"[archive_eval] match vs {opp_label} failed: {exc}", flush=True)
+                    matches.append({
+                        "update":       self._update_count,
+                        "opp_label":    opp_label,
+                        "opp_id_short": opp_id_short,
+                        "opp_elo":      float(opp_elo) if opp_elo is not None else None,
+                        "level":        self.cfg.archive_eval_level,
+                        "error":        f"{type(exc).__name__}: {exc}",
+                    })
                     continue
-                # Treat draws as half-wins (standard Elo convention).
-                total_p1_wins += res["p1_wins"] + 0.5 * res["draws"]
-                total_games += res["total"]
+                m_wall = _time.perf_counter() - m_t0
+                p1_wins = int(res["p1_wins"])
+                p2_wins = int(res["p2_wins"])
+                draws   = int(res["draws"])
+                total   = int(res["total"])
+                total_p1_wins += p1_wins + 0.5 * draws
+                total_games += total
+                wr = (p1_wins + 0.5 * draws) / max(total, 1)
+                matches.append({
+                    "update":       self._update_count,
+                    "opp_label":    opp_label,
+                    "opp_id_short": opp_id_short,
+                    "opp_elo":      float(opp_elo) if opp_elo is not None else None,
+                    "level":        self.cfg.archive_eval_level,
+                    "p1_wins":      p1_wins,
+                    "p2_wins":      p2_wins,
+                    "draws":        draws,
+                    "total":        total,
+                    "win_rate":     round(wr, 3),
+                    "wall_s":       round(m_wall, 3),
+                })
 
             wall = _time.perf_counter() - t0
             if total_games == 0:
                 return {"archive_eval_n_opponents": len(opponents),
                         "archive_eval_n_games": 0,
-                        "archive_eval_wall_s": round(wall, 3)}
+                        "archive_eval_wall_s": round(wall, 3),
+                        "eval_matches": matches}
 
             wr = total_p1_wins / total_games
             print(f"[archive_eval] u{self._update_count}: win_rate={wr:.3f} "
@@ -748,8 +824,9 @@ class PPOTrainer:
             return {
                 "win_rate_vs_leaderboard": float(wr),
                 "archive_eval_n_opponents": len(opponents),
-                "archive_eval_n_games": int(total_games),
-                "archive_eval_wall_s": round(wall, 3),
+                "archive_eval_n_games":     int(total_games),
+                "archive_eval_wall_s":      round(wall, 3),
+                "eval_matches":             matches,
             }
         except Exception as exc:
             print(f"[archive_eval] unexpected failure: {type(exc).__name__}: {exc}", flush=True)
