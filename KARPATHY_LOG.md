@@ -2491,6 +2491,61 @@ opponent specialization, not active-vs-passive.
 
 **Queue:** 1 running + 1 queued = 2. Skipped queueing.
 
+### Loop fire 57 — 2026-04-29 10:41 PT — entropy_coef cycle-3 complete; FIRST 75%-DOMINANT LOSS sample observed
+
+**State.** Worker idle (GPU 0%), queue empty. PID 4019322, **17h 19min
+uptime**, RSS 6.59GB plateau (16+ fires). Champion drift 1160→1158.
+
+**entropy_coef has 3 cycles of data now:**
+
+| run | cycle 1 | cycle 2 | cycle 3 |
+|---|---|---|---|
+| -lo (0.003) | 1057 | 1048 | 1019 |
+| -mid (0.01) | 1058 | 1041 | **1024** |
+| -hi (0.03) | 1036 | 1035 | 1015 |
+
+**Range narrowed each cycle:** 22 → 13 → 9 Elo. Direction shuffled
+(cycle-1 lo>mid>hi, cycle-2 lo>mid>hi, cycle-3 mid>lo>hi). The
+deflation has compressed the axis to near-noise.
+
+**🟢 entropy_coef-mid cycle-3 game review — 75%-DOMINANT LOSS:**
+
+| game | tag | ticks | noop% | top types | value drop |
+|---|---|---|---|---|---|
+| WIN | 16 | 12% | 100%=62% / 75%=25% / noop=12% | -2.03 |
+| **LOSS** | **12** | **17%** | **75%=67% / 100%=17% / noop=17%** | +4.70 |
+
+**FIRST 75%-DOMINANT LOSS sample across 56 fires.** Previously 75%-sends
+always appeared as a secondary action (≤30% in any sample). Here
+75%-sends are **67% of the LOSS decisions.**
+
+**Why:** the agent learned that **75% sends preserve enough garrison
+to defend** while still attacking. Full-commit 100% sends empty the
+source building (vulnerable to counter); noop is too passive. **75%
+is the "controlled aggression" middle ground for losing positions.**
+This is a sophisticated loss strategy — first time we've seen one
+emerge from a v13 baseline.
+
+**Three cells now using non-100% as PRIMARY strategy under cycle-3:**
+
+| run | sample | dominant non-noop |
+|---|---|---|
+| rollout_steps-hi cycle-2 (Elo 1048) | WIN | 50%-sends 50% |
+| lr-hi cycle-2 (Elo 954) | WIN | 50%-sends 18% |
+| **entropy_coef-mid cycle-3 (Elo 1024)** | **LOSS** | **75%-sends 67%** |
+
+**The fleet is genuinely learning the action vocabulary** under
+sustained corpus pressure. Slow process but real. v14's "shape it
+toward variety" approach is *aligned* with the corpus's natural
+selection pressure now — not fighting it.
+
+**Backstop next:** ticks at :45 PT (~4 min). Round-robin from
+entropy_coef → **lr**. cycle-3 of lr hasn't run yet (lr's cycle-2
+was the strongest deflation seen: -19/+9/-55 across lo/mid/hi).
+Will be informative noise data.
+
+**Queue:** empty. Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-29 01:55 PT — fix scripts/karp_review_games.py for tied created_at
