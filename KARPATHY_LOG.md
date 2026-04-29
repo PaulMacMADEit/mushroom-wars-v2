@@ -1416,6 +1416,62 @@ mode for v13; **the actionable next step remains v14 next-step decision
 (Paul to call from fire-25 5-option list, expanded by fire-28's
 opponent-Elo recommendation).**
 
+### Loop fire 30 — 2026-04-28 21:41 PT — lr cycle-2 complete: lr-hi crashed to Elo 954 (sub-anchor!); worker mem normalized
+
+**State.** Worker PID 4019322, 4h 19min uptime, **RSS 5.79GB (-0.49
+since fire 29)** — memory came back down. Previous worker's "runaway"
+pattern not happening; fire 29's spike was transient (likely JAX cache
+pressure that GC'd back down). Restart pressure removed. Champion drift
+1168→1172 (+4, identity unchanged).
+
+**lr cycle-2 fully complete:**
+
+| run | cycle 1 | cycle 2 | Δ |
+|---|---|---|---|
+| -lo (1e-4) | 1073 | 1054 | -19 |
+| -mid (3e-4) | 1036 | 1045 | +9 |
+| -hi (1e-3) | 1009 | **954** | **-55 ⚠️** |
+
+**lr-hi cycle-2 dropped to Elo 954** — the **first sub-1000 of any
+cycle-2 cell**. Below the random_legal anchor (1000). Range jumped
+from cycle-1's 64 Elo to cycle-2's **100 Elo** (1054-954). The
+"lower-lr-wins" signal is *stronger* in cycle-2, not weaker.
+
+**Game review on lr-hi cycle-2 (Elo 954):**
+
+| game | tag | ticks | noop% | top types | value drop |
+|---|---|---|---|---|---|
+| WIN | 22 | 18% | 100% / noop / **50%** | -0.73 |
+| LOSS | 47 | 46% | noop / 100% / 50% | **+11.31 ⚠️** |
+
+**+11.31 value-drop is the largest of the entire loop** (previous
+record was +9.08). High lr produces wildly unstable training — policy
+oscillates each step, lands on something that strong opponents crush.
+
+**Pattern: 50%-sends emerge ONLY at axis high-end:**
+| run | cycle | 50%-sends in WIN | Elo |
+|---|---|---|---|
+| rollout_steps-hi cycle-2 | — | 50% | 1048 |
+| **lr-hi cycle-2** | — | 18% | 954 |
+
+These two runs are the **only** places non-100/non-noop sends have
+appeared all loop. Both at axis high-end. **Higher learning pressure →
+more action diversity → either novel wins or catastrophic losses.**
+
+**Connection to v14 thesis.** v14 (per-tick shaping) is one mechanism
+to drive action diversity. The other mechanism we've seen is **high
+learning pressure** (lr-hi, rollout_steps-hi). v14 finds the diversity
+*deliberately* via reward shape; high-lr finds it *accidentally* via
+training instability. v14's better — it gets the diversity AND the
+training stays stable (rate 0.917 in fire 25's v14 run).
+
+**Backstop progress.** Now in **cycle-3** (3rd time around the round-
+robin) on rollout_steps. lo running 11 min in. The cycles are giving
+us a richer noise picture but not new findings — most actionable
+next step remains v14 next-step decision.
+
+**Queue:** 1 running + 2 queued = 3. Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
