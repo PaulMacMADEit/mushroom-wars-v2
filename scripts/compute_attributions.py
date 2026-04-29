@@ -235,63 +235,83 @@ def upsert(run_id: str, agg: dict, wl2: dict, n_states: int) -> int:
     return len(rows)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--run-id", required=True)
-    ap.add_argument("--games", type=int, default=16,
-                    help="Parallel games rolled out for state collection.")
-    ap.add_argument("--max-ticks", type=int, default=200)
-    ap.add_argument("--max-states", type=int, default=2000,
-                    help="Cap on states used for IG (random subsample).")
-    ap.add_argument("--ig-steps", type=int, default=50)
-    ap.add_argument("--seed", type=int, default=0)
-    args = ap.parse_args()
+def compute_for_run(run_id: str, level: str | None = None, n_games: int = 16,
+                    ig_steps: int = 50, max_states: int = 2000,
+                    max_ticks: int = 200, seed: int = 0,
+                    device: torch.device | None = None) -> int:
+    """Run the full attribution pipeline for a single run_id and upsert to
+    run_feature_importance. Returns the number of states actually used.
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    If `level` is None, falls back to the run's training level (hyperparams.level_name).
+    Used by both the CLI (scripts/compute_attributions.py) and the worker
+    (workers/worker.py) when it claims an attribution_jobs row.
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    with connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT hyperparams::text FROM runs WHERE id = %s", (args.run_id,))
-        row = cur.fetchone()
-    if not row:
-        raise SystemExit(f"run {args.run_id} not found")
-    hp = json.loads(row[0])
-    level = hp.get("level_name") or "random_8_16"
-    print(f"[attributions] run={args.run_id} level={level} device={device}")
+    if level is None:
+        with connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT hyperparams::text FROM runs WHERE id = %s", (run_id,))
+            row = cur.fetchone()
+        if not row:
+            raise RuntimeError(f"run {run_id} not found")
+        level = json.loads(row[0]).get("level_name") or "random_8_16"
+
+    print(f"[attributions] run={run_id} level={level} device={device}")
 
     t0 = time.perf_counter()
-    kind, agent, obs_norm = _load_policy(args.run_id, device)
+    kind, agent, obs_norm = _load_policy(run_id, device)
     if kind != "neural":
-        raise SystemExit(f"run {args.run_id} resolved to {kind!r}, not neural")
+        raise RuntimeError(f"run {run_id} resolved to {kind!r}, not neural")
     print(f"[attributions] policy loaded in {time.perf_counter()-t0:.1f}s")
 
     t0 = time.perf_counter()
-    obs_arr = collect_states(agent, obs_norm, level, args.games, args.max_ticks, args.seed)
+    obs_arr = collect_states(agent, obs_norm, level, n_games, max_ticks, seed)
     print(f"[attributions] collected {obs_arr.shape[0]} states in {time.perf_counter()-t0:.1f}s")
 
-    if obs_arr.shape[0] > args.max_states:
-        rng = np.random.default_rng(args.seed)
-        idx = rng.choice(obs_arr.shape[0], size=args.max_states, replace=False)
+    if obs_arr.shape[0] > max_states:
+        rng = np.random.default_rng(seed)
+        idx = rng.choice(obs_arr.shape[0], size=max_states, replace=False)
         obs_arr = obs_arr[idx]
         print(f"[attributions] subsampled to {obs_arr.shape[0]} states")
 
     t0 = time.perf_counter()
-    ig = integrated_gradients(agent.net, obs_arr, steps=args.ig_steps, device=device)
-    print(f"[attributions] IG ({args.ig_steps} steps) in {time.perf_counter()-t0:.1f}s")
+    ig = integrated_gradients(agent.net, obs_arr, steps=ig_steps, device=device)
+    print(f"[attributions] IG ({ig_steps} steps) in {time.perf_counter()-t0:.1f}s")
 
     agg = aggregate_to_named(ig)
     wl2 = compute_weight_l2(agent.net)
-
-    n_rows = upsert(args.run_id, agg, wl2, n_states=int(obs_arr.shape[0]))
-    print(f"[attributions] wrote {n_rows} rows for run {args.run_id}")
+    n_rows = upsert(run_id, agg, wl2, n_states=int(obs_arr.shape[0]))
+    print(f"[attributions] wrote {n_rows} rows for run {run_id}")
 
     flat = []
     for block in ("globals", "building", "group"):
-        for idx, name, mean_abs, mean_signed, _std in agg[block]:
-            flat.append((mean_abs, block, name, mean_signed, wl2[block][idx]))
+        for fi, name, mean_abs, mean_signed, _std in agg[block]:
+            flat.append((mean_abs, block, name, mean_signed, wl2[block][fi]))
     flat.sort(reverse=True)
     print("\n[attributions] top 15 by mean |IG|:")
     for ma, block, name, ms, w in flat[:15]:
         print(f"  {block:9s} {name:24s} |IG|={ma:.4f}  signed={ms:+.4f}  wL2={w:.3f}")
+
+    return int(obs_arr.shape[0])
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--run-id", required=True)
+    ap.add_argument("--level", default=None,
+                    help="Defaults to the run's training level.")
+    ap.add_argument("--games", type=int, default=16)
+    ap.add_argument("--max-ticks", type=int, default=200)
+    ap.add_argument("--max-states", type=int, default=2000)
+    ap.add_argument("--ig-steps", type=int, default=50)
+    ap.add_argument("--seed", type=int, default=0)
+    args = ap.parse_args()
+    compute_for_run(
+        run_id=args.run_id, level=args.level, n_games=args.games,
+        ig_steps=args.ig_steps, max_states=args.max_states,
+        max_ticks=args.max_ticks, seed=args.seed,
+    )
 
 
 if __name__ == "__main__":

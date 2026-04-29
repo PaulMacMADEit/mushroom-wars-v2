@@ -31,6 +31,33 @@
     .fi-num    { font-family:var(--mono); text-align:right; }
     .fi-help   { color:var(--fg-muted); font-size:12px; line-height:1.5; margin-bottom:12px; }
     .fi-help strong { color:var(--fg); }
+    .fi-controls {
+      display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+      padding:10px; background:rgba(96,165,250,.05);
+      border:1px solid var(--border); border-radius:var(--radius);
+      margin-bottom:12px;
+    }
+    .fi-controls label  { font-size:12px; color:var(--fg-muted); }
+    .fi-controls select,
+    .fi-controls input[type=number] {
+      background:var(--bg-card); color:var(--fg);
+      border:1px solid var(--border); border-radius:4px;
+      padding:5px 8px; font-size:12px; font-family:var(--mono);
+    }
+    .fi-controls input[type=number] { width:70px; }
+    .fi-controls button {
+      background:var(--accent); color:#0b0d12;
+      border:0; border-radius:4px;
+      padding:6px 14px; font-size:12px; font-weight:600;
+      cursor:pointer;
+    }
+    .fi-controls button:disabled {
+      background:var(--border); color:var(--fg-muted); cursor:not-allowed;
+    }
+    .fi-status { font-size:12px; color:var(--fg-muted); }
+    .fi-status.running { color:var(--accent); }
+    .fi-status.failed  { color:var(--danger); }
+    .fi-status.done    { color:var(--accent-2); }
     @media (max-width: 700px) {
       .fi-header, .fi-row { grid-template-columns: 64px 130px 1fr 50px 50px; }
       .fi-row .fi-num.wl2-col { display:none; }
@@ -1228,9 +1255,91 @@
       `;
     }
 
+    // Levels offered in the attribution form. Must satisfy the regex in
+    // queue_attribution_job (infra/attribution_jobs.sql).
+    const FI_LEVEL_OPTIONS = [
+      'random_4_8', 'random_6_10', 'random_8_16', 'random_16_24',
+      'random_close_4_5', 'random_close_4_6', 'random_close_6_10',
+      'asym_8_8', 'crossroads_6',
+    ];
+
+    function renderFiControls(runId, defaultLevel, hasData, statusHtml) {
+      const opts = FI_LEVEL_OPTIONS.map(l =>
+        `<option value="${esc(l)}"${l === defaultLevel ? ' selected' : ''}>${esc(l)}</option>`
+      ).join('');
+      const btnLabel = hasData ? 'Recompute' : 'Compute attributions';
+      return `
+        <div class="fi-controls">
+          <label>level
+            <select id="fi-level">${opts}</select>
+          </label>
+          <label>games
+            <input id="fi-games" type="number" min="1" max="256" value="16">
+          </label>
+          <button id="fi-submit">${btnLabel}</button>
+          <span class="fi-status" id="fi-status">${statusHtml || ''}</span>
+        </div>`;
+    }
+
+    async function submitAttributionJob(runId) {
+      const level = document.getElementById('fi-level').value;
+      const games = parseInt(document.getElementById('fi-games').value, 10) || 16;
+      const $btn = document.getElementById('fi-submit');
+      const $status = document.getElementById('fi-status');
+      $btn.disabled = true;
+      $status.className = 'fi-status running';
+      $status.textContent = 'queueing…';
+
+      const { data, error } = await sb.rpc('queue_attribution_job', {
+        p_run_id: runId, p_level: level, p_n_games: games,
+      });
+      if (error) {
+        $status.className = 'fi-status failed';
+        $status.textContent = `queue failed: ${error.message}`;
+        $btn.disabled = false;
+        return;
+      }
+      const jobId = data;
+      $status.textContent = `queued (job ${jobId.slice(0, 8)}…), waiting for worker…`;
+
+      // Poll the job row every 3s until terminal.
+      const poll = setInterval(async () => {
+        const { data: row, error: pollErr } = await sb
+          .from('attribution_jobs')
+          .select('status, machine, error, n_states, started_at, finished_at')
+          .eq('id', jobId).single();
+        if (pollErr) {
+          $status.textContent = `poll failed: ${pollErr.message}`;
+          $status.className = 'fi-status failed';
+          clearInterval(poll); $btn.disabled = false; return;
+        }
+        if (row.status === 'queued') {
+          $status.textContent = `queued, waiting for worker…`;
+        } else if (row.status === 'running') {
+          $status.className = 'fi-status running';
+          $status.textContent = `running on ${row.machine}…`;
+        } else if (row.status === 'done') {
+          $status.className = 'fi-status done';
+          $status.textContent = `done (${row.n_states} states on ${row.machine}) — refreshing`;
+          clearInterval(poll);
+          // Refresh the panel — preserves form open + repopulates bars.
+          await loadFeatureImportance(runId);
+        } else if (row.status === 'failed') {
+          $status.className = 'fi-status failed';
+          $status.textContent = `failed: ${(row.error || '').split('\n')[0]}`;
+          clearInterval(poll); $btn.disabled = false;
+        }
+      }, 3000);
+    }
+
     async function loadFeatureImportance(runId) {
       const $panel = document.getElementById('feature-importance');
       if (!$panel) return;
+
+      // Run's training level is the natural default for the form.
+      const { data: runRow } = await sb.from('runs')
+        .select('hyperparams').eq('id', runId).single();
+      const defaultLevel = runRow?.hyperparams?.level_name || 'random_8_16';
 
       const { data, error } = await sb
         .from('run_feature_importance')
@@ -1238,12 +1347,19 @@
         .eq('run_id', runId)
         .order('ig_mean_abs', { ascending: false });
       if (error) { $panel.innerHTML = `<div class="error">${esc(error.message)}</div>`; return; }
-      if (!data || data.length === 0) {
+
+      const hasData = data && data.length > 0;
+      const controls = renderFiControls(runId, defaultLevel, hasData, '');
+
+      if (!hasData) {
         $panel.innerHTML = `
+          ${controls}
           <div class="muted">
-            no attributions computed yet — run<br>
-            <span class="inline-code">python scripts/compute_attributions.py --run-id ${esc(runId)}</span>
+            no attributions computed yet — pick a level + games above and click
+            <strong>Compute attributions</strong>. Any worker (Mac or PaulLinux) will pick it up.
           </div>`;
+        document.getElementById('fi-submit').addEventListener('click',
+          () => submitAttributionJob(runId));
         return;
       }
 
@@ -1267,10 +1383,11 @@
       }).join('');
 
       $panel.innerHTML = `
+        ${controls}
         <div class="fi-help">
           What drives this run's <strong>value head</strong> — the agent's expected-return estimate.
           <strong>Mean |IG|</strong> is the Integrated-Gradients attribution averaged over
-          ${nStates} sampled decision states (policy vs random_legal on this run's training level).
+          ${nStates} sampled decision states (policy vs random_legal on the level above).
           Building/group features are summed across the 32 slots.
           <strong>Signed</strong> shows direction (+ raises value, − lowers).
           <strong>wL2</strong> = layer-1 column norm — capacity to use a feature, not actual use; often disagrees with |IG|.
@@ -1283,6 +1400,8 @@
         </div>
         <div class="fi-list">${rows}</div>
       `;
+      document.getElementById('fi-submit').addEventListener('click',
+        () => submitAttributionJob(runId));
     }
 
     async function pollForUpdates(runId) {

@@ -127,6 +127,71 @@ def _claim_via(conn, fn_name: str, machine: str):
     return row
 
 
+def claim_one_attribution_job(conn, machine: str) -> dict | None:
+    """Atomically claim the oldest queued attribution_jobs row via RPC.
+    Returns dict or None. Cheap user-initiated work — every worker checks
+    this first regardless of paused/matches_only mode (except paused)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, run_id, level, n_games, ig_steps, max_states "
+            "FROM claim_next_attribution_job(%s, %s)",
+            (PROJECT, machine),
+        )
+        row = cur.fetchone()
+    conn.commit()
+    if row is None:
+        return None
+    id_, run_id, level, n_games, ig_steps, max_states = row
+    return {
+        "id":         id_,
+        "run_id":     run_id,
+        "level":      level,
+        "n_games":    n_games,
+        "ig_steps":   ig_steps,
+        "max_states": max_states,
+    }
+
+
+def _handle_attribution_job(job: dict, device) -> None:
+    """Run compute_for_run() for an attribution job and update its row.
+    Opens its own DB connections; never holds one across the compute body."""
+    from scripts.compute_attributions import compute_for_run
+
+    job_id = job["id"]
+    t0 = time.time()
+    try:
+        n_states = compute_for_run(
+            run_id=str(job["run_id"]),
+            level=job["level"],
+            n_games=int(job["n_games"]),
+            ig_steps=int(job["ig_steps"]),
+            max_states=int(job["max_states"]),
+            device=device,
+        )
+        with connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE attribution_jobs SET status='done', n_states=%s, "
+                "finished_at=now() WHERE id=%s",
+                (int(n_states), job_id),
+            )
+            conn.commit()
+        wall_s = time.time() - t0
+        print(f"[worker] attribution job {job_id} done in {wall_s:.1f}s ({n_states} states)")
+    except Exception as exc:
+        err = f"{exc.__class__.__name__}: {exc}\n\n{traceback.format_exc()}"
+        print(f"[worker] attribution job {job_id} failed: {err}")
+        try:
+            with connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE attribution_jobs SET status='failed', error=%s, "
+                    "finished_at=now() WHERE id=%s",
+                    (err, job_id),
+                )
+                conn.commit()
+        except Exception as exc2:
+            print(f"[worker] failed to mark attribution job failed: {exc2}")
+
+
 def claim_one_job(conn, machine: str):
     """Call claim_next_job (admin sim only); return dict or None.
 
@@ -1247,6 +1312,29 @@ def main():
                     print(f"[worker] mode={mode} for machine={args.machine}")
                     last_mode = mode
 
+                if paused:
+                    time.sleep(args.poll_interval)
+                    continue
+
+                # 0) Always-first: cheap user-initiated attribution jobs.
+                # These run on any worker (matches_only or full) — they don't
+                # consume the GPU heavily and finish in ~1 min, so they can
+                # always slot ahead of training/eval claims.
+                attrib_job = claim_one_attribution_job(conn, args.machine)
+                if attrib_job is not None:
+                    idle_streak = 0
+
+            # Run attribution work *outside* the connection block — the
+            # compute path opens its own short-lived connections.
+            if attrib_job is not None:
+                _handle_attribution_job(attrib_job, device)
+                if args.one:
+                    return
+                continue
+
+            # Re-open the connection for the rest of the loop body.
+            with connect() as conn:
+                paused, matches_only = _worker_mode(conn, args.machine)
                 if paused:
                     time.sleep(args.poll_interval)
                     continue
