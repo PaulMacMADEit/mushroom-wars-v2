@@ -894,7 +894,10 @@ def run_training(
     # PFSP weights; legacy top-K-Elo path is available via
     # cfg.leaderboard_source='elo' for back-compat / experiments.
     leaderboard_paths: list[tuple] = []
-    if cfg.leaderboard_bias > 0:
+    # Download archive members if the trainer needs them — either for self-play
+    # pool sampling (leaderboard_bias > 0) OR per-update rotation (fire 65).
+    needs_pool = cfg.leaderboard_bias > 0 or getattr(cfg, "opponent_pool_mode", "") == "rotate_per_update"
+    if needs_pool:
         source = getattr(cfg, "leaderboard_source", "pfsp")
         try:
             if source == "elo":

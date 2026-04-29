@@ -87,6 +87,15 @@ class PPOConfig:
     # REWARD_TICK_*_COEF_BY_VERSION). See KARPATHY_LOG.md fire 21 + 22.
     reward_v13:           bool  = False
     reward_version:       int   = -1     # -1 = unset (use reward_v13)
+    # Opponent pool mode (2026-04-29 fire 65). When set, the trainer rotates
+    # through leaderboard_paths each PPO update instead of pinning to a single
+    # opponent for the whole run. Only relevant when leaderboard_paths is
+    # populated (worker downloads them via _download_pfsp_champions).
+    #   ""                — disabled (default; single opponent for the run)
+    #   "rotate_per_update" — pick a random archive member each update,
+    #                          swap the opponent callable in-place. ~50ms per
+    #                          swap (state_dict load + small net construct).
+    opponent_pool_mode:   str   = ""
     # Optional per-env level distribution. None → all envs use cfg.level_name
     # (back-compat). Otherwise: list of (name, weight) pairs; each env (re)reset
     # samples from this mix. Only honoured by SIM_BACKEND=jax — the numpy
@@ -478,6 +487,13 @@ class PPOTrainer:
     def update(self) -> dict:
         import time as _time
         _t_update = _time.perf_counter_ns()
+
+        # 2026-04-29 fire 65: per-update opponent rotation. When enabled,
+        # pick a random archive member and swap the opponent callable BEFORE
+        # collecting this update's rollout. ~50ms per swap (state_dict load).
+        if self.cfg.opponent_pool_mode == "rotate_per_update" and self._leaderboard:
+            self._rotate_opponent_for_update()
+
         _t_rollout = _time.perf_counter_ns()
         batch = self.collect_rollout()
         self._phase_ns["rollout_ns"] += _time.perf_counter_ns() - _t_rollout
@@ -642,6 +658,59 @@ class PPOTrainer:
                 return [[str(k), float(v)] for k, v in raw.items()]
             return [[str(item[0]), float(item[1])] for item in raw]
         return [[str(self.cfg.level_name), 1.0]]
+
+    def _rotate_opponent_for_update(self) -> None:
+        """Pick a random archive member and swap the opponent callable in-place.
+
+        Called at the start of update() when cfg.opponent_pool_mode ==
+        'rotate_per_update'. Uses self._leaderboard which the worker pre-
+        populated via _download_pfsp_champions — all archive members already
+        on local disk. So this is just file load + net construct (~50ms).
+
+        Updates:
+          - self.vec._opponent (used by the legacy per-tick path in backend.py)
+          - self._fused_bookkeeping['opponent_fn'] (used by fused_rollout)
+          - self._initial_opponent_kwargs (so _current_opponent_label reflects
+            the swap on dashboard)
+        """
+        import os
+        from sim.envs.opponents import make_neural_opponent
+
+        if not self._leaderboard:
+            return  # nothing to rotate to
+
+        # Weighted pick using the cached PFSP weights (or uniform if missing).
+        if self._lb_weights is not None:
+            idx = int(np.random.choice(len(self._leaderboard), p=self._lb_weights))
+        else:
+            idx = int(np.random.randint(0, len(self._leaderboard)))
+        weights_path, obs_norm_path, _weight = self._leaderboard[idx]
+
+        # Build a fresh opponent callable. make_neural_opponent loads the net
+        # state_dict, instantiates the right body width, and returns a closure.
+        device = (self._initial_opponent_kwargs or {}).get("device", "cpu")
+        new_opponent = make_neural_opponent(
+            weights_path=weights_path,
+            obs_norm_path=obs_norm_path,
+            device=device,
+        )
+
+        # Swap in both the vec env (legacy path) and the fused_rollout
+        # bookkeeping (the path actually used under sim_backend=jax).
+        if hasattr(self.vec, "_opponent"):
+            self.vec._opponent = new_opponent
+        if hasattr(self, "_fused_bookkeeping"):
+            self._fused_bookkeeping["opponent_fn"] = new_opponent
+
+        # Update the dashboard label so the run page shows which opponent
+        # the agent is currently training against. The basename of the
+        # weights_path is enough — the worker-side download names files with
+        # the run_id prefix.
+        opp_id = os.path.basename(os.path.dirname(weights_path)) if weights_path else "?"
+        # Mutate (not replace) so any held references still work.
+        if self._initial_opponent_kwargs is None:
+            self._initial_opponent_kwargs = {}
+        self._initial_opponent_kwargs["_label_opponent_run_id"] = opp_id
 
     def _archive_eval(self) -> dict | None:
         """Periodic eval of current policy vs top-N champions in the archive.

@@ -113,6 +113,16 @@ baseline_hyperparams:
   latest_bias:      0.8            # P(env samples latest snapshot) when self_play=true
   initial_opponent: "random_legal"
 
+  # ----- Per-update opponent rotation (2026-04-29 fire 65) -----
+  # When set to 'rotate_per_update', the trainer picks a random archive
+  # member at the start of each PPO update and swaps the opponent callable
+  # in-place. ~50ms per swap. Lets a 5-min cell with 12-21 updates train
+  # against 12-21 different opponents instead of one. Compatible with
+  # fused_rollout=true (single neural opponent path; just hot-swapped each
+  # update). Requires worker to download the archive — gated on this AND
+  # leaderboard_bias>0 in workers/worker.py.
+  opponent_pool_mode: "rotate_per_update"
+
   # ----- Cross-lineage / PFSP archive sampling (training-time) -----
   # Only consulted when self_play=true. Bench-eval-time PFSP is independent.
   leaderboard_bias:   0.30          # P(env draws from champion archive per snapshot)
