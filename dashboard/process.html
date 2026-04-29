@@ -77,6 +77,9 @@
         <a href="#sec-rerate">9. Periodic re-rating</a>
         <a href="#sec-kpi">10. KPIs — compute budget per run</a>
         <a href="#sec-noise">11. Where measurement noise comes from</a>
+        <a href="#sec-ppo-table">12. Full PPO config — every field, current value, why</a>
+        <a href="#sec-reward">13. Current reward scheme (v1.4)</a>
+        <a href="#sec-obs">14. What the network sees — observation features</a>
       </div>
     </div>
 
@@ -161,18 +164,21 @@
 
         <tr><td>Level</td>
           <td>level_name <i>or</i> level_mix</td>
-          <td><code>random_close_4_5</code> (karp) or full mix (cron)</td>
-          <td>each env independently samples a level on reset</td></tr>
+          <td><code>random_close_4_5</code></td>
+          <td>read from <code>configs/training_levels.yaml</code> — single source of
+              truth shared by cron + karp</td></tr>
 
         <tr><td>Opponent</td>
           <td>opponent name</td>
-          <td><code>latest_champion</code> (karp v2) or <code>random_legal</code></td>
+          <td><code>latest_champion</code> (karp) or per-phase mix (cron)</td>
           <td>see §3</td></tr>
       </table>
 
       <p class="footnote">
-        Source: <code>configs/karpathy_loop.yaml</code>, <code>training/trainer.py:PPOConfig</code>,
+        Source: <code>configs/karpathy_loop.yaml</code>, <code>configs/training_levels.yaml</code>,
+        <code>training/trainer.py:PPOConfig</code>,
         <code>scripts/cron_agent_pulse.py:DEFAULT_CFG</code>.
+        Full PPO field reference: see §12 below.
       </p>
     </div>
 
@@ -181,21 +187,32 @@
     <div class="card">
       <h3>3a. Level — what map you train on</h3>
       <p>
-        Each of the 1024 envs samples a level <i>independently</i> on reset, so a
-        single rollout step can have envs running 4-building games and envs running
-        24-building games at the same time. Two ways to specify:
+        <b>Currently:</b> all training runs (cron and karp) train on
+        <code>random_close_4_5</code> — a 350×350 map with 4-5 randomly-placed
+        buildings. Read from <code>configs/training_levels.yaml</code>; both
+        schedulers go through <code>cli.loop_config.load_levels()</code> so they can
+        never drift apart.
+      </p>
+      <p>
+        Each of the 1024 envs gets a freshly-generated <code>random_close_4_5</code>
+        layout on reset (different building positions / starting owners every
+        episode), so the agent sees variety even on a single named level.
+      </p>
+      <p>
+        Two ways to specify a level in the YAML:
       </p>
       <ul>
-        <li><b>Single level</b> via <code>level_name</code> — e.g. <code>random_close_4_5</code>
-            (350×350 map, 4–5 buildings, ~half travel time of full map).</li>
-        <li><b>Mix</b> via <code>level_mix</code> — e.g.
-            <code>{random_4_8: 0.20, random_6_10: 0.20, random_8_16: 0.30, random_16_24: 0.30}</code>.
-            That's the b6 phase1_full_mix recipe.</li>
+        <li><b>Single level</b> via <code>level_name</code> only — what we use today.</li>
+        <li><b>Mix</b> via <code>level_name + level_mix</code> — each env independently
+            samples a level on reset. Used for graduation runs across building counts,
+            e.g. <code>{random_4_8: 0.20, random_6_10: 0.20, random_8_16: 0.30, random_16_24: 0.30}</code>
+            (the b6 phase1_full_mix recipe).</li>
       </ul>
       <p>
         Generators live in <code>sim/levels.py</code>. <code>random_close_*</code> is
-        a small map; <code>random_*</code> is the full 700×700 map; <code>asym_*</code>
-        is intentionally unfair (P1 starts closer to neutrals).
+        a small 350×350 map with N buildings; <code>random_*</code> is the full
+        700×700 map; <code>asym_*</code> is intentionally unfair (P1 starts closer to
+        neutrals — useful only for self-play diagnostics).
       </p>
 
       <h3>3b. Opponent — who plays P2 against the learner's P1</h3>
@@ -277,6 +294,54 @@
     <!-- ============================================================ -->
     <h2 id="sec-update">5. PPO update — what learning means here</h2>
     <div class="card">
+
+      <h3>5a. The three numbers everyone gets confused about</h3>
+      <p>
+        Three knobs control how much data per update and how hard PPO chews it. They
+        are independent, but interact, so worth pinning down individually.
+      </p>
+
+      <dl>
+        <dt><code>rollout_steps</code> (current: <b>64</b>)</dt>
+        <dd>
+          <b>What:</b> how many times each env steps before we stop and learn from
+          it. With <code>n_envs = 1024</code> and <code>rollout_steps = 64</code>,
+          one rollout collects <b>1024 × 64 = 65,536 samples</b> (one sample = one
+          agent decision in one env at one moment).<br>
+          <b>Why this size:</b> bigger = more on-policy data per update (lower
+          variance gradient, can run more SGD steps without staleness) but longer
+          wall-time per update and more memory. 64 with K=2 means each env covers
+          ~128 sim ticks per rollout — long enough to see episodes complete on
+          short maps, short enough to update frequently.
+        </dd>
+
+        <dt><code>update_epochs</code> (current: <b>4</b>)</dt>
+        <dd>
+          <b>What:</b> after the 65,536-sample buffer is full, how many full
+          passes through it we make. Each pass shuffles the data and does one SGD
+          step per minibatch. 4 passes × 128 minibatches = <b>512 SGD steps per
+          PPO update</b>.<br>
+          <b>Why this size:</b> 1 epoch wastes the data (PPO's clipping is
+          designed to let you reuse on-policy samples safely). Too many epochs
+          (8+) overfits the same buffer — KL between old and new policy explodes
+          and the clip ratio fires on most samples, which is wasted compute. 3-4
+          is the standard PPO range; we sweep this axis (lo=2 / mid=4 / hi=8).
+        </dd>
+
+        <dt><code>minibatch_size</code> (current: <b>512</b>)</dt>
+        <dd>
+          <b>What:</b> how many samples enter each SGD step. With buffer = 65,536
+          and minibatch = 512, that's <b>128 minibatches per epoch</b>.<br>
+          <b>Why this size:</b> smaller = more SGD steps per epoch (more updates
+          to the network) but noisier gradient estimates and slower wall time
+          (kernel launch overhead). Larger = smoother gradient, faster per
+          step, but fewer updates per epoch and worse exploration of the loss
+          surface. 512 is a balance — fits comfortably in VRAM with the 1024-wide
+          v9.0 net and gives reasonable gradient SNR.
+        </dd>
+      </dl>
+
+      <h3>5b. The PPO update step itself</h3>
       <p>
         After the 65,536-sample rollout buffer is full, the trainer does ONE PPO
         update. That update is <code>update_epochs = 4</code> passes over the buffer,
@@ -484,10 +549,277 @@
       </p>
     </div>
 
+    <!-- ============================================================ -->
+    <h2 id="sec-ppo-table">12. Full PPO config — every field, current value, why</h2>
+    <div class="card">
+      <p>
+        Every field on <code>training/trainer.py:PPOConfig</code> with its current
+        karp baseline value and the reason it's set that way. Anything not listed
+        in <code>configs/karpathy_loop.yaml</code> falls back to the dataclass
+        default in this list.
+      </p>
+
+      <table class="kpi">
+        <tr><th style="width:20%;">Field</th><th style="width:13%;">Current</th><th>What it does + why this value</th></tr>
+
+        <tr><td colspan="3" class="muted small" style="background:#0b0d12;">Rollout shape</td></tr>
+        <tr><td><code>n_envs</code></td><td>1024</td>
+            <td>Parallel envs in the vec env. Bigger = more samples per rollout step
+                = better gradient SNR but more VRAM. 1024 saturates the JAX-vmap'd
+                sim at near-best step throughput on the RTX 3070.</td></tr>
+        <tr><td><code>vec_mode</code></td><td>sync</td>
+            <td>"sync" (in-process JAX vec env) vs "async" (subprocess pool).
+                sync is the only valid choice when <code>fused_rollout=true</code> +
+                <code>sim_backend=jax</code>; async is the legacy numpy path.</td></tr>
+        <tr><td><code>rollout_steps</code></td><td>64</td>
+            <td>Per-env decisions per PPO update. See §5a above.</td></tr>
+
+        <tr><td colspan="3" class="muted small" style="background:#0b0d12;">Engine</td></tr>
+        <tr><td><code>sim_backend</code></td><td>jax</td>
+            <td>"jax" runs the sim under jit + vmap on the GPU; "numpy" is the old
+                CPU reference oracle (used only for parity tests).</td></tr>
+        <tr><td><code>fused_rollout</code></td><td>true</td>
+            <td>When true, env-step + encode + mask + action-pack happen inside one
+                JIT'd function (no host round-trips per step). Required for the
+                JAX speedup to actually land.</td></tr>
+        <tr><td><code>action_repeat</code> (K)</td><td>2</td>
+            <td>How many sim ticks pass between agent decisions. K=2 means the agent
+                decides every 2 sec of game-time, halving inference cost vs K=1
+                with negligible policy quality loss on this game.</td></tr>
+
+        <tr><td colspan="3" class="muted small" style="background:#0b0d12;">PPO update</td></tr>
+        <tr><td><code>update_epochs</code></td><td>4</td>
+            <td>Passes over the rollout buffer per update. See §5a.</td></tr>
+        <tr><td><code>minibatch_size</code></td><td>512</td>
+            <td>Samples per SGD step. See §5a.</td></tr>
+        <tr><td><code>lr</code></td><td>3e-4</td>
+            <td>Adam learning rate. PPO's empirical sweet spot is ~3e-4 across most
+                tasks; 1e-4 is conservative, 1e-3 risks instability (we've measured
+                lr=1e-3 crashing to sub-anchor Elo on this game).</td></tr>
+        <tr><td><code>gamma</code></td><td>0.97</td>
+            <td>Discount factor for future reward. Effective horizon ≈ 1/(1-γ) =
+                33 decisions. With K=2 that's 66 sim-ticks of forward credit
+                assignment, comfortably covering most episodes (which end in 50-150
+                ticks under v1.4 reward shaping).</td></tr>
+        <tr><td><code>gae_lambda</code></td><td>0.95</td>
+            <td>GAE smoothing parameter. Trades bias (low λ) vs variance (high λ).
+                0.95 is the standard PPO default.</td></tr>
+        <tr><td><code>clip_range</code></td><td>0.2</td>
+            <td>PPO's policy ratio clip ε. New/old logprob ratio is clamped to
+                [0.8, 1.2]. Larger = more aggressive policy updates (faster but
+                less stable); smaller = conservative.</td></tr>
+        <tr><td><code>value_coef</code></td><td>0.5</td>
+            <td>Weight on critic (value-head) MSE in the total loss.
+                policy_loss + 0.5·value_loss − 0.01·entropy_loss.</td></tr>
+        <tr><td><code>entropy_coef</code></td><td>0.01</td>
+            <td>Weight on the negative-entropy bonus (encourages exploration).
+                Higher = more random / explorative policy; lower = more confident.
+                We sweep this at 0.003 / 0.01 / 0.03.</td></tr>
+        <tr><td><code>max_grad_norm</code></td><td>0.5</td>
+            <td>Pre-step gradient norm clip. Prevents one bad batch from blowing up
+                the policy. Standard PPO uses 0.5.</td></tr>
+
+        <tr><td colspan="3" class="muted small" style="background:#0b0d12;">Observation normalization</td></tr>
+        <tr><td><code>normalize_obs</code></td><td>true</td>
+            <td>Welford running mean/std applied to every obs feature
+                (<code>training/obs_norm.py</code>). Without this, the per-tick
+                shaping signal would be dominated by the unnormalized building-count
+                magnitudes.</td></tr>
+        <tr><td><code>obs_clip</code></td><td>10.0</td>
+            <td>After normalization, clip each feature to ±10 std. Prevents one
+                outlier observation from dominating the batch.</td></tr>
+
+        <tr><td colspan="3" class="muted small" style="background:#0b0d12;">Self-play (currently OFF in karp)</td></tr>
+        <tr><td><code>self_play</code></td><td>false</td>
+            <td>When false, opponent is fixed at the run start (random_legal /
+                neural / latest_champion). When true, the trainer maintains a pool
+                of past snapshots of itself and samples from it. Requires the numpy
+                backend (incompatible with fused_rollout).</td></tr>
+        <tr><td><code>snapshot_every</code></td><td>10</td>
+            <td>Updates between adding a self-play pool snapshot. Only relevant
+                when self_play=true.</td></tr>
+        <tr><td><code>pool_max_size</code></td><td>20</td>
+            <td>Max self-play pool size before oldest gets evicted.</td></tr>
+        <tr><td><code>latest_bias</code></td><td>0.8</td>
+            <td>P(env samples the most recent self-play snapshot) per env per
+                refresh. 0.8 = 80% recent self, 20% older self.</td></tr>
+        <tr><td><code>initial_opponent</code></td><td>random_legal</td>
+            <td>Opponent before the first self-play snapshot exists.</td></tr>
+        <tr><td><code>leaderboard_bias</code></td><td>0.3</td>
+            <td>P(env draws from champion archive instead of self-play pool). With
+                latest_bias=0.8 + leaderboard_bias=0.3, env mix ≈ 30% archive,
+                56% latest self, 14% older self.</td></tr>
+        <tr><td><code>leaderboard_top_k</code></td><td>10</td>
+            <td>How many archive entries to consider for sampling.</td></tr>
+        <tr><td><code>leaderboard_source</code></td><td>pfsp</td>
+            <td>"pfsp" weights archive entries by 1−|wr−0.5| (peaks at 50%-win-rate
+                = max info); "elo" is the legacy top-K-by-Elo path.</td></tr>
+
+        <tr><td colspan="3" class="muted small" style="background:#0b0d12;">Level (canonical: configs/training_levels.yaml)</td></tr>
+        <tr><td><code>level_name</code></td><td>random_close_4_5</td>
+            <td>Single level used by every env on every reset. 350×350 map with
+                4-5 random buildings.</td></tr>
+        <tr><td><code>level_mix</code></td><td>null</td>
+            <td>When set, each env independently samples a level on reset from
+                this distribution. Currently unset — single level.</td></tr>
+
+        <tr><td colspan="3" class="muted small" style="background:#0b0d12;">Reward shape</td></tr>
+        <tr><td><code>reward_version</code></td><td>2 (= v1.4)</td>
+            <td>Selects which reward scheme the sim emits. See §13 for the actual
+                values.</td></tr>
+        <tr><td><code>reward_v13</code></td><td>true</td>
+            <td>Legacy bool shim; ignored when <code>reward_version ≥ 0</code>.
+                Kept for back-compat with old run configs.</td></tr>
+
+        <tr><td colspan="3" class="muted small" style="background:#0b0d12;">Archive eval (during training, not bench_eval)</td></tr>
+        <tr><td><code>archive_eval_every</code></td><td>15</td>
+            <td>Run mid-training matches against top-N champions every 15 PPO
+                updates. Cheaper signal than bench_eval; used for live progress
+                charts.</td></tr>
+        <tr><td><code>archive_eval_top_n</code></td><td>10</td>
+            <td>Number of archive members evaluated.</td></tr>
+        <tr><td><code>archive_eval_games</code></td><td>10</td>
+            <td>Games per match.</td></tr>
+        <tr><td><code>archive_eval_level</code></td><td>random_4_6</td>
+            <td>Level used for the in-training eval matches (separate from the
+                training level).</td></tr>
+        <tr><td><code>archive_eval_min_pool</code></td><td>3</td>
+            <td>Skip if archive has fewer than 3 entries.</td></tr>
+        <tr><td><code>archive_eval_max_ticks</code></td><td>200</td>
+            <td>Hard tick cap per game.</td></tr>
+      </table>
+
+      <p class="footnote">
+        Source: <code>training/trainer.py:PPOConfig</code> ~lines 38-105.
+      </p>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="sec-reward">13. Current reward scheme (v1.4)</h2>
+    <div class="card">
+      <p>
+        These are the actual numbers the sim emits per env per tick. The agent
+        sees the per-tick reward and tries to maximize the discounted sum. Higher
+        WIN/LOSE magnitudes (5×) make terminal outcomes dominant; the speed bonus
+        rewards finishing fast; the per-tick shaping pushes the agent to actually
+        do something instead of camping.
+      </p>
+
+      <table class="kpi">
+        <tr><th>Event</th><th>Reward (v1.4)</th><th>Why this number</th></tr>
+        <tr><td>WIN</td><td>+5.0</td>
+            <td>Terminal reward when this player owns all live buildings.
+                5× larger than v1.2 to dominate noise from per-tick shaping.</td></tr>
+        <tr><td>LOSE</td><td>−5.0</td>
+            <td>Terminal — opponent won.</td></tr>
+        <tr><td>DRAW</td><td>−0.5</td>
+            <td>Mildly bad (200-tick timeout). Pushes agent away from passive
+                turtling. v1.2 had draw=0 which was a documented mutual-noop
+                trap.</td></tr>
+        <tr><td>Speed bonus</td><td>+ up to 2.0 to winner</td>
+            <td>Bonus = 2.0 · (1 − tick / 200). Winning at tick 0 = +2.0;
+                winning at timeout = +0.0. Pushes the agent toward fast finishes.</td></tr>
+        <tr><td>Capture (gain a building)</td><td>+0.05</td>
+            <td>Halved from v1.2's 0.10 because per-tick shaping replaced most of
+                the dense signal capture used to provide.</td></tr>
+        <tr><td>Loss (lose a building)</td><td>−0.05</td>
+            <td>Symmetric.</td></tr>
+        <tr><td>Per-tick: buildings owned</td><td>+ 0.0010 × N_owned</td>
+            <td>Gentle pressure to acquire / hold buildings every tick.
+                Magnitude tuned so a full-board (~16 buildings) reward over
+                100 ticks (~1.6) is well below WIN (5.0).</td></tr>
+        <tr><td>Per-tick: units held</td><td>+ 0.0002 × units</td>
+            <td>Gentle pressure to maintain a force economy. Same scaling logic.</td></tr>
+      </table>
+
+      <p class="footnote">
+        Source: <code>sim/config.py</code> lines 104-127
+        (<code>REWARD_*_BY_VERSION</code> tables, indexed by reward_version=2).
+      </p>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="sec-obs">14. What the network sees — observation features</h2>
+    <div class="card">
+      <p>
+        On every decision (every K=2 ticks), each of the 1024 envs hands the
+        network a 1002-dimensional <code>float32</code> vector. The vector is
+        organized into three blocks. Every value is normalized to roughly [0, 3]
+        so the running-mean/std normalizer converges quickly.
+      </p>
+
+      <h3>Globals — 10 features (game-level state)</h3>
+      <table class="kpi">
+        <tr><th>#</th><th>Feature</th><th>What it tells the network</th></tr>
+        <tr><td>0</td><td>tick / 200</td><td>How far through the game we are (0 = start, 1 = timeout).</td></tr>
+        <tr><td>1</td><td>1 − tick / 200</td><td>Time remaining (redundant but explicit).</td></tr>
+        <tr><td>2</td><td>P1 buildings / 32</td><td>Fraction of slots P1 owns.</td></tr>
+        <tr><td>3</td><td>P2 buildings / 32</td><td>Fraction P2 owns.</td></tr>
+        <tr><td>4</td><td>neutral buildings / 32</td><td>Fraction still unowned.</td></tr>
+        <tr><td>5</td><td>P1 total units / norm</td><td>P1 garrison + in-flight units, normalized.</td></tr>
+        <tr><td>6</td><td>P2 total units / norm</td><td>P2 same.</td></tr>
+        <tr><td>7</td><td>P1 share of all units</td><td>P1 / (P1 + P2). Tells the agent who's winning the unit race.</td></tr>
+        <tr><td>8</td><td>building margin</td><td>(P1 − P2) buildings / 32. Signed lead in buildings.</td></tr>
+        <tr><td>9</td><td>unit margin</td><td>(P1 − P2) total units / norm. Signed lead in army size.</td></tr>
+      </table>
+
+      <h3>Per-building — 22 features × 32 slots = 704 features</h3>
+      <p>
+        For each of the 32 building slots (alive or empty), the network gets:
+      </p>
+      <table class="kpi">
+        <tr><th>#</th><th>Feature</th><th>What it tells the network</th></tr>
+        <tr><td>1</td><td>alive</td><td>Slot occupied.</td></tr>
+        <tr><td>2-4</td><td>is_p1 / is_p2 / is_neutral</td><td>One-hot ownership.</td></tr>
+        <tr><td>5</td><td>garrison / 300</td><td>Raw unit count inside this building.</td></tr>
+        <tr><td>6</td><td>garrison / capacity</td><td>How full it is (0-1, can exceed 1 when over-cap).</td></tr>
+        <tr><td>7</td><td>capacity / 300</td><td>Building's max garrison.</td></tr>
+        <tr><td>8</td><td>over-cap flag</td><td>1 if reinforced beyond cap (= waste of inflight units).</td></tr>
+        <tr><td>9-10</td><td>x / 700, y / 700</td><td>Map position (normalized).</td></tr>
+        <tr><td>11-15</td><td>type one-hot (5)</td><td>Building type. Currently only TYPE_BASIC=0 is used; future types reserved.</td></tr>
+        <tr><td>16</td><td>incoming P1 units</td><td>Total units P1 has flying toward this slot.</td></tr>
+        <tr><td>17</td><td>incoming P2 units</td><td>Same for P2.</td></tr>
+        <tr><td>18</td><td>incoming friendly</td><td>Reinforcement total (depends on owner).</td></tr>
+        <tr><td>19</td><td>incoming hostile</td><td>Threat total (depends on owner; for neutrals = all incoming).</td></tr>
+        <tr><td>20</td><td>min(threat, garrison)</td><td>How much of the threat the garrison can block.</td></tr>
+        <tr><td>21</td><td>"will fall" flag</td><td>1 if hostile incoming &gt; garrison. The single most predictive defensive signal.</td></tr>
+        <tr><td>22</td><td>near-cap flag</td><td>1 if garrison &gt; 95% capacity (so producing more there is wasted).</td></tr>
+      </table>
+
+      <h3>Per-group — 9 features × 32 slots = 288 features</h3>
+      <p>
+        For each of the 32 in-flight unit-group slots, the network gets:
+      </p>
+      <table class="kpi">
+        <tr><th>#</th><th>Feature</th><th>What it tells the network</th></tr>
+        <tr><td>1</td><td>alive</td><td>Group exists.</td></tr>
+        <tr><td>2-3</td><td>is_p1 / is_p2</td><td>Whose group it is.</td></tr>
+        <tr><td>4</td><td>progress / travel</td><td>Fraction of the journey complete (0 = just left, 1 = arriving).</td></tr>
+        <tr><td>5</td><td>count / 300</td><td>How many units are in this group.</td></tr>
+        <tr><td>6-7</td><td>src x, src y</td><td>Position the group launched from (normalized).</td></tr>
+        <tr><td>8-9</td><td>tgt x, tgt y</td><td>Position the group is flying to (normalized).</td></tr>
+      </table>
+
+      <p>
+        <b>Total = 10 + 704 + 288 = 1002 floats</b> per decision. Multiply by
+        n_envs (1024) × rollout_steps (64) and the rollout buffer holds
+        <b>~67M float32 values</b> just for observations — about 270 MB before
+        action / value / reward tensors. That's why this rollout doesn't fit
+        more aggressively on small GPUs.
+      </p>
+
+      <p class="footnote">
+        Source: <code>training/encoder.py</code> (numpy reference) and
+        <code>training/encoder_jax.py</code> (JAX implementation).
+        <code>OBS_DIM = 1002</code>.
+      </p>
+    </div>
+
     <p class="footnote" style="margin-top:32px;">
       Source code references throughout this page point at the actual files. If you
-      change a tunable in <code>workers/bench_eval.py</code> or
-      <code>configs/karpathy_loop.yaml</code>, please update this page in the same
+      change a tunable in <code>workers/bench_eval.py</code>,
+      <code>configs/karpathy_loop.yaml</code>, or
+      <code>configs/training_levels.yaml</code>, please update this page in the same
       commit.
     </p>
   </main>

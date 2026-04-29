@@ -1,0 +1,27 @@
+# Training-level config — single source of truth.
+#
+# Both the cron-agent (scripts/cron_agent_pulse.py) and the karpathy loop
+# (scripts/queue_karp_sweep.py) read level info from THIS file, via
+# cli/loop_config.load_levels(). They are required to match — runs queued by
+# different schedulers should train on the same distribution so their results
+# are directly comparable.
+#
+# Two ways to specify the level:
+#   1. level_name only        — single static level for every env on every reset
+#   2. level_name + level_mix — each env independently samples a level on reset;
+#                               level_name becomes a label only
+#
+# When level_mix is set, each row must be a real key under sim/levels.py
+# (LEVELS dict, or a generator like random_4_8 / random_close_4_5 / asym_8_8).
+#
+# Reload cost: zero — both schedulers read fresh from disk each fire.
+
+# 2026-04-29 (PT): training collapsed to small close maps for fast iteration.
+#   - 350×350 map (vs 700×700 default) → ~half travel time → ~2× more episodes
+#     per wall-second → faster gradient signal per minute of compute.
+#   - 4-5 buildings → small action space, tractable for a fresh agent to learn
+#     basic mechanics (capacity management, send fractions) before scaling up.
+#   - level_mix removed — single level only at this curriculum stage. When
+#     graduating, switch back to a mix (e.g. random_4_8/6_10/8_16/16_24).
+level_name: random_close_4_5
+level_mix: null

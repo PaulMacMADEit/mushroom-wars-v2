@@ -17,6 +17,7 @@ import yaml
 
 
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "karpathy_loop.yaml"
+_LEVELS_PATH = Path(__file__).resolve().parent.parent / "configs" / "training_levels.yaml"
 
 
 @dataclass
@@ -53,17 +54,40 @@ class LoopConfig:
         return self.sweep_axes[(i + 1) % len(names)]
 
 
+def load_levels(path: Path | str | None = None) -> dict:
+    """Read configs/training_levels.yaml — the single source of truth for level
+    selection across cron + karp.
+
+    Returns a dict with keys {level_name, level_mix}. level_mix is None when
+    only a single level is in use.
+    """
+    p = Path(path) if path is not None else _LEVELS_PATH
+    with p.open() as f:
+        raw = yaml.safe_load(f) or {}
+    return {
+        "level_name": raw.get("level_name", "random_close_4_5"),
+        "level_mix":  raw.get("level_mix"),
+    }
+
+
 def load(path: Path | str | None = None) -> LoopConfig:
     p = Path(path) if path is not None else _CONFIG_PATH
     with p.open() as f:
         raw = yaml.safe_load(f)
     axes = [SweepAxis(axis=a["axis"], cells=list(a["cells"])) for a in raw.get("sweep_axes", [])]
+    # Overlay canonical level config from configs/training_levels.yaml so that
+    # baseline_hyperparams.level_* always matches what cron uses. Anything in
+    # karpathy_loop.yaml's baseline_hyperparams.level_* is ignored.
+    levels = load_levels()
+    baseline = dict(raw.get("baseline_hyperparams", {}))
+    baseline["level_name"] = levels["level_name"]
+    baseline["level_mix"]  = levels["level_mix"]
     return LoopConfig(
         schedule=raw.get("schedule", {}),
         queue_policy=raw.get("queue_policy", {}),
         model=raw.get("model", {}),
-        training_opponent=dict(raw.get("training_opponent", {"name": "random_legal", "kwargs": {}})),
-        baseline_hyperparams=dict(raw.get("baseline_hyperparams", {})),
+        training_opponent=dict(raw.get("training_opponent", {"name": "latest_champion", "kwargs": {}})),
+        baseline_hyperparams=baseline,
         sweep_axes=axes,
         raw=raw,
     )
@@ -73,6 +97,7 @@ if __name__ == "__main__":
     import json
     cfg = load()
     print(f"loaded {_CONFIG_PATH}")
+    print(f"levels (from {_LEVELS_PATH.name}): {load_levels()}")
     print(f"axes: {cfg.axes()}")
     print(f"baseline keys: {sorted(cfg.baseline_hyperparams.keys())}")
     print(f"schedule: {json.dumps(cfg.schedule, indent=2)}")

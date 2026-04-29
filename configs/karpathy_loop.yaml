@@ -123,12 +123,10 @@ baseline_hyperparams:
   reward_v13: true
   reward_version: 2
 
-  # ----- Level distribution (per-env sampling on each reset) -----
-  # 2026-04-29 curriculum reset: 4-5 building close-map games only. Master
-  # the basics first, ramp up later. Close map = 350x350 (vs 700x700 default)
-  # = ~half travel time = many more episodes per wall-second. Fast iteration.
-  level_name: "random_close_4_5"
-  # level_mix removed — single level only at this curriculum stage.
+  # ----- Level distribution -----
+  # NOTE: level_name and level_mix are NOT set here. They are read from
+  # configs/training_levels.yaml at queue time so cron + karp always agree.
+  # cli/loop_config.load() overlays them onto baseline_hyperparams.
 
 # ---------------------------------------------------------------------------
 # Sweep axes (round-robin, one per fire)

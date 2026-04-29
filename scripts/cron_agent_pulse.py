@@ -39,6 +39,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from cli.db import PROJECT, connect
+from cli.loop_config import load_levels
 
 
 # ---------------------------------------------------------------------------
@@ -64,29 +65,20 @@ DEFAULT_SIM_ID   = "sim-v1.3"
 # random_close_6_10 specialist hit 91% on close maps but only 5% on
 # random_16_24. So phase1 now trains directly on the FULL distribution and
 # graduation requires generalist skill (≥80% on each of 4_8 / 8_16 / 16_24).
+# Level config (level_name + level_mix) is read from configs/training_levels.yaml
+# at queue time via cli.loop_config.load_levels(). Both cron and karp share that
+# file so the two schedulers always train on the same distribution.
 CURRICULUM = {
     "phase1_full_mix": {
-        # Single env per run trains on a level mix (per-env sampling) so a
-        # single rollout sees buildings from 4 → 24. The trainer reads
-        # cfg.level_mix; cfg.level_name is unused when level_mix is set but
-        # kept as a label.
-        "level_name":   "random_full_mix",
-        "level_mix":    {"random_4_8":  0.20,
-                         "random_6_10": 0.20,
-                         "random_8_16": 0.30,
-                         "random_16_24": 0.30},
+        # K = action_repeat. opponent_mix drives _pick_opponent_for_run.
         "K":            4,
         "opponent_mix": {"random_legal": 1.0},
         "reward_v13":   True,
         "gamma":        0.97,
     },
     "phase2_selfplay": {
-        # Same level mix; opponent flips to Elo champion.
-        "level_name":   "random_full_mix",
-        "level_mix":    {"random_4_8":  0.20,
-                         "random_6_10": 0.20,
-                         "random_8_16": 0.30,
-                         "random_16_24": 0.30},
+        # Opponent flips to Elo champion; level config still comes from the
+        # canonical YAML.
         "K":            2,
         "opponent_mix": {"self_play_elo_champ": 0.80,
                          "leaderboard_top3":    0.15,
@@ -458,13 +450,14 @@ def _decide_next_batch(
     building-count distribution (4 → 24). cfg.level_name is a label only.
     """
     cfg_phase = CURRICULUM[phase]
+    levels = load_levels()
     base_cfg = {
         **DEFAULT_CFG,
         "action_repeat": cfg_phase["K"],
         "reward_v13":    cfg_phase["reward_v13"],
         "gamma":         cfg_phase["gamma"],
-        "level_name":    cfg_phase["level_name"],
-        "level_mix":     cfg_phase["level_mix"],
+        "level_name":    levels["level_name"],
+        "level_mix":     levels["level_mix"],
     }
 
     runs = []
