@@ -1096,6 +1096,10 @@
         for (const id of chartIds) replaceCanvasWith(id, text, true);
       }
 
+      // Poll cadence: 3s for live runs (Paul fire 63 — short cells need
+       // tight feedback). Worker uploads metrics every PPO update under
+       // METRICS_UPLOAD_EVERY=1, so 3s polling captures most uploads.
+      const POLL_MS = 3000;
       const timer = setInterval(async () => {
         const { data: run, error } = await sb.from('runs').select('status, log_url, games_played, wall_ms, result, hyperparams, elo_score, elo_n_matches').eq('id', runId).single();
         if (error) return;
@@ -1124,7 +1128,7 @@
         if (run.status === 'done' || run.status === 'failed') {
           clearInterval(timer);
         }
-      }, 8000);
+      }, POLL_MS);
     }
 
     function fmtDurationShort(ms) {

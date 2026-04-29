@@ -711,7 +711,9 @@ def _public_url(path: str) -> str:
 # Train one run
 # ---------------------------------------------------------------------------
 
-METRICS_UPLOAD_EVERY    = 5    # updates; ~every 15-30s depending on rollout size
+METRICS_UPLOAD_EVERY    = 1    # 2026-04-29 fire 63: every update (was 5). 5-min cells under v2
+                                # only get 12-21 updates total — every-5 meant first chart didn't
+                                # appear until ~30% through the cell. Per-update upload is ~50ms.
 SNAPSHOT_INTERVAL_S     = 600  # 10 min between mid-run weight snapshots
 
 
