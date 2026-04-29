@@ -100,7 +100,10 @@ class PPOConfig:
     archive_eval_every:    int  = 5
     archive_eval_top_n:    int  = 10
     archive_eval_games:    int  = 10
-    archive_eval_level:    str  = "random_4_6"
+    # None → use the training level (cfg.level_name) so eval stays apples-to-
+    # apples with rollouts. Set explicitly to a different level (e.g.
+    # "random_8_16") if you want held-out generalization signal.
+    archive_eval_level:    str | None = None
     archive_eval_min_pool: int  = 3
     archive_eval_max_ticks: int = 200
 
@@ -759,6 +762,22 @@ class PPOTrainer:
             if self.obs_norm is not None:
                 self.obs_norm.save(str(eval_ckpt_dir / "obs_norm.pt"))
 
+            # Resolve eval level: explicit override wins; otherwise fall back to
+            # the training level so eval and rollouts stay apples-to-apples.
+            # When training uses a level_mix, we pick the most-weighted level
+            # (run_match takes a single level string). Set archive_eval_level
+            # explicitly if you want a held-out generalization split.
+            eval_level = self.cfg.archive_eval_level
+            if eval_level is None:
+                if self.cfg.level_mix:
+                    raw = self.cfg.level_mix
+                    pairs = (list(raw.items()) if isinstance(raw, dict)
+                             else [(item[0], item[1]) for item in raw])
+                    pairs.sort(key=lambda x: float(x[1]), reverse=True)
+                    eval_level = str(pairs[0][0]) if pairs else self.cfg.level_name
+                else:
+                    eval_level = self.cfg.level_name
+
             # Sequentially run N-game batches against each champion. We capture
             # per-opponent records so the dashboard can show "which champions
             # did we beat / lose to" rather than a single averaged number.
@@ -772,7 +791,7 @@ class PPOTrainer:
                         p1=str(eval_ckpt_dir),
                         p2=opp_dir,
                         games=self.cfg.archive_eval_games,
-                        level=self.cfg.archive_eval_level,
+                        level=eval_level,
                         max_ticks=self.cfg.archive_eval_max_ticks,
                         seed=int(self._rng.integers(0, 2**31 - 1)),
                         verbose=False,
@@ -784,7 +803,7 @@ class PPOTrainer:
                         "opp_label":    opp_label,
                         "opp_id_short": opp_id_short,
                         "opp_elo":      float(opp_elo) if opp_elo is not None else None,
-                        "level":        self.cfg.archive_eval_level,
+                        "level":        eval_level,
                         "error":        f"{type(exc).__name__}: {exc}",
                     })
                     continue
@@ -801,7 +820,7 @@ class PPOTrainer:
                     "opp_label":    opp_label,
                     "opp_id_short": opp_id_short,
                     "opp_elo":      float(opp_elo) if opp_elo is not None else None,
-                    "level":        self.cfg.archive_eval_level,
+                    "level":        eval_level,
                     "p1_wins":      p1_wins,
                     "p2_wins":      p2_wins,
                     "draws":        draws,
