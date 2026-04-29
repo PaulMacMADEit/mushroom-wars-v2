@@ -1933,6 +1933,56 @@ or simply different seed).
 **Queue.** clip_range-mid done (in bench_eval, will rate next fire),
 clip_range-hi queued.
 
+### Loop fire 42 — 2026-04-29 03:52 PT — clip_range cycle-3 complete; opposite-extreme policies emerge across the axis
+
+**State.** Worker PID 4019322, **10h 30min uptime**, RSS 6.61GB
+plateau. Champion drift 1179→1176.
+
+**clip_range cycle-3 complete:**
+
+| run | clip_range | cycle 1 | cycle 3 | Δ |
+|---|---|---|---|---|
+| -lo (0.10) | 1085 | **958** | **-127** |
+| -mid (0.20) | 1089 | 1014 | -75 |
+| -hi (0.30) | unrated | **1033** | NEW |
+
+**Cycle-3: hi > mid > lo** (range 75 Elo). Cycle-1 was flat (range 4
+Elo on lo+mid). **clip_range is the 4th axis to expand/invert under
+cycle-3 deflation** (after gamma, rollout_steps, gae_lambda).
+
+**🟢 Same axis, opposite-extreme policies emerge:**
+
+| cell | WIN noop% | WIN top types | LOSS noop% | LOSS value drop | Elo |
+|---|---|---|---|---|---|
+| clip_range-lo cycle-3 | **0%** | 100/75/50 (varied) | 42% | +8.90 | 958 |
+| clip_range-hi cycle-3 | 21% | **100%=79%** (narrow) | **75%** (extreme) | +5.06 | 1033 |
+
+Same hyperparam axis, dramatically different policy archetypes:
+- **lo (small updates)** → varied-but-uncertain policy. Active sends
+  but fewer wins, big LOSS collapses.
+- **hi (big updates)** → narrow-decisive policy. 79% type-100 in WIN,
+  but **75% noop in LOSS** — pure giving up.
+
+**Two-faced policies.** clip_range-hi is **aggressive when winning,
+passive surrender when losing**. It can finish fragile opponents fast
+(28-tick wins) but collapses in defeat. clip_range-lo is more active
+even in defeat (42% noop vs 75%) but its win attempts are too varied
+to consistently break opposition.
+
+**Reinforces fire-37's fragmented-strategy-space picture.** Cycle-3
+bench corpus is a **mosaic of brittle local-equilibrium policies**.
+Each beaten by a specific counter. Bench Elo averages over the
+rock-paper-scissors interactions.
+
+**update_epochs cycle-3 in flight** (NEW axis): lo running ~7 min
+in, mid + hi queued. Will be another data point on whether new axes
+under cycle-3 land in the same strategy-fragmentation regime.
+
+**Worker memory.** 6.61GB at 10h 30min — flat plateau holding. No
+restart pressure.
+
+**Queue:** 1 running + 2 queued = 3. Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-29 01:55 PT — fix scripts/karp_review_games.py for tied created_at
