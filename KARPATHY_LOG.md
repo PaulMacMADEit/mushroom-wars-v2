@@ -1366,6 +1366,56 @@ expected to hit 7GB by 6h, 8GB by 8h. Well within bounds.
 
 **Queue:** 1 running + 1 queued = 2. Skipped queueing.
 
+### Loop fire 29 — 2026-04-28 21:11 PT — 🚩 first type-collapse anomaly + worker mem accelerating
+
+**State.** Worker PID 4019322, 3h 49min uptime, **RSS 6.28GB (+0.49GB
+since fire 28)** — first big mem jump since early plateau. GPU 45%
+(mid-training), CPU 135%. Champion drift 1171→1168.
+
+**lr cycle-2 update:**
+
+| run | cycle 1 | cycle 2 | Δ |
+|---|---|---|---|
+| -lo (1e-4) | 1073 | 1054 | -19 |
+| -mid (3e-4) | 1036 | **1045** | **+9** ← went UP |
+| -hi (1e-3) | 1009 | running, 12 min in | — |
+
+**Range narrowed from 64 Elo (cycle 1) to 9 Elo so far (cycle 2).** The
+strong "lower-lr-wins" signal is partially eroding under bench corpus
+deflation. Will see hi.
+
+**🚩 First TYPE-COLLAPSE anomaly detected — lr-mid cycle-2:**
+
+| game | tag | ticks | noop% | top types | flag |
+|---|---|---|---|---|---|
+| `9d1f72cf` | WIN | 22 | 9% | **100%=91%** noop=9% | **type-collapse: 100% is 91%** |
+| `27bbadfd` | LOSS | 51 | 38% | 100%=46% noop=38% 75%=12% | — |
+
+The script's anomaly detector caught this — first type-collapse
+flag across all 29 fires. The policy converged to "always send 100%".
+Wins quickly (22-tick games) when it works, loses with **+8.92 value
+drop** when it doesn't. **Policy fragility** — narrow action repertoire.
+
+**Diagnosis: Elo deflation is pushing policies to extremes.** Cycle-2
+samples now show:
+- super-passive: entropy_coef-lo cycle-2 (73% LOSS noop, 116-tick games)
+- super-aggressive: **lr-mid cycle-2 (91% type-100, 22-tick wins)**
+
+The middle-ground passive-aggressive blend that was cycle-1's norm is
+eroding. Bench corpus is selecting for specialists.
+
+**Worker memory note 🚩.** RSS jumped +0.49GB in 30 min. Previous worker
+hit 9GB at ~5h CPU and crashed. Current: 6.28GB at 3h49min. Linear
+extrapolation: 9GB at ~5h30min — i.e. **~1h40min from now**. If memory
+keeps growing at this rate, plan for restart around fire 32.
+
+**Queue:** 1 running + 0 queued = 1. Skipped queueing. After lr-hi
+finishes (~9 min), backstop will pick `rollout_steps` cycle-3 next.
+We've covered most axes twice now. Loop is firmly in noise-estimate
+mode for v13; **the actionable next step remains v14 next-step decision
+(Paul to call from fire-25 5-option list, expanded by fire-28's
+opponent-Elo recommendation).**
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
