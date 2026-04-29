@@ -903,6 +903,59 @@ behavior bug aggregate Elo numbers were hiding.
 
 Procedure addition saved to project memory.
 
+### Loop fire 20 — 2026-04-28 17:11 PT — lr full curve done; backstop kicked in 2nd cycle; passive-vs-aggressive contrast confirmed
+
+**State:** Worker healthy (3h 8min uptime, RSS 5.80GB plateau).
+Champion **+10 Elo bump** to **1155** — biggest single-fire jump
+(identity unchanged, just bench corpus updates).
+
+**Lr sweep complete (full curve):**
+
+| run | lr | Elo |
+|---|---|---|
+| -lo  | 1e-4 | **1073** |
+| -mid | 3e-4 | 1036 |
+| -hi  | 1e-3 | **1009** |
+
+**Range = 64 Elo.** Strongest single-axis signal of the loop. Lower
+lr wins decisively. lr-hi at 1e-3 (the PPO default) is *worst*.
+
+**Backstop kicked in.** Round-robin's 2nd cycle started: queued
+`rollout_steps-{lo,mid,hi}` (last_used was lr in 1st cycle, picked
+rollout_steps as next, correctly skipping the 2 self_play-gated axes
+that I'd manually preempted). Cycle 2 will give noise estimates on
+prior findings.
+
+**Game review — best vs worst karp run:**
+
+| run | wins/24 | tag | ticks | noop% | top type | value drop |
+|---|---|---|---|---|---|---|
+| lr-lo (best, 1073) | 12 | WIN | 92 | 59% | noop | +0.19 |
+| lr-lo (best, 1073) | 12 | LOSS | 83 | 52% | noop | +6.70 |
+| **lr-hi (worst, 1009)** | **4** | **WIN** | **8** | **0%** | **100%** | **-0.87** |
+| lr-hi (worst, 1009) | 4 | LOSS | 50 | 40% | noop | +7.59 |
+
+**The worst karp model wins faster (8 ticks!) and is more aggressive,
+but loses 20/24 games. The best karp model is the most passive but
+wins ~50%.** This validates fire-19's hypothesis: **bench_eval rewards
+passivity in this fleet.** Aggressive plays crush some opponents fast
+but can't handle the rest. Passive plays drag matches and survive.
+
+**Implication:** the karp ceiling (~1095) and the fleet-wide passivity
+are the same problem. Reward_v14 (per-tick shaping for active play +
+holding territory + losing units = penalty) is the leading hypothesis
+to break this equilibrium. Discussed with Paul — pending design
+sign-off (magnitudes + symmetric vs event-based losing-units penalty).
+
+**Queue:** 3 (1 running + 2 queued). Skipped queueing — let cycle 2
+run for noise estimates while reward_v14 design lands.
+
+**Carry forward:**
+- reward_v14 design awaiting sign-off (magnitudes; symmetric vs
+  event-based losing penalty).
+- Strategic moves from fire 18 (gamma 0.95 baseline, opponent axis,
+  cell budget bump) all pending.
+
 ## Code changes during loop
 
 ### 2026-04-27 23:35 PT — extract knobs to configs/karpathy_loop.yaml
