@@ -2603,7 +2603,67 @@ service stays healthy. 17h 49min uptime intact.
 **Queue:** 1 running + 5 queued (1 karp lr-hi + 4 b6 90-min seeds).
 **Skipped queueing.**
 
+### 🚨 REGIME CHANGE — 2026-04-29 11:25 PT — karp-loop v1 → v2
+
+Per Paul: random_legal training is destroying progress. Kill it. Switch
+the loop to vs-champion training + small-map curriculum. Bake v14 reward
+as the new default.
+
+**What I killed:**
+- karp-260429-1045-lr-mid (running, marked failed mid-cycle)
+- karp-260429-1045-lr-hi (queued, discarded)
+- 4× b6-260429-1802-default90-s{1,2,3,42} (queued, discarded — Paul's own
+  vs-champion experiment, will be re-attempted under the new regime
+  because the karpv2- loop trains vs champion automatically now)
+
+Lost: ~25 min of in-progress lr-mid training. Acceptable.
+
+**What changed in the YAML / queue script:**
+
+| field | v1 (old) | v2 (new) |
+|---|---|---|
+| training_opponent.name | `random_legal` | **`latest_champion`** |
+| level_name | `random_full_mix` | **`random_close_4_5`** |
+| level_mix | 4-16 building distribution | **removed** (single level) |
+| reward_version | 1 (v13) | **2 (v14)** |
+| reward_v13 | true | true (overridden by reward_version=2) |
+| cell_budget_seconds | 1200 (20min) | **600 (10min)** |
+| Label prefix | `karp-` | **`karpv2-`** |
+
+**What stayed the same:**
+- model_id (v9.0-1024) — no architecture change per training-discipline rules
+- All sweep axes (entropy_coef, lr, gamma, etc.)
+- All bench_eval logic (bench corpus stays mixed v1/v2 for now)
+- Round-robin axis selection
+
+**Files modified:**
+- `configs/karpathy_loop.yaml`
+- `scripts/queue_karp_sweep.py` (label prefix + last_axis filter)
+- `scripts/karp_review_games.py` (filter on karpv2-)
+- `scripts/karp_backstop.py` (filter on karpv2-)
+
+**First karpv2- sweep queued:** entropy_coef × 3 cells, training vs
+champion `cdcc0826` (b6 phase2_selfplay-med, Elo 1162), on
+random_close_4_5, 10-min budget each.
+
+**Expected speed.** Per project memory, neural opponent on JAX
+backend triggers per-env CPU path → ~10× slower than random_legal.
+Expect ~300 sps (vs ~3000 with random_legal). 10-min cell at 300 sps
+= ~180k steps. Close-4-5 maps with ~half travel time = ~10-20 ticks
+per game = 9k-18k episodes per cell. Plenty.
+
+**Worker status.** Worker still busy with prior bench_eval cycle
+(State=R, 6.6GB RSS). Will pick up karpv2- runs after current cycle
+completes — no restart needed (engine bytecode is unchanged; only
+config/labels changed).
+
+**Old karp- runs preserved.** They stay in the bench corpus and runs
+table for reference. Anyone querying `like 'karp-%'` will still get
+v1-regime data. New regime is `karpv2-` only.
+
 ## Code changes during loop
+
+### 2026-04-29 11:25 PT — regime change v1→v2 (see above)
 
 ### 2026-04-29 01:55 PT — fix scripts/karp_review_games.py for tied created_at
 
