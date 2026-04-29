@@ -2320,6 +2320,55 @@ shifts to "v14 coefs are absolutely too strong, not just relatively."
 
 **Queue:** empty. Skipped queueing — backstop's :45 tick handles it.
 
+### Loop fire 54 — 2026-04-29 09:11 PT — 🟢 v13 control cycle-2 went TYPE-COLLAPSE (0% noop, 100%=100%); v14 running
+
+**State.** Worker PID 4019322, **15h 49min uptime**, **RSS 7.11GB
+(+0.50 since fire 53)** — first significant uptick after 14-fire plateau.
+Watching for transient vs sustained creep. Champion drift 1169→1162 (-7).
+
+**🟢 v13/v14 A/B re-run by backstop. v13 control rated; v14 in flight:**
+
+| run | reward_version | Elo | wins/24 | WIN noop% | WIN top types |
+|---|---|---|---|---|---|
+| **fire-24 v13 control** | 1 | 1052 | 11 | 62% | noop > 100% > 75% |
+| **fire-54 v13 control (NEW)** | 1 | **1033** | **13** | **0%** | **100%=100%** ← type-collapse |
+| fire-25 v14 treatment | 2 | 1040 | 8 | 0% | 100%/75%/50% |
+| **fire-54 v14 treatment** | 2 | running, ~4 min in | — | — | — |
+
+**🚨 The v13 baseline has FUNDAMENTALLY SHIFTED.**
+
+Fire 24's v13 control: **62% noop in WIN, passive-survival** — the
+"baseline behavior signature reward_v14 is supposed to disrupt."
+
+Fire 54's v13 control: **0% noop in WIN, 100% type-collapse** — the
+v13 baseline is NOW similar to v14's behavior signature, just narrower.
+
+**Why this happened.** Cycle-3 bench corpus has matured to reward
+faster aggressive strategies (passive ones lose). v13 under selection
+pressure has converged to **short-aggressive type-100 wins** instead
+of **long-passive 60%-noop wins**. The whole fleet has shifted.
+
+**Implication for v14 next-step decision.**
+
+This **dramatically reframes** fire-25's "v14 -12 Elo, tune coefs down"
+verdict:
+- The original v13 baseline (62% noop, 1052) is gone — replaced by
+  100%-type-collapse v13 (1033)
+- The "passive-vs-active" framing for v13/v14 is obsolete
+- The new v13/v14 comparison is **narrow-aggressive vs varied-aggressive**
+- v14's varied 100/75/50 sends may be MORE valuable here (broader
+  attack repertoire vs the new bench corpus)
+
+**Need fire 55 v14 result before drawing conclusions.** If v14 cycle-2
+beats v13 cycle-2 (reverses fire-25's -12 gap), that's a strong signal
+to ship v14 as-is, not v14b.
+
+**Worker memory.** +0.50GB this fire — biggest jump since fire 33.
+Could be transient (like fire 29's +0.49 spike) or start of a new
+creep. **Watching fire 55** for confirmation.
+
+**Queue.** 1 running + 0 queued = 1. Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-29 01:55 PT — fix scripts/karp_review_games.py for tied created_at
