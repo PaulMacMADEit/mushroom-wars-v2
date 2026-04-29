@@ -206,6 +206,9 @@ class PPOTrainer:
                 self._lb_obs_norms.append(preload_obs_norm(str(n_path) if n_path else None))
             print(f"[trainer] pre-loaded {len(self._lb_state_dicts)} archive members "
                   f"into RAM for per-update rotation (device={opp_device})")
+        # Track which leaderboard indices the agent rotated through so we can
+        # rematch each one at end-of-run (fire 67).
+        self._rotation_history: set[int] = set()
 
         # Initial opponent: simple name for the very first rollout. After
         # the first snapshot registers (every cfg.snapshot_every updates),
@@ -724,6 +727,9 @@ class PPOTrainer:
         # Cached state_dict + obs_norm — already in RAM from init.
         state_dict = self._lb_state_dicts[idx]
         obs_norm = self._lb_obs_norms[idx]
+        # Track which archive members the agent has faced so end_of_run_rematch
+        # can replay each one at the end of training.
+        self._rotation_history.add(idx)
         device = (self._initial_opponent_kwargs or {}).get("device", "cpu")
         new_opponent = make_neural_opponent_cached(
             state_dict=state_dict,

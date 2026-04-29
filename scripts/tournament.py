@@ -108,9 +108,26 @@ def _load_policy(path: str | Path, device: torch.device):
 
     if weights_path is None:
         p = Path(path)
-        weights_path = p / "weights.pt"
-        if (p / "obs_norm.pt").exists():
-            obs_norm_p = p / "obs_norm.pt"
+        # Support three layouts:
+        #   1. Direct .pt file path: weights_path = p, sibling obs_norm guessed.
+        #      e.g. /tmp/mw2-pfsp-XXX/abc12345-weights.pt → abc12345-obs_norm.pt
+        #   2. Experiment dir with weights.pt + obs_norm.pt (legacy).
+        #   3. Direct .pt with no sibling — weights only, no obs_norm.
+        if str(p).endswith(".pt") and p.is_file():
+            weights_path = p
+            # Try same-prefix-different-suffix sibling for obs_norm.
+            for sibling_name in (
+                p.name.replace("-weights.pt", "-obs_norm.pt"),
+                "obs_norm.pt",
+            ):
+                cand = p.parent / sibling_name
+                if cand.exists() and cand != p:
+                    obs_norm_p = cand
+                    break
+        else:
+            weights_path = p / "weights.pt"
+            if (p / "obs_norm.pt").exists():
+                obs_norm_p = p / "obs_norm.pt"
 
     if not Path(weights_path).exists():
         raise FileNotFoundError(f"weights.pt not found at {weights_path}")

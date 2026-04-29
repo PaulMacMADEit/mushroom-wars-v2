@@ -176,6 +176,11 @@
           <div class="muted">no data yet — populated once a few training updates have completed.</div>
         </div>
 
+        <h2>End-of-run rematch</h2>
+        <div class="card" id="rotation-rematch">
+          <div class="muted">populated after training finishes (only for runs with opponent_pool_mode=rotate_per_update).</div>
+        </div>
+
         <h2>Stability + critic</h2>
         <div class="card">
           <div class="stat-label">PPO stability (clip fraction high = step too large; grad norm spikes = instability)</div>
@@ -367,6 +372,80 @@
       renderTrainingOpp(points);
       renderWinRateProgression(points, run ?? {});
       renderLevelMix(points);
+      renderRotationRematch(run ?? {});
+    }
+
+    /** End-of-run rematch panel: shows the final policy's win rate vs each
+     * opponent it rotated through during training. result.rotation_rematch
+     * is populated by workers/worker.py after the training loop finishes. */
+    function renderRotationRematch(run) {
+      const $card = document.getElementById('rotation-rematch');
+      if (!$card) return;
+      const data = run?.result?.rotation_rematch;
+      if (!data || typeof data !== 'object' || !Object.keys(data).length) {
+        $card.innerHTML = '<div class="muted">no rematch data — only populated for completed runs with opponent_pool_mode=rotate_per_update.</div>';
+        return;
+      }
+      // Sort by final win rate descending so strongest matchups float to top.
+      const rows = Object.entries(data).map(([opp, d]) => ({
+        opp,
+        rate: d?.rate,
+        initial: d?.initial_rate,
+        games: d?.games,
+        p1_wins: d?.p1_wins,
+        delta: (d?.rate != null && d?.initial_rate != null) ? d.rate - d.initial_rate : null,
+        error: d?.error,
+      })).sort((a, b) => (b.rate ?? -1) - (a.rate ?? -1));
+
+      const cellColor = (wr) => {
+        if (wr == null) return 'transparent';
+        const t = Math.max(0, Math.min(1, wr));
+        const hue = Math.round(120 * t);
+        return `hsla(${hue}, 65%, 42%, 0.55)`;
+      };
+      const fmtDelta = (d) => {
+        if (d == null) return '<span class="muted">—</span>';
+        const sign = d > 0 ? '+' : '';
+        const cls  = d > 0 ? 'win' : (d < 0 ? 'lose' : '');
+        return `<span class="mono ${cls}">${sign}${(d*100).toFixed(0)}pp</span>`;
+      };
+
+      $card.innerHTML = `
+        <div class="stat-label" style="margin-bottom:8px;">
+          25-game rematch with the FINAL policy vs each opponent it faced during training. Δ = final − initial training-rollout win rate.
+        </div>
+        <table>
+          <thead><tr>
+            <th>opponent</th>
+            <th>initial</th>
+            <th>final</th>
+            <th>Δ</th>
+            <th>games</th>
+            <th>wins</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => {
+              if (r.error) {
+                return `<tr><td><span class="mono">${esc(r.opp)}</span></td><td colspan="5"><span class="error">${esc(r.error)}</span></td></tr>`;
+              }
+              const initialCell = r.initial != null
+                ? `<td style="text-align:center;background:${cellColor(r.initial)};"><span class="mono">${(r.initial*100).toFixed(0)}%</span></td>`
+                : `<td><span class="muted">—</span></td>`;
+              const finalCell = r.rate != null
+                ? `<td style="text-align:center;background:${cellColor(r.rate)};"><span class="mono">${(r.rate*100).toFixed(0)}%</span></td>`
+                : `<td><span class="muted">—</span></td>`;
+              return `<tr>
+                <td><span class="mono">${esc(r.opp)}</span></td>
+                ${initialCell}
+                ${finalCell}
+                <td>${fmtDelta(r.delta)}</td>
+                <td><span class="mono small">${r.games ?? '—'}</span></td>
+                <td><span class="mono small">${r.p1_wins ?? '—'}</span></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      `;
     }
 
     /** Eval match history — flatten metrics.json[*].eval_matches into rows

@@ -998,6 +998,25 @@ def run_training(
     training_wall_s = max(time.time() - training_started_at, 1e-3)
     resource_usage = sampler.stop()
 
+    # End-of-run rotation rematch (fire 67). For each archive member the
+    # trainer rotated through, play N games with the final policy to measure
+    # real per-opponent improvement vs the noisy single-update training rates.
+    rotation_rematch: dict | None = None
+    rotation_history = getattr(trainer, "_rotation_history", set())
+    if rotation_history:
+        try:
+            rotation_rematch = _run_rotation_rematch(
+                trainer=trainer,
+                run_id=job["id"],
+                metrics_history=metrics_history,
+                level=cfg.level_name,
+                n_games=25,
+            )
+            print(f"[worker] rotation rematch: {len(rotation_rematch)} opponents replayed", flush=True)
+        except Exception as exc:
+            print(f"[worker] rotation rematch failed (non-fatal): {exc}", flush=True)
+            rotation_rematch = None
+
     # Pull the trainer's in-training sim-phase breakdown if available.
     sim_phase_breakdown = None
     try:
@@ -1029,8 +1048,75 @@ def run_training(
         "training_wall_s":      round(training_wall_s, 1),
         "resource_usage":       resource_usage,
         "sim_phase_breakdown":  sim_phase_breakdown,
+        "rotation_rematch":     rotation_rematch,
     }
     return result, total_eps, trainer, metrics_history
+
+
+def _run_rotation_rematch(trainer, run_id: str, metrics_history: list[dict],
+                            level: str, n_games: int = 25) -> dict:
+    """Replay each unique opponent the agent rotated through, measure final
+    win rate. Returns {opp_label: {games, p1_wins, rate, initial_rate}}.
+
+    Saves the trained model to a temp file, then calls tournament.run_match
+    against each archive member's pre-downloaded weights. The cached PFSP
+    files at /tmp/mw2-pfsp-XXX/{champ_id}-weights.pt are passed directly
+    (tournament._load_policy supports direct .pt paths since fire 67).
+
+    `initial_rate` is the agent's training-rollout win rate the FIRST time
+    it faced this opponent — useful for showing improvement over the run.
+    """
+    import importlib
+    import tempfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    tournament = importlib.import_module("scripts.tournament")
+    from training.trainer import _extract_label_from_weights_path
+
+    rot = trainer._rotation_history
+    if not rot or not trainer._leaderboard:
+        return {}
+
+    # Save trained weights to a temp file the match runner can load.
+    out_dir = Path(tempfile.mkdtemp(prefix="mw2-rematch-"))
+    p1_path = out_dir / "weights.pt"
+    import torch
+    torch.save(trainer.agent.net.state_dict(), p1_path)
+    if trainer.obs_norm is not None:
+        trainer.obs_norm.save(str(out_dir / "obs_norm.pt"))
+
+    # First-encounter win rate per opponent from training history.
+    initial_rate_by_label: dict[str, float] = {}
+    for m in metrics_history:
+        lab = (m.get("training_opp_label") or "")
+        # Strip "champion:" prefix if present.
+        opp_id = lab.split(":", 1)[1] if ":" in lab else lab
+        if opp_id and opp_id not in initial_rate_by_label and m.get("win_rate") is not None:
+            initial_rate_by_label[opp_id] = float(m["win_rate"])
+
+    results: dict = {}
+    for idx in sorted(rot):
+        weights_path = trainer._leaderboard[idx][0]
+        opp_id = _extract_label_from_weights_path(weights_path)
+        try:
+            res = tournament.run_match(
+                p1=str(p1_path), p2=str(weights_path),
+                games=n_games, level=level, max_ticks=200,
+                seed=10000 + idx, verbose=False,
+            )
+            total = res.get("total", 0)
+            p1_wins = res.get("p1_wins", 0)
+            results[opp_id] = {
+                "games":        total,
+                "p1_wins":      p1_wins,
+                "draws":        res.get("draws", 0),
+                "timeouts":     res.get("timeouts", 0),
+                "rate":         (p1_wins / total) if total else 0.0,
+                "initial_rate": initial_rate_by_label.get(opp_id),
+            }
+        except Exception as exc:
+            print(f"[worker] rematch failed for {opp_id}: {exc}", flush=True)
+            results[opp_id] = {"error": str(exc)}
+    return results
 
 
 def _seed_to_int(seed: str) -> int:
