@@ -2264,6 +2264,27 @@ max_grad_norm = 5 NEW axes added this cycle).
 
 **Skipped queueing.**
 
+### Loop fire 52 — 2026-04-29 08:33 PT — quiet check-in; max_grad_norm-hi still in flight
+
+**State.** Worker PID 4019322, 15h 11min uptime, RSS 6.61GB plateau
+(13+ fires). Champion 1168 flat from fire 51.
+
+**No new runs rated since fire 51.** max_grad_norm-hi still running
+(started 08:14 PT, ~19 min into 20-min budget — about to enter
+bench_eval phase).
+
+**Discussed v14 next-step with Paul.** Recommendation stands:
+1. **Land v14b** (halve coefs, 3-cell sweep) — directly tests if
+   per-tick shaping recipe lifts active-policy attractor's Elo
+2. Run a 60-min cell to test compute scaling (training-discipline
+   gate before architecture)
+3. Only if both fail → consider architecture (last resort per repo's
+   own training-discipline.md rules)
+
+**No autonomous v14 work** — awaiting Paul's call on coefs / cell count.
+
+**Queue:** 1 running + 0 queued. Skipped queueing.
+
 ## Code changes during loop
 
 ### 2026-04-29 01:55 PT — fix scripts/karp_review_games.py for tied created_at
