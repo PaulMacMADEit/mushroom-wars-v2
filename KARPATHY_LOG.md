@@ -1518,6 +1518,67 @@ a WIN. Vocabulary breadth weakly correlates with Elo but isn't sufficient.
 **v14 next-step still pending Paul** (5 options from fire 25 + fire 27's
 v14+entropy compound idea + fire 28's per-game-opponent-Elo recommendation).
 
+### Loop fire 32 — 2026-04-28 22:41 PT — rollout_steps cycle-3 complete; HI INVERTED above MID; calmest policy yet
+
+**State.** Worker idle (GPU 0%), queue empty. PID 4019322, **5h 19min
+uptime** (worker now exceeded previous worker's 5h-CPU lifetime — no
+crash, RSS 5.76GB plateau holding). Champion **+6 to 1175** (identity
+unchanged).
+
+**rollout_steps full cycle progression:**
+
+| run | cycle 1 | cycle 2 | cycle 3 |
+|---|---|---|---|
+| -lo (32)  | **1107** | unrated | 1033 |
+| -mid (64) | 1100 | 1053 | **1020** |
+| -hi (128) | 1082 | 1048 | **1043 ← inverted** |
+
+**cycle-3 hi (1043) > cycle-3 mid (1020)** — the "lower-rollout_steps-
+wins" signal from cycle-1 has **flipped**. Range cycle-3 = 23 Elo
+(narrowing from cycle-1's 25). Hi went DOWN least (-5 from cycle-2).
+Lower rollouts (32, 64) are now penalized more under harder bench corpus.
+
+**🟢 Game review on rollout_steps-hi cycle-3 — calmest policy yet:**
+
+| game | tag | ticks | noop% | top types | value drop |
+|---|---|---|---|---|---|
+| WIN | 78 | 44% | noop / 100% / 75% | **+0.28** |
+| LOSS | 22 | 27% | 75% / 100% / noop | **+0.35** |
+
+**LOSS value-drop +0.35 is the LOWEST seen across all 30+ fires.**
+For comparison: recent typical +5 to +9; loop record +11.31 (lr-hi
+cycle-2). This policy plays through losses **calmly** — same value
+at end as start. Doesn't oscillate or panic.
+
+**Action diversity in defeat:** 75%-sends are 36% in LOSS sample —
+actively engaging while losing. Compare to passive baselines that
+hit 50-73% noop in losses. This is a *resilient* policy.
+
+**Insight: longer rollouts → calmer policy.** Cycle-3 hi has 128
+rollout steps before each update — enough horizon for the policy to
+internalize "I'm losing but it's not over yet". Shorter rollouts (32,
+mid 64) lead to twitchy reactive policies that panic-spike under stress.
+
+**v14 design implication.** If v14's drawback was over-aggression
+(fire 25), **v14 + rollout_steps=128** might compound favorably:
+- v14 provides per-tick non-passivity reward
+- Long rollouts give the policy time to learn measured non-aggression
+- Combined: active but calm
+
+This adds a 7th variant to the v14 next-step list (alongside fire-27's
+v14+entropy compound). Recommendation tier:
+1. **v14 + rollout_steps=128** (NEW — long horizon for measured aggression)
+2. **v14 + entropy=0.03** (fire 27 — exploration tames over-aggression)
+3. **Halve coefs to 0.0005/0.0001** (fire 25 — direct knob)
+
+**Worker memory verdict.** 5h 19min uptime, 5.76GB RSS, no crash. The
+previous worker's 9GB-at-5h was either a different leak path (maybe
+in code we've since changed) or the result of a different workload mix.
+Current worker stable. **No restart pressure.**
+
+**Backstop next.** Queue empty, ticks at :45 PT (~4 min). Round-robin
+from rollout_steps picks **n_envs** for cycle-3.
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
