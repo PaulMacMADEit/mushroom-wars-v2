@@ -1786,6 +1786,73 @@ fire's first downtick. May plateau at ~6.6GB without restart.
 
 **Queue:** 1 running + 1 queued = 2. Skipped queueing.
 
+### Loop fire 37 — 2026-04-29 01:11 PT — gamma cycle-3 INVERTED; extremes coexist; mem plateau confirmed
+
+**State.** Worker PID 4019322, **7h 49min uptime**, RSS **6.59GB
+(flat vs fire 36)** — creep STOPPED. Two consecutive flat readings
+confirm plateau at ~6.6GB. Restart pressure fully removed. Champion
+**+4 to 1189** (identity unchanged, steady climb).
+
+**🟢 gamma cycle-3 complete — INVERTED from cycle-1:**
+
+| run | cycle 1 | cycle 3 | Δ |
+|---|---|---|---|
+| -lo (0.95) | **1095** | 1027 | **-68** |
+| -mid (0.97) | 1080 | **1043** | -37 |
+| -hi (0.99) | 1070 | **1014** | -56 |
+
+Cycle-1: **lo > mid > hi monotone** (range 25 Elo, strongest signal).
+Cycle-3: **mid > lo > hi**. The "lower-gamma-wins" finding is **gone
+under deflation**. lo deflation -68 Elo is cycle-3's biggest single
+gamma drop.
+
+**Three major axes have now shown signal-erosion under cycle-3:**
+| axis | cycle-1 direction | cycle-3 direction |
+|---|---|---|
+| gamma | lo > mid > hi (range 25) | **mid > lo > hi** (range 29) |
+| rollout_steps | lo > mid > hi (range 25) | **hi ≈ lo > mid** (range 23) |
+| lr | lo > mid > hi (range 64) | lo > mid > hi (range 100, hi sub-1000) |
+
+Only lr keeps the cycle-1 direction; gamma + rollout_steps inverted.
+
+**🚩 NEW EXTREME — gamma-hi cycle-3:**
+
+| game | tag | ticks | noop% | top types |
+|---|---|---|---|---|
+| WIN | **110** | **78%** | noop=78% / 100%=16% / 75%=4% | **most passive WIN sample of all 36 fires** |
+| LOSS | 10 | 20% | 100%/noop/25% | fast loss using 25%-sends |
+
+gamma=0.99 (highest discount = longest effective horizon) → agent uses
+its long horizon to **wait for opponents to time out**. 110-tick games
++ 78% noop = pure stalling. **Timeout-victory specialist.**
+
+**🟢 v13 cycle-3 produces both extremes simultaneously:**
+
+| cell | strategy | WIN ticks | WIN noop% |
+|---|---|---|---|
+| gamma-hi | stalling extremist | 110 | 78% |
+| gamma-mid | ultra-fast 50%-rush | 3 | 50% |
+| n_envs-mid | aggressive type-100 | 14 | 14% |
+| rollout_steps-hi | calm | 78 | 44% |
+| (rest) | various intermediates | 25-78 | 13-69% |
+
+**Stalling beats aggressive (timeout victory). Aggressive beats stalling
+(hit fast). Mid-tier struggles against both.** Bench corpus rewards
+each at ~1014-1043 because they trade wins.
+
+**🟢 v14 thesis at maximum strength.** v13 produces a fragmented
+strategy space where every policy has a counter. v14's per-tick
+shaping pulls all runs toward a unified non-passive attractor —
+eliminating the stall basin entirely. The 110-tick 78% noop WIN is
+exactly what shaping would prevent.
+
+**Worker memory.** 5.79→6.44→6.32→6.61→6.59→6.59. Plateaued. **No
+restart needed.** The previous worker's 9GB-at-5h crash was
+workload-specific.
+
+**Queue empty.** Backstop ticks :15 PT (4 min), picks **gae_lambda**
+for cycle-3.
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
