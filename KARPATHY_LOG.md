@@ -1099,6 +1099,50 @@ until reward_version-hi completes before adding cycle-2 axes.
 Slope flattening. JAX cache warming up the same way the previous
 worker did. No OOM concern at this rate.
 
+### Loop fire 24 — 2026-04-28 18:41 PT — v13 control rated 1052; v14 running
+
+**🟢 V13 control done.** First half of the A/B is in:
+
+| run | reward_version | wins/24 | Elo | rate | updates | bv n |
+|---|---|---|---|---|---|---|
+| reward_version-lo | v13 (rv=1) | 11 | **1052** | 0.911 | 49 | 10 |
+| reward_version-hi | v14 (rv=2) | — | running (15 min in) | — | — | — |
+
+V13 control's Elo (1052) lands **right in the cycle-2 cluster**
+(rollout_steps-mid 1053, rollout_steps-hi 1048, all ~1050±5). Confirms
+baseline reproducibility under current bench corpus.
+
+**v13 control game review** — same passive-survival pattern as prior
+v13 runs:
+
+| game | tag | ticks | noop% | top types | value drop |
+|---|---|---|---|---|---|
+| WIN | 52 | 62% | noop / 100% / 75% | -0.61 |
+| LOSS | 38 | 42% | 100% / noop / 75% | **+6.06** |
+
+This is the **baseline behavior signature reward_v14 is supposed to
+disrupt** — high noop rate, value-drop in losses, mixed 100%/75% sends
+when active.
+
+**State.** Worker PID 4019322, 1h 19min uptime, RSS 5.75GB (+0.02 since
+fire 23, plateau holding around 6GB). Champion drift 1165→1162.
+
+**Reward_version-hi v14 ETA:** ~18:50 PT for training-done, ~19:00-19:10
+PT for bench_eval-rated. Fire 25 (next) should have first v14 result.
+
+**Queue empty after v14 finishes.** Backstop will tick ~19:00 PT and
+queue next round-robin axis (gae_lambda → ...). Skipped queueing
+this fire to keep v14 path clear.
+
+**Strategy notes for fire 25 (when v14 result lands):**
+- If v14 Elo > v13 by >20 (significant): re-sweep {gamma, lr,
+  rollout_steps} under v14 (the three axes with strong v13 signal,
+  to confirm findings carry to v14).
+- If v14 Elo similar to v13 (±20): check behavior signals — v14 may
+  shift behavior without shifting Elo (still useful, less urgent).
+- If v14 Elo < v13: investigate whether shaping coefs are too high
+  / too distracting from terminal signal.
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
