@@ -1214,6 +1214,58 @@ running 10 min in, mid + hi queued; rv=1, all v13).
 re-sweep (cycle 2) is fine noise data; want to wait for Paul's call
 on v14 next-step before adding more.
 
+### Loop fire 26 — 2026-04-28 19:41 PT — entropy_coef cycle-2 lo done; passivity getting WORSE under v13
+
+**State.** Worker PID 4019322, 2h 19min uptime, RSS 5.77GB plateau.
+Champion drift 1167→1160 (-7, identity unchanged). GPU 2% between iters.
+
+**entropy_coef cycle-2 progress:**
+
+| run | cycle | entropy_coef | Elo | rate | updates |
+|---|---|---|---|---|---|
+| -lo (cycle 1) | — | 0.003 | 1057 | 0.914 | 47 |
+| -lo (cycle 2) | — | 0.003 | **1048** | 0.914 | 49 |
+| -mid | running, 19 min in | — | — | — | — |
+| -hi | queued | — | — | — | — |
+
+Cycle-2 lo is **9 Elo lower** than cycle-1. Same Elo-deflation pattern
+seen in rollout_steps (cycle 1: 1082-1107; cycle 2: 1048-1053).
+**Bench corpus is grading harder over time** as champion advances and
+karp- runs accumulate.
+
+**🚨 v13 passivity is GETTING WORSE.**
+
+| run | WIN noop% | WIN ticks | LOSS noop% | LOSS ticks |
+|---|---|---|---|---|
+| fire 19 lr-lo | 59% | 92 | 52% | 83 |
+| fire 22 rollout_steps-mid | 67% | 41 | — | — |
+| fire 24 reward_version-lo (v13) | 62% | 52 | 42% | 38 |
+| **fire 26 entropy_coef-lo cycle-2** | **69%** | **116** | **73%** | **95** |
+
+The latest v13 run is the **most passive ever observed**. 73% noop in
+loss is more passive than any prior sample. Game length 116 ticks (vs
+typical 80-95) shows the policy *increased* its survival-by-stalling
+strategy.
+
+**Implication for v14 strategy.** Fire-25 read v14 as "broke passivity
+but Elo dipped 12 → tune coefs down." Today's data adds nuance:
+
+- **v13 isn't holding still** — it's deepening the passive lock-in. The
+  -12 Elo gap measured at fire 25 was vs THAT moment's v13. By fire 26,
+  the same v14 run might already be -5 or -8 vs the new v13 baseline.
+- **Without v14 intervention, the fleet trends to mutual-noop**. The
+  long-term cost of staying on v13 is a more brittle, less varied
+  policy archive.
+- **The "halve coefs" recommendation is still right**, but the urgency
+  to deploy SOME v14 variant is higher than fire 25 implied.
+
+**No code changes this fire.** Awaiting Paul's call on v14 next steps
+(5 options surfaced fire 25 — recommendation: halve coefs to 0.0005 /
+0.0001 and re-A/B).
+
+**Queue:** 1 running + 1 queued = 2. Skipped queueing — let
+entropy_coef cycle-2 finish for full noise estimate.
+
 ## Code changes during loop
 
 ### 2026-04-28 17:18 PT — implemented reward_v14 with per-tick shaping
