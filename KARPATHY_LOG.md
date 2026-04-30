@@ -4287,6 +4287,27 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### Loop fire 92 --- 2026-04-30 13:13 PT --- Base-01 rated at Elo 945.8 (-150 vs cont-03). Base-02 running. Fixed karp_review_games for new labels. Bench games not saved (sep issue).
+
+**Base-01 bench rating:** Elo 945.8 (rated, n=10 champs in archive). cont-03's Elo was 1096.3 — Base-01 is **-150 Elo** vs the v10 champion archive. Expected: the archive consists of small-map era champions, and Base-01 trades small-map mastery for large-map adaptability. The bench question (how does this checkpoint stack against archived models on whatever map bench_eval picks) is necessarily kind to the older champions when the eval distribution overlaps small-map territory.
+
+**Training rate vs random_legal (the cleaner Step 2 signal) was 67.6% / 72.1% final — that is the metric that should climb through Base-02..06.
+
+**Base-02 progress (still running):** archive_eval win rates are oscillating 15-28% against the v10 archive — slightly below Base-01's range (22-50%). Could be: (1) noise from a slightly different mid-training checkpoint, (2) the policy is in a transition zone (KL ramping but not yet productive), (3) actual regression. Will know in next fire when Base-02 finishes and we see the final-window training rate.
+
+**Two script issues fixed this fire:**
+
+| issue | fix |
+|---|---|
+| `karp_review_games.py` filter only matched `karpv2-%` — wouldn't pick up new `v10.x.*` labels | extended `or_()` to match karpv2-, karp-, and `^v\d+\.\d+\.` regex |
+| `karp_review_games.py --label v10.2.01-LargeMap-Base-01` returned "no bench games found" — the run is rated but games table has no rows linked to its run_id | NOT FIXED yet — likely a side-effect of the bench_eval config-extraction commit (6cf8077, Apr 29). bench_eval must now write game rows with the source run_id, not just compute Elo. Tracking as separate followup. |
+
+**No game review table this fire** because Base-01 has no bench games saved. Will revisit once the bench_eval game-save bug is identified.
+
+**Backstop fired at 12:45 PT** — found chain active, no-op. Working as designed.
+
+**Next check:** ~13:43 PT. Expected: Base-02 done, Base-03 queued.
+
 ### Loop fire 91 --- 2026-04-30 12:43 PT --- v10.2.01-LargeMap-Base-01 done. Step 2 transfer: 96.7% (small) -> 72.1% (large, final window). Game length 17 -> 127 ticks. Base-02 queued.
 
 **v10.2.01-LargeMap-Base-01 result:**

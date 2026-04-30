@@ -29,10 +29,19 @@ TYPE_NAMES = {0: "25%", 1: "50%", 2: "75%", 3: "100%", 4: "noop"}
 
 
 def _latest_rated_karp_label(sb) -> str | None:
+    """Most-recent rated karp-style run.
+
+    Recognises three label families: legacy karpv2-, mid-era v10.1.5-foo,
+    and current v10.2.01-LargeMap-foo (2026-04-30 onward). Server-side
+    filter uses postgres ~ regex via PostgREST.
+    """
     res = (
         sb.table("runs")
         .select("label,queued_at")
-        .like("label", "karpv2-%")
+        # 'or' takes a comma-list of filters; quote regex with ()
+        .or_(
+            "label.like.karpv2-%,label.like.karp-%,label.match.^v[0-9]+\\.[0-9]+\\."
+        )
         .eq("elo_status", "rated")
         .order("queued_at", desc=True)
         .limit(1)
