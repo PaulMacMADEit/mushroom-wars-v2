@@ -29,6 +29,7 @@ const PALETTE = {
   episode_return_p90:      '#7c3aed',
   episode_return_min:      '#3f3f46',
   episode_return_max:      '#3f3f46',
+  mean_episode_length:     '#fb7185',  // rose — game length in ticks (often on 2nd y-axis)
 };
 
 /** Episode-return band chart: faint min/max envelope, shaded p10–p90 band,
@@ -127,9 +128,19 @@ export function bandChart(canvas, points, opts = {}) {
  * opts:   { yLabel, yMin, yMax, xLabel, label } — optional axis tweaks
  */
 export function lineChart(canvas, points, keys, opts = {}) {
-  const { yLabel = 'value', yMin, yMax, xLabel = 'update', yPct = false } = opts;
+  const {
+    yLabel = 'value', yMin, yMax, xLabel = 'update', yPct = false,
+    // Optional second y-axis. Pass `secondaryKeys: ['mean_episode_length']`
+    // to plot those keys on a right-side axis with its own scale + label.
+    // Used for "rate vs game-length" overlays where units differ.
+    secondaryKeys = [], secondaryYLabel = '', secondaryYMin, secondaryYMax,
+  } = opts;
   const labels = points.map((_, i) => i + 1);
-  const datasets = keys.map(k => ({
+  const has = k => points.some(p => p[k] != null);
+  const visibleKeys = keys.filter(has);
+  const visibleSecondary = secondaryKeys.filter(has);
+
+  const datasets = visibleKeys.map(k => ({
     label: k,
     data: points.map(p => (p[k] ?? null)),
     borderColor: PALETTE[k] ?? '#e6e8ef',
@@ -138,7 +149,23 @@ export function lineChart(canvas, points, keys, opts = {}) {
     pointRadius: 0,
     spanGaps: true,
     tension: 0.2,
+    yAxisID: 'y',
   }));
+  for (const k of visibleSecondary) {
+    datasets.push({
+      label: k,
+      data: points.map(p => (p[k] ?? null)),
+      borderColor: PALETTE[k] ?? '#fb7185',
+      backgroundColor: PALETTE[k] ?? '#fb7185',
+      borderWidth: 1.5,
+      borderDash: [4, 4],     // dashed so the dual-axis split is visible
+      pointRadius: 0,
+      spanGaps: true,
+      tension: 0.2,
+      yAxisID: 'y2',
+    });
+  }
+
   const yAxis = {
     title: { display: true, text: yLabel },
     grid: { color: 'rgba(96,165,250,0.05)' },
@@ -150,6 +177,22 @@ export function lineChart(canvas, points, keys, opts = {}) {
       callback: (v) => `${(v * 100).toFixed(0)}%`,
     };
   }
+
+  const scales = {
+    x: { title: { display: true, text: xLabel }, grid: { color: 'rgba(96,165,250,0.05)' } },
+    y: yAxis,
+  };
+  if (visibleSecondary.length > 0) {
+    const y2 = {
+      position: 'right',
+      title: { display: true, text: secondaryYLabel || visibleSecondary[0] },
+      grid: { drawOnChartArea: false },   // avoid two grid systems overlapping
+    };
+    if (secondaryYMin !== undefined) y2.min = secondaryYMin;
+    if (secondaryYMax !== undefined) y2.max = secondaryYMax;
+    scales.y2 = y2;
+  }
+
   return new Chart(canvas, {
     type: 'line',
     data: { labels, datasets },
@@ -158,18 +201,19 @@ export function lineChart(canvas, points, keys, opts = {}) {
       maintainAspectRatio: false,
       animation: false,
       interaction: { mode: 'index', intersect: false },
-      scales: {
-        x: { title: { display: true, text: xLabel }, grid: { color: 'rgba(96,165,250,0.05)' } },
-        y: yAxis,
-      },
+      scales,
       plugins: {
         legend: { position: 'bottom', labels: { padding: 10, boxWidth: 10, boxHeight: 10 } },
         tooltip: yPct ? {
           callbacks: {
             label: (ctx) => {
               const v = ctx.parsed.y;
-              return v == null ? `${ctx.dataset.label}: —`
-                               : `${ctx.dataset.label}: ${(v * 100).toFixed(1)}%`;
+              if (v == null) return `${ctx.dataset.label}: —`;
+              // Secondary-axis values (e.g. ticks) shouldn't be % formatted.
+              if (ctx.dataset.yAxisID === 'y2') {
+                return `${ctx.dataset.label}: ${v.toFixed(1)}`;
+              }
+              return `${ctx.dataset.label}: ${(v * 100).toFixed(1)}%`;
             },
           },
         } : undefined,

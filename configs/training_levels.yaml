@@ -16,12 +16,17 @@
 #
 # Reload cost: zero — both schedulers read fresh from disk each fire.
 
-# 2026-04-29 (PT): training collapsed to small close maps for fast iteration.
-#   - 350×350 map (vs 700×700 default) → ~half travel time → ~2× more episodes
-#     per wall-second → faster gradient signal per minute of compute.
-#   - 4-5 buildings → small action space, tractable for a fresh agent to learn
-#     basic mechanics (capacity management, send fractions) before scaling up.
-#   - level_mix removed — single level only at this curriculum stage. When
-#     graduating, switch back to a mix (e.g. random_4_8/6_10/8_16/16_24).
-level_name: random_close_4_5
-level_mix: null
+# 2026-04-30 (PT): graduated to Step 2 — Large Map mix.
+#   Step 1 (random_close_4_5, 350×350, 4-5 buildings) peaked at v10.1.01-SmallMap-Base-03
+#   (96.7% rate vs random_legal). Now scaling up to test transfer to larger,
+#   more varied maps. Same hardcoded opponent (random_legal); the variable is
+#   map size + building count, not opponent strength.
+#
+#   Mix: 4 generators sampled per-env on reset. Range 4-24 buildings, full
+#   700×700 map.
+level_name: random_4_8  # label only when level_mix is set
+level_mix:
+  - random_4_8
+  - random_6_10
+  - random_8_16
+  - random_16_24

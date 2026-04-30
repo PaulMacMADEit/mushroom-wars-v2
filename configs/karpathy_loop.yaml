@@ -38,16 +38,24 @@ queue_policy:
     - "^v\\d+(?:\\.\\d+)+-"
 
 # ---------------------------------------------------------------------------
-# Model + simulator IDs (rarely change)
+# Model + simulator IDs + curriculum step
 # ---------------------------------------------------------------------------
+# Run-label convention (2026-04-30 onward):
+#   v{model}.{step}.{exp:02d}-{MajorChange}-{Variable}-{cell}      (sweeps)
+#   v{model}.{step}.{exp:02d}-{MajorChange}-{Kind}-{NN:02d}        (chains)
+#
+# `model_id` encodes both the model major version AND the curriculum step
+# (e.g. `v10.2` = encoder v10, step 2). `major_change` is the descriptor for
+# what changed in this step — appended to every label so the chart columns
+# read clearly. Update both fields when starting a new curriculum step.
 model:
-  model_id:     "v10.1"          # 2026-04-29: same architecture as v10-1024
-                                 # (encoder v10, body=1024). Name format change
-                                 # — drops uninformative body-width suffix.
-                                 # Run labels under this model_id are
-                                 # `v10.1.<exp>-<desc>` (one experiment number
-                                 # per karp fire, shared across the 3 cells).
+  model_id:     "v10.2"          # Step 2 (started 2026-04-30): graduated to
+                                 # b6 large-map mix (random_4_8/6_10/8_16/16_24).
+                                 # Step 1 was v10.1 — random_close_4_5 only,
+                                 # peaked at v10.1.01-SmallMap-Base-03 (96.7%).
   simulator_id: "sim-v1.3"
+  major_change: "LargeMap"       # human-readable step descriptor; goes into
+                                 # every label and run description
 
 # ---------------------------------------------------------------------------
 # Training opponent — who does the agent play against during rollouts?
@@ -71,11 +79,12 @@ training_opponent:
   #                      checkpoints — incompatible with v10 (1008).
   #
   # 2026-04-29 fire 79: BOOTSTRAP COMPLETE — v10 has archive presence.
-  # Two v10 champions admitted (rollout_steps-lo @ 90.0%, rollout_steps-mid
-  # @ 86.7%) once the bench_eval crash on tournament._state_to_obs_dict_for_player
-  # was fixed. Flipping back to PFSP-weighted champion sampling so v10 trains
-  # against itself instead of random legal moves.
-  name: "pfsp_champion"
+  # 2026-04-30 (Step 2): switched back to random_legal. Paul: "still use the
+  # hardcoded model but make the map bigger". The Step 2 question is whether
+  # the agent can transfer mechanics learned on small maps to large maps with
+  # a fixed-strength opponent — adding a strong opponent at the same time
+  # would confound the experiment. Re-enable pfsp_champion for Step 3+.
+  name: "random_legal"
   kwargs: {}
 
 # ---------------------------------------------------------------------------

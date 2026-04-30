@@ -35,17 +35,37 @@ from cli.db import connect, PROJECT
 # gaps; we'd rather over-queue and let the cap (max_karp_queue_depth)
 # limit pile-up.
 
+# Protected label families (do not discard; counted as "karp-active"):
+#   - karpv2-...       legacy A
+#   - karp-...         very-legacy
+#   - v\d+\.\d+\....   current convention (v10.2.02-LargeMap-...)
+#
+# 2026-04-30: previously these checks used `LIKE 'karpv2-%'` and
+# `NOT LIKE 'karp-%'`, which DISCARDED v10.1.37-lr-mid/-hi and similar
+# new-format runs as "non-karp queued junk" within 30 min of being queued.
+# Caught when v10.1.37-lr-{mid,hi} were marked discarded by the backstop
+# while -lo was running; only the running cell survived.
+_PROTECTED_SQL = (
+    "(label LIKE 'karpv2-%%' "
+    " OR label LIKE 'karp-%%' "
+    " OR label ~ '^v[0-9]+\\.[0-9]+\\.')"
+)
+
+
 def _karp_is_active() -> tuple[bool, str]:
-    """True iff there's a queued or running karpv2- run. Anything else is idle."""
+    """True iff there's a queued or running karp-style run.
+
+    Recognises all three label families (legacy + current).
+    """
     with connect() as c, c.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT count(*) FROM runs
-             WHERE project=%s AND label LIKE 'karpv2-%%'
+             WHERE project=%s AND {_PROTECTED_SQL}
                AND status IN ('queued','running')
         """, (PROJECT,))
         n_live = cur.fetchone()[0]
     if n_live > 0:
-        return True, f"{n_live} karpv2- run(s) queued/running"
+        return True, f"{n_live} karp-style run(s) queued/running"
     return False, "queue empty"
 
 
@@ -61,13 +81,13 @@ def _clear_clutter() -> None:
                AND started_at < now() - interval '90 minutes'
         """, (PROJECT,))
         n_failed = cur.rowcount
-        cur.execute("""
+        cur.execute(f"""
             UPDATE runs
                SET status='discarded',
                    error='cleared by karp-backstop',
                    finished_at=now()
              WHERE project=%s AND status='queued'
-               AND label NOT LIKE 'karp-%%'
+               AND NOT {_PROTECTED_SQL}
                AND simulator_id <> 'admin'
         """, (PROJECT,))
         n_discarded = cur.rowcount

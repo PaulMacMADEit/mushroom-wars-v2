@@ -27,19 +27,27 @@ from cli.db import connect, PROJECT
 from cli.loop_config import load
 
 
-# Two label families:
-#   legacy: karpv2-260429-2104-lr-lo  (date+time prefix, hung around through 2026-04-29)
-#   new:    v10.1.5-lr-lo             (model.experiment-axis-cell — Paul's 2026-04-29 rename)
+# Three label families this script must cope with:
+#   legacy A: karpv2-260429-2104-lr-lo     (pre-2026-04-29)
+#   legacy B: v10.1.5-lr-lo                (Paul's 2026-04-29 rename — exp num inline w/ model_id)
+#   current: v10.2.02-LargeMap-lr-lo       (2026-04-30 onward — exp num two-digit, MajorChange tag)
+#
+# Sweep-cell pattern (the trailing portion that identifies axis + cell):
+#   -<axis>-<lo|mid|hi>
 _KARP_AXIS_RE = re.compile(
-    r"^(?:karpv2-\d{6}-\d{4}|v\d+(?:\.\d+)+)-([a-z_]+)-(?:lo|mid|hi)$"
+    r"^(?:"
+    r"karpv2-\d{6}-\d{4}"                       # legacy A
+    r"|v\d+\.\d+\.\d+-[A-Z][A-Za-z]+"           # current (v10.2.02-LargeMap)
+    r"|v\d+(?:\.\d+)+"                           # legacy B (v10.1.5)
+    r")-([a-z_]+)-(?:lo|mid|hi)$"
 )
 
 
 def _last_karp_axis() -> str | None:
     """Most-recent karp-style run's axis (from labels), or None if none yet.
 
-    Matches both the legacy `karpv2-` prefix and the new `v<model>.<exp>-`
-    prefix so the round-robin keeps working through the rename window.
+    Scans recent runs for any of the three sweep label families and returns
+    the axis from the newest match.
     """
     with connect() as c, c.cursor() as cur:
         cur.execute(
@@ -47,9 +55,9 @@ def _last_karp_axis() -> str | None:
             SELECT label
               FROM runs
              WHERE project = %s
-               AND (label LIKE 'karpv2-%%' OR label LIKE 'v__%%')
+               AND (label LIKE 'karpv2-%%' OR label ~ '^v[0-9]+\\.[0-9]+\\.')
              ORDER BY queued_at DESC
-             LIMIT 30
+             LIMIT 50
             """,
             (PROJECT,),
         )
@@ -61,24 +69,25 @@ def _last_karp_axis() -> str | None:
 
 
 def _next_experiment_num(model_id: str) -> int:
-    """Next experiment number for `model_id`. One experiment = one karp fire
-    (3 cells share the number). Counts distinct queued_at timestamps among
-    runs with this model_id and returns count + 1.
+    """Next experiment number for `model_id`. Parses the {NN} segment from
+    existing `{model_id}.{NN}-...` labels and returns max+1.
 
-    Uses queued_at rather than a parsed-from-label counter so re-bench /
-    janitor-cleanup runs that don't touch the label sequence stay invisible.
+    Replaces the old queued_at-distinct-count approach because under the new
+    convention a single experiment can be a chain (6+ batches → 6 distinct
+    queued_at values, but still experiment 01) — the count would be wrong.
     """
+    pattern = rf"^{re.escape(model_id)}\.(\d+)-"
     with connect() as c, c.cursor() as cur:
         cur.execute(
-            """
-            SELECT COUNT(DISTINCT queued_at)
-              FROM runs
-             WHERE project = %s AND model_id = %s
-            """,
-            (PROJECT, model_id),
+            "SELECT label FROM runs WHERE project = %s AND label ~ %s",
+            (PROJECT, pattern),
         )
-        n = cur.fetchone()[0] or 0
-    return int(n) + 1
+        nums: list[int] = []
+        for (label,) in cur.fetchall():
+            m = re.match(pattern, label)
+            if m:
+                nums.append(int(m.group(1)))
+    return (max(nums) if nums else 0) + 1
 
 
 def _parse_overrides(spec: str | None) -> dict:
@@ -177,12 +186,14 @@ def queue_sweep(axis: str | None, dry_run: bool, baseline_overrides: dict) -> No
     print(f"[karp] training_opponent.mode={opp_mode}")
 
     model_id = cfg.model["model_id"]
+    major_change = cfg.model.get("major_change", "Unspecified")
     exp_num = _next_experiment_num(model_id)
     budget_ms = int(cfg.schedule["cell_budget_seconds"]) * 1000
     launch_at = int(time.time() * 1000)
 
     print(f"[karp] axis={axis_obj.axis} (last_used={last!r})")
-    print(f"[karp] model={model_id} experiment={exp_num} — {len(cells)} cells × {budget_ms//60000} min each")
+    print(f"[karp] model={model_id} major_change={major_change} experiment={exp_num:02d} — "
+          f"{len(cells)} cells × {budget_ms//60000} min each")
 
     rows = []
     for cell in cells:
@@ -199,11 +210,14 @@ def queue_sweep(axis: str | None, dry_run: bool, baseline_overrides: dict) -> No
             # self_play=true requires fused_rollout=false (trainer assertion).
             hp["self_play"] = True
             hp["fused_rollout"] = False
-        # Label format: <model_id>.<exp>-<axis>-<cell>
-        # e.g. v10.1.5-lr-lo, v10.1.5-lr-mid, v10.1.5-lr-hi (one fire = one
-        # exp num shared across cells — different sweep axis = different fire).
-        label = f"{model_id}.{exp_num}-{axis_obj.axis}-{cell['label']}"
-        desc  = f"Karpathy sweep #{exp_num}: {axis_obj.axis}={cell['value']} (opp={opp_mode})"
+        # Label format (2026-04-30 onward):
+        #   {model_id}.{exp:02d}-{MajorChange}-{axis}-{cell}
+        # e.g. v10.2.02-LargeMap-lr-lo, v10.2.02-LargeMap-lr-mid, v10.2.02-LargeMap-lr-hi
+        # One karp fire = one exp num shared across the 3 cells.
+        label = f"{model_id}.{exp_num:02d}-{major_change}-{axis_obj.axis}-{cell['label']}"
+        desc  = (f"Step {model_id.split('.')[-1]} ({major_change}): "
+                 f"{axis_obj.axis} sweep — {cell['label']} cell "
+                 f"({axis_obj.axis}={cell['value']}, opp={opp_mode})")
         rows.append((cell, label, desc, hp))
 
     for cell, label, desc, hp in rows:

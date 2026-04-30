@@ -24,6 +24,51 @@ as run under partial system.
 
 ## Sweeps run under new bench_eval (2026-04-27 →)
 
+---
+
+## Run-label naming convention (2026-04-30 onward)
+
+All run labels follow:
+
+    v{model}.{step}.{exp:02d}-{MajorChange}-{Variable_or_Kind}-{cell_or_idx}
+
+| segment | meaning | examples |
+|---|---|---|
+| model | model major version | 10 |
+| step | curriculum step within model | 1 (small map), 2 (large map), 3 (champion opp) |
+| exp | experiment number within the step (two digits) | 01, 02, 03... |
+| MajorChange | descriptor for what changed when the step started | SmallMap, LargeMap, ChampOpp |
+| Variable | sweep axis name (lowercase) | lr, entropy_coef, gamma |
+| Kind | chain kind (capitalised) | Base, FineTune, Restart |
+| cell | sweep cell | lo, mid, hi |
+| idx | chain batch index (two digits) | 01, 02, 03... |
+
+Examples:
+
+- v10.1.01-SmallMap-Base-03  - Step 1, experiment 01 (Base chain), batch 03  (Step 1 base)
+- v10.1.02-SmallMap-FineTuneLR-lo - Step 1, experiment 02 (LR fine-tune sweep), Low cell
+- v10.2.01-LargeMap-Base-01  - Step 2, experiment 01 (Base chain), batch 01  (current)
+- v10.2.02-LargeMap-lr-lo    - Step 2, experiment 02 (lr sweep), Low cell
+
+Sources of truth:
+- model_id + major_change live in configs/karpathy_loop.yaml under model:
+- training_levels.yaml controls level_name / level_mix used by every new run
+
+Description column carries the verbose human-readable form
+("Step 2 (Large Map): Base chain - batch 01") and renders below the label
+in the dashboard.
+
+Historical runs renamed 2026-04-30:
+- karpv2-rslo-n1800-01            -> v10.1.00-SmallMap-Root
+- karpv2-cont-2e238f3d-01..04     -> v10.1.01-SmallMap-Base-01..04
+- karpv2-cont-2e238f3d-05-lr1e4   -> v10.1.02-SmallMap-FineTuneLR-lo
+
+Anything pre-2026-04-30 still carries its legacy karpv2- label and is left
+as-is. Queue scripts + bench_eval match both legacy and new families.
+
+---
+
+
 ### Loop fire 1 — 2026-04-27 22:56 PT — observe-only (queue full)
 
 Queue depth 12 (3 running, 9 cron-agent queued ahead). Skipped queueing
@@ -4241,6 +4286,46 @@ distribution shift). Will reassess once chain reaches >97%.
 **Queued (this fire):** chain batch 01 from n1800. Backstop continues to
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
+
+### Loop fire 90 --- 2026-04-30 11:39 PT --- Step 2 LAUNCHED. Naming convention overhaul. v10.2.01-LargeMap-Base-01 queued from Step 1 base.
+
+**Decision (Paul).** Move on to Step 2 from cont-03 (now v10.1.01-SmallMap-Base-03, 96.7%, Elo 1082). Step 2 graduates to a Large Map mix - more distance + more variation - while keeping the random_legal opponent. Goal: agent learns to win efficiently on bigger maps using the mechanics it already knows.
+
+**Naming convention overhaul.** Adopted Paul-spec:
+
+    v{model}.{step}.{exp:02d}-{MajorChange}-{Variable_or_Kind}-{cell_or_idx}
+
+See header section above for full table. Existing 6 runs renamed in Supabase from karpv2- to v10.1.0x-SmallMap-* labels.
+
+**Changes shipped this fire:**
+
+| file | change |
+|---|---|
+| configs/training_levels.yaml | random_close_4_5 (single) -> b6 mix random_4_8/6_10/8_16/16_24 |
+| configs/karpathy_loop.yaml | model_id v10.1 -> v10.2; added major_change=LargeMap; training_opponent pfsp_champion -> random_legal (Paul: still use the hardcoded model) |
+| scripts/queue_cont_chain.py | added --model/--step/--batch/--major-change/--kind/--override flags; new label format |
+| scripts/queue_karp_sweep.py | new label format v{model_id}.{exp:02d}-{MajorChange}-{axis}-{cell}; regex updated for all 3 label families; _next_experiment_num parses from label not queued_at (chains have multiple batches under same exp) |
+| scripts/karp_backstop.py | _karp_is_active and _clear_clutter LIKE patterns extended to recognise v10.x.* labels. Fixes silent-discard bug from earlier fires |
+| dashboard/lib/chart.js | lineChart gained secondaryKeys/secondaryYLabel/secondaryY{Min,Max} opts for dual-axis charts |
+| dashboard/run.html | chart-win now plots mean_episode_length on right axis (ticks) alongside win_rate/draw_rate/loss_rate on left (rate) |
+
+**Bug found in karp_backstop (now fixed).** Last fire's v10.1.37-lr-mid and -hi were marked discarded by the backstop within 30 min of being queued, because _clear_clutter discarded anything not matching LIKE karp-%. Only v10.1.37-lr-lo survived (it was already running). The new patterns also recognise v10.x.* - verified clean on dry-run.
+
+**Step 2 first batch queued:**
+
+    v10.2.01-LargeMap-Base-01  (id b426590b)
+    parent      = 56668d7a (v10.1.01-SmallMap-Base-03 - Step 1 base)
+    budget      = 1800s (bumped from 1200s; bigger maps = longer episodes)
+    inherits    = lr=1e-3, n_envs=1800, rs=4, ue=4, mb=512, gamma=0.97,
+                  reward_v=2, fused jax, action_repeat=2, opp=random_legal
+    overrides   = level_name=random_4_8, level_mix=[random_4_8, random_6_10,
+                  random_8_16, random_16_24]
+
+**Reward question Paul asked.** reward_version=2 = v1.4 = terminal WIN/LOSS (~80%) + per-tick shaping (~20%, symmetric delta on building/unit holdings). Game-length pressure comes from gamma=0.97 PPO discount: tick-50 win is worth 0.22, tick-100 is 0.05. No explicit win-fast bonus - that is a reward_v3 candidate if Step 2 shows the agent learning to win but slowly.
+
+**Watch for in next fires:** sharp rate drop on batch 01 - cont-03 trained on 4-5 buildings, jumping to 4-24 is a real distribution shift. If <30% after 2 batches, drop random_16_24 from the mix.
+
+**Next check:** ~12:09 PT.
 
 ### Loop fire 89 --- 2026-04-30 11:08 PT --- TIMER DEAD 57 MIN; restarted. Cont chain complete: peak cont-03 96.7%, fine-tune regressed.
 

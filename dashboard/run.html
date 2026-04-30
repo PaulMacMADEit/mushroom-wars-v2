@@ -450,11 +450,15 @@
         }
       };
 
-      // win_rate / draw_rate / loss_rate together — see if a stalled cell is
-      // turtling (high draw_rate) vs actually losing (high loss_rate).
-      // Older runs lack draw_rate/loss_rate; the chart auto-skips missing keys.
+      // win_rate / draw_rate / loss_rate + game length — see if a stalled
+      // cell is turtling (high draw_rate, long games) vs actually losing
+      // (high loss_rate). Game length on right-axis (ticks); rates on left
+      // (0-100%). Older runs lack some keys; chart auto-skips missing ones.
       renderOne('chart-win',    ['win_rate_vs_leaderboard', 'win_rate', 'draw_rate', 'loss_rate'],
-                { yLabel: 'rate', yMin: 0, yMax: 1, yPct: true });
+                { yLabel: 'rate', yMin: 0, yMax: 1, yPct: true,
+                  secondaryKeys: ['mean_episode_length'],
+                  secondaryYLabel: 'game length (ticks)',
+                  secondaryYMin: 0 });
       renderOne('chart-loss',   ['value_loss', 'entropy_loss'],
                 { yLabel: 'loss' });
       renderOne('chart-signal', ['policy_loss', 'approx_kl'],
