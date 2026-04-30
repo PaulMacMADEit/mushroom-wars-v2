@@ -3844,6 +3844,67 @@ the regular Karpathy schedule.
 
 **No queueing this fire.** Backstop will drive in 7 min.
 
+### Loop fire 79 — 2026-04-29 21:09 PT — 🟡 v10 training NOW WORKS but bench_eval was returning v9 archive → all v10 runs ended `unrated`. Era filter shipped + worker restart. First v10 champions should bootstrap on next karp cells.
+
+**State after fire 78 fix.** Three new v10 sweeps queued by backstop after the
+opponent_pool_mode YAML fix:
+
+| label | model | status | dur | rate | result |
+|---|---|---|---|---|---|
+| `karpv2-260429-2045-n_envs-lo` | v10 | done | 5.2m | **0.844 vs random_legal** | unrated 🤔 |
+| `karpv2-260429-2045-n_envs-mid` | v10 | failed | 11.1m | — | httpx ReadTimeout (transient) |
+| `karpv2-260429-2045-n_envs-hi` | v10 | done | 16.8m | **0.774 vs random_legal** | unrated 🤔 |
+
+🟡 **Training works under v10.** Both done runs hit 77-84% rate vs random_legal —
+strong fresh-init baseline. But both ended in `elo_status=unrated` with zero
+bench games. The opponent_pool_mode + leaderboard_bias fix worked for the
+training path; bench_eval was the remaining bug.
+
+**Root cause for unrated v10 runs.** `workers/bench_eval.py:_get_archive()`
+returned **ALL** champions regardless of arch_era. With 30+ v9 champions in
+the table, a v10 run's bench sweep:
+1. Sees archive_size = 30+
+2. Skips bootstrap gate (only triggers when size < `min_archive_for_gate=3`)
+3. Goes to archive sweep
+4. Tries to load v9 weights into v10 architecture
+5. Crashes silently → run stays unrated
+
+**Fix shipped (`2ef2b59`) and pulled.** Era filter in `_get_archive()` and
+`_most_recent_champion()`:
+```sql
+SELECT ... FROM champions WHERE arch_era = %s
+```
+Each era now has its own self-contained archive. v10 starts with 0 champions
+(era-filtered) → bootstrap path triggers on every v10 run until 3 champions
+exist. Then archive sweep kicks in with v10-only opponents.
+
+**Worker restarted on PaulLinux** to pick up the new code. Killed lr-lo
+(was 5 min into training, no data lost).
+
+**Current queue:**
+```
+karpv2-260429-2104-lr-mid   v10  running  s=04:09:57
+karpv2-260429-2104-lr-hi    v10  running  s=04:11:38
+```
+(Two cells running simultaneously — Mac + PaulLinux both pulling karp work.)
+
+**Expected next ~30 min:**
+1. lr-mid / lr-hi finish training (5 min cells under v10)
+2. Bench_eval runs the **bootstrap gate** (vs random_legal, 30 games, threshold 70%)
+3. Pass → first v10 champion archived
+4. Subsequent runs see archive_size=1 (still < 3) → bootstrap again → archive
+5. After 3 v10 champions, normal archive sweep + promotion logic engages
+6. We can flip `opponent_pool_mode` and `leaderboard_bias` back ON in YAML
+
+**Two unrated v10 runs from this fire (n_envs-lo at 0.844, n_envs-hi at 0.774)
+are NOT lost.** They have weights stored. Could trigger bench_eval CLI on them
+manually after we have a couple of v10 champions, OR just accept that the
+new sweeps will produce equivalent baseline data.
+
+**No queueing this fire.** Letting the era-filtered bootstrap path do its job.
+
+## Code changes during loop
+
 **gae_lambda sweep (last v9 data) — partial:**
 
 | label | swept | dur | Elo | n | notes |
