@@ -226,8 +226,8 @@
             <div class="stat-label">total ticks</div>
           </div>
           <div class="card">
-            <div class="stat">${fmtDuration(run.wall_ms)}</div>
-            <div class="stat-label">wall</div>
+            <div class="stat">${fmtDurationShort(run.budget_ms)}</div>
+            <div class="stat-label">budget</div>
           </div>
         </div>
 
@@ -238,7 +238,7 @@
             <div class="stat-label" style="margin-top:10px;">finished</div><div>${fmtTime(run.finished_at)}</div>
           </div>
           <div class="card">
-            <div class="stat-label">budget</div><div>${fmtDuration(run.budget_ms)}</div>
+            <div class="stat-label">elapsed</div><div>${fmtDuration(run.wall_ms)}</div>
             <div class="stat-label" style="margin-top:10px;">device</div><div class="mono">${esc(run.result?.device ?? '—')}</div>
           </div>
           <div class="card">
@@ -450,8 +450,11 @@
         }
       };
 
-      renderOne('chart-win',    ['win_rate_vs_leaderboard', 'win_rate'],
-                { yLabel: 'win rate', yMin: 0, yMax: 1, yPct: true });
+      // win_rate / draw_rate / loss_rate together — see if a stalled cell is
+      // turtling (high draw_rate) vs actually losing (high loss_rate).
+      // Older runs lack draw_rate/loss_rate; the chart auto-skips missing keys.
+      renderOne('chart-win',    ['win_rate_vs_leaderboard', 'win_rate', 'draw_rate', 'loss_rate'],
+                { yLabel: 'rate', yMin: 0, yMax: 1, yPct: true });
       renderOne('chart-loss',   ['value_loss', 'entropy_loss'],
                 { yLabel: 'loss' });
       renderOne('chart-signal', ['policy_loss', 'approx_kl'],
@@ -1598,7 +1601,7 @@
           statEls[5].textContent = String(u || '—');
           statEls[6].textContent = ticksPerMin(sps);
           statEls[7].textContent = fmtBig(tt);
-          statEls[8].textContent = run.wall_ms ? fmtDurationShort(run.wall_ms) : '—';
+          statEls[8].textContent = run.budget_ms ? fmtDurationShort(run.budget_ms) : '—';
         }
         // Refresh charts with the latest live log.
         await refreshCharts(signedUrl(run.log_url), chartIds, failAllCharts, run);

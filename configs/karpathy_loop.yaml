@@ -195,7 +195,11 @@ sweep_axes:
     cells:
       - { label: "lo",  value: 512  }
       - { label: "mid", value: 1024 }
-      - { label: "hi",  value: 2048 }
+      - { label: "hi",  value: 1536 }   # 2026-04-29: capped from 2048 — that
+                                        # OOMs on the 8 GiB GPU. Worker process
+                                        # already takes ~7 GiB resident; the
+                                        # extra rollout buffer at 2048 envs
+                                        # (2x more than 1024) tips it over.
 
   - axis: "gamma"
     cells:

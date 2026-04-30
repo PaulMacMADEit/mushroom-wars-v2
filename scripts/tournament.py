@@ -43,7 +43,7 @@ from sim.envs.opponents import random_legal_opponent_batched
 from sim.state import State, empty_state
 from training.agent import PPOAgent
 from training.encoder import OBS_DIM, encode_obs
-from training.net import ActorCritic, infer_body_dim
+from training.net import ActorCritic, infer_body_dim, infer_obs_dim
 from training.obs_norm import RunningNorm
 
 
@@ -78,9 +78,12 @@ def _resolve_supabase_run(run_id: str, device: torch.device):
 
 
 def _load_policy(path: str | Path, device: torch.device):
-    """Returns ('neural', agent, obs_norm) or ('random_legal', None, None) or
-    ('noop', None, None). For neural, agent is a PPOAgent; obs_norm is a
-    RunningNorm (or None).
+    """Returns ('neural', agent, obs_norm, encode_fn) or ('random_legal',
+    None, None, None) or ('noop', None, None, None). For neural, agent is a
+    PPOAgent; obs_norm is a RunningNorm (or None); encode_fn is the encoder
+    that was current when this checkpoint was saved (v9.0 for legacy, v10
+    for new) — caller uses it instead of the bare `encode_obs` so cross-
+    version matches don't feed v10-shape obs into a v9.0 net.
 
     `path` accepts:
       - 'random_legal' or 'noop' (literal opponent names)
@@ -88,9 +91,9 @@ def _load_policy(path: str | Path, device: torch.device):
       - an experiment dir path (containing weights.pt + obs_norm.pt)
     """
     if path == "random_legal":
-        return ("random_legal", None, None)
+        return ("random_legal", None, None, None)
     if path == "noop":
-        return ("noop", None, None)
+        return ("noop", None, None, None)
 
     # If it looks like a UUID or short hex prefix, try Supabase first.
     is_uuid_like = (
@@ -131,20 +134,38 @@ def _load_policy(path: str | Path, device: torch.device):
 
     if not Path(weights_path).exists():
         raise FileNotFoundError(f"weights.pt not found at {weights_path}")
-    state_dict = torch.load(str(weights_path), map_location=device, weights_only=True)
+    raw = torch.load(str(weights_path), map_location=device, weights_only=True)
     # 2026-04-29 fire 80: v10 trainer wraps weights as {state_dict, encoder_version}.
-    # v9 saved a flat state_dict. Unwrap if needed for backward compat.
-    if isinstance(state_dict, dict) and "state_dict" in state_dict and "encoder_version" in state_dict:
-        state_dict = state_dict["state_dict"]
+    # v9 saved a flat state_dict (no version stamp).
+    if isinstance(raw, dict) and "state_dict" in raw and "encoder_version" in raw:
+        state_dict      = raw["state_dict"]
+        encoder_version = raw["encoder_version"]
+    else:
+        from training.encoders import DEFAULT_ENCODER_VERSION
+        state_dict      = raw
+        encoder_version = DEFAULT_ENCODER_VERSION
+    from training.encoders import get_encoder
+    encoder_entry = get_encoder(encoder_version)
     body_dim = infer_body_dim(state_dict)
-    net = ActorCritic(body_dim=body_dim)
+    obs_dim  = infer_obs_dim(state_dict)
+    if obs_dim != encoder_entry.obs_dim:
+        raise ValueError(
+            f"checkpoint trunk obs_dim={obs_dim} but encoder {encoder_version!r} "
+            f"expects {encoder_entry.obs_dim} — version mismatch"
+        )
+    # 2026-04-29: must size the net to the checkpoint's actual obs_dim — not
+    # the current OBS_DIM constant — or v9.0 (1002) ↔ v10 (1008) cross-version
+    # matches crash with `size mismatch for trunk.0.weight`. The encoder is
+    # dispatched per-checkpoint so a v9 net gets fed v9-shape obs.
+    net = ActorCritic(obs_dim=obs_dim, body_dim=body_dim)
     net.load_state_dict(state_dict)
     agent = PPOAgent(net, device=device)
     obs_norm = None
     if obs_norm_p and Path(obs_norm_p).exists():
-        obs_norm = RunningNorm(OBS_DIM)
+        # File shape wins on load; the constant just sets a placeholder.
+        obs_norm = RunningNorm(obs_dim)
         obs_norm.load(str(obs_norm_p))
-    return ("neural", agent, obs_norm)
+    return ("neural", agent, obs_norm, encoder_entry.encode)
 
 
 def _state_to_obs_dict_for_player(state: State, mask: np.ndarray, player: int) -> dict:
@@ -213,8 +234,14 @@ def _decode_action_to_packed(idx: int, out: np.ndarray):
 
 
 def _pick_actions(kind: str, agent, obs_norm, states: list[State],
-                  player: int, rng: np.random.Generator) -> np.ndarray:
-    """Returns (n_envs,) flat action indices for the given player."""
+                  player: int, rng: np.random.Generator,
+                  encode_fn=None) -> np.ndarray:
+    """Returns (n_envs,) flat action indices for the given player.
+
+    `encode_fn` is the encoder matching this checkpoint's version (v9.0 vs
+    v10). Falls back to the current encoder for back-compat with callers
+    that don't thread the version (random_legal/noop don't care).
+    """
     n = len(states)
     actions = np.zeros(n, dtype=np.int64)
 
@@ -232,14 +259,18 @@ def _pick_actions(kind: str, agent, obs_norm, states: list[State],
         return np.full(n, NOOP_INDEX, dtype=np.int64)
 
     # Neural — encode each state with mirroring if P2, run agent.
-    obs_array = np.zeros((n, len(encode_obs(_state_to_obs_dict_for_player(states[0], masks[0], player)))),
+    enc = encode_fn if encode_fn is not None else encode_obs
+    obs_array = np.zeros((n, len(enc(_state_to_obs_dict_for_player(states[0], masks[0], player)))),
                          dtype=np.float32)
     for i, s in enumerate(states):
         d = _state_to_obs_dict_for_player(s, masks[i], player)
-        obs_array[i] = encode_obs(d)
+        obs_array[i] = enc(d)
     if obs_norm is not None:
         obs_array = obs_norm.normalize(obs_array)
-    flat_actions, *_ = agent.act_batch(obs_array, masks)
+    # Eval is deterministic — sampling injects noise that costs win rate vs
+    # weak opponents (random_legal) and creates unstable Elo against strong
+    # ones. Training still samples (entropy_coef handles exploration there).
+    flat_actions, *_ = agent.act_batch(obs_array, masks, deterministic=True)
     return flat_actions.astype(np.int64)
 
 
@@ -262,8 +293,8 @@ def run_match(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    p1_kind, p1_agent, p1_norm = _load_policy(p1, device)
-    p2_kind, p2_agent, p2_norm = _load_policy(p2, device)
+    p1_kind, p1_agent, p1_norm, p1_encode = _load_policy(p1, device)
+    p2_kind, p2_agent, p2_norm, p2_encode = _load_policy(p2, device)
 
     vec = JaxVecEnv(n_envs=games, level_name=level, base_seed=seed)
     rng = np.random.default_rng(seed)
@@ -275,8 +306,8 @@ def run_match(
     t0 = time.perf_counter()
     for tick in range(max_ticks):
         states = vec.snapshot_numpy_states()
-        a1_flat = _pick_actions(p1_kind, p1_agent, p1_norm, states, C.OWNER_P1, rng)
-        a2_flat = _pick_actions(p2_kind, p2_agent, p2_norm, states, C.OWNER_P2, rng)
+        a1_flat = _pick_actions(p1_kind, p1_agent, p1_norm, states, C.OWNER_P1, rng, p1_encode)
+        a2_flat = _pick_actions(p2_kind, p2_agent, p2_norm, states, C.OWNER_P2, rng, p2_encode)
         a_batch = np.zeros((games, 2, ACTION_DIM), dtype=np.int32)
         for i in range(games):
             _decode_action_to_packed(int(a1_flat[i]), a_batch[i, 0])
@@ -435,8 +466,8 @@ def main():
     print(f"P2: {args.p2}")
     print(f"{args.games} games × max {args.max_ticks} ticks on {args.level}")
 
-    p1_kind, p1_agent, p1_norm = _load_policy(args.p1, device)
-    p2_kind, p2_agent, p2_norm = _load_policy(args.p2, device)
+    p1_kind, p1_agent, p1_norm, p1_encode = _load_policy(args.p1, device)
+    p2_kind, p2_agent, p2_norm, p2_encode = _load_policy(args.p2, device)
 
     vec = JaxVecEnv(n_envs=args.games, level_name=args.level, base_seed=args.seed)
     rng = np.random.default_rng(args.seed)
@@ -455,8 +486,8 @@ def main():
     for tick in range(args.max_ticks):
         states = vec.snapshot_numpy_states()
 
-        a1_flat = _pick_actions(p1_kind, p1_agent, p1_norm, states, C.OWNER_P1, rng)
-        a2_flat = _pick_actions(p2_kind, p2_agent, p2_norm, states, C.OWNER_P2, rng)
+        a1_flat = _pick_actions(p1_kind, p1_agent, p1_norm, states, C.OWNER_P1, rng, p1_encode)
+        a2_flat = _pick_actions(p2_kind, p2_agent, p2_norm, states, C.OWNER_P2, rng, p2_encode)
 
         a_batch = np.zeros((args.games, 2, ACTION_DIM), dtype=np.int32)
         for i in range(args.games):

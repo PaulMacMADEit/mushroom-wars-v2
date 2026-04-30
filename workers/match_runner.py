@@ -186,7 +186,10 @@ def _play_one_game(
                     diag=diag,
                 )
                 return int(action)
-            return int(p1_agent.act_batch(x[None, :], m[None, :])[0][0])
+            # Eval is deterministic — sampling injects noise that costs win
+            # rate vs weak opponents and creates unstable Elo against strong
+            # ones. Training still samples (entropy_coef handles exploration).
+            return int(p1_agent.act_batch(x[None, :], m[None, :], deterministic=True)[0][0])
         # Baseline: sample from valid actions for P1.
         legal_idx = np.where(m)[0]
         return int(env._rng.choice(legal_idx)) if legal_idx.size else 0

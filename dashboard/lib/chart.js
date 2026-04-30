@@ -14,7 +14,9 @@ const PALETTE = {
   entropy_loss:       '#34d399',  // green
   approx_kl:          '#fbbf24',  // amber
   mean_reward:        '#c084fc',  // purple
-  win_rate:                '#6b7280',  // gray (secondary — vs training opponent)
+  win_rate:                '#10b981',  // green (W of WDL — secondary, vs training opponent)
+  draw_rate:               '#9ca3af',  // gray  (D of WDL — turtling / mutual stall)
+  loss_rate:               '#ef4444',  // red   (L of WDL — actually losing)
   win_rate_vs_leaderboard: '#f472b6',  // pink (primary — vs top-N champion archive)
   episodes_completed:      '#22d3ee',  // cyan
   pool_size:               '#a78bfa',  // violet

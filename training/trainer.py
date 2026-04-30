@@ -417,13 +417,18 @@ class PPOTrainer:
             for i in range(N):
                 if done[i]:
                     if terminal_phase is not None:
-                        won = bool(int(terminal_phase[i]) == 1)
+                        # PHASE_PLAYING=0, P1_WINS=1, P2_WINS=2, DRAW=3.
+                        phase = int(terminal_phase[i])
                     else:
-                        won = bool(self._ep_return[i] > 0.5)
+                        # Reward-sum proxy: episode return >0.5 → win, <-0.5
+                        # → loss, else draw. Matches the v1.3+ reward shape
+                        # where only terminal events drive |reward| past 0.5.
+                        r = float(self._ep_return[i])
+                        phase = 1 if r > 0.5 else (2 if r < -0.5 else 3)
                     self._completed_episodes.append((
                         float(self._ep_return[i]),
                         int(self._ep_length[i]),
-                        won,
+                        phase,
                     ))
                     self._ep_return[i] = 0.0
                     self._ep_length[i] = 0
@@ -631,7 +636,10 @@ class PPOTrainer:
             metrics["episodes_completed"]  = len(ep)
             metrics["mean_episode_return"] = float(returns.mean())
             metrics["mean_episode_length"] = float(np.mean([e[1] for e in ep]))
-            metrics["win_rate"]            = float(np.mean([e[2] for e in ep]))
+            phases = np.asarray([e[2] for e in ep], dtype=np.int32)
+            metrics["win_rate"]            = float((phases == 1).mean())
+            metrics["loss_rate"]           = float((phases == 2).mean())
+            metrics["draw_rate"]           = float((phases == 3).mean())
             # Min/max/p10/p90 bands. Mean alone hides variance collapse —
             # AlphaStar Nature paper plots min/max bands for this reason.
             metrics["episode_return_min"]  = float(returns.min())

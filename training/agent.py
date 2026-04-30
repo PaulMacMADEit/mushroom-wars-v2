@@ -138,6 +138,7 @@ class PPOAgent:
         self,
         obs,
         mask,
+        deterministic: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Factored sampling. Returns six numpy arrays:
           action (N,)   — flat env action index
@@ -151,6 +152,11 @@ class PPOAgent:
         (zero-copy via DLPack on the same CUDA device), or torch tensors.
         The last two paths skip a host roundtrip when called from the
         fused rollout under SIM_BACKEND=jax on CUDA.
+
+        `deterministic=True` swaps `dist.sample()` for argmax at each head —
+        used for evaluation matches where exploration noise is just noise.
+        Training keeps the default (stochastic) so on-policy gradients stay
+        unbiased.
         """
         obs_t  = _to_torch(obs,  torch.float32, self.device)
         mask_t = _to_torch(mask, torch.bool,    self.device)
@@ -161,7 +167,7 @@ class PPOAgent:
         (src_mask,) = _decompose_masks(mask_t)
         src_logits = self.net.source_logits(body).masked_fill(~src_mask, MASK_FILL)
         src_dist = Categorical(logits=src_logits)
-        src = src_dist.sample()
+        src = src_logits.argmax(dim=-1) if deterministic else src_dist.sample()
         logp_src = src_dist.log_prob(src)
 
         type_logits, tgt_logits = self.net.cond_logits(body, src)
@@ -169,13 +175,13 @@ class PPOAgent:
         _, type_mask = _decompose_masks(mask_t, src=src)
         type_logits = type_logits.masked_fill(~type_mask, MASK_FILL)
         type_dist = Categorical(logits=type_logits)
-        type_ = type_dist.sample()
+        type_ = type_logits.argmax(dim=-1) if deterministic else type_dist.sample()
         logp_type = type_dist.log_prob(type_)
 
         _, _, tgt_mask = _decompose_masks(mask_t, src=src, type_=type_)
         tgt_logits = tgt_logits.masked_fill(~tgt_mask, MASK_FILL)
         tgt_dist = Categorical(logits=tgt_logits)
-        tgt = tgt_dist.sample()
+        tgt = tgt_logits.argmax(dim=-1) if deterministic else tgt_dist.sample()
         logp_tgt = tgt_dist.log_prob(tgt)
 
         logp = logp_src + logp_type + logp_tgt
