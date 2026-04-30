@@ -92,6 +92,10 @@ def build_net_for_model(model_id: str, obs_size: int, num_actions: int) -> Actor
         "v9.0-256":      (OBS_DIM, ACTION_SPACE_SIZE, _mk(256)),
         "v9.0-512":      (OBS_DIM, ACTION_SPACE_SIZE, _mk(512)),
         "v9.0-1024":     (OBS_DIM, ACTION_SPACE_SIZE, _mk(1024)),
+        # v10-1024: encoder bumped 1002 → 1008 (drop type_oh, add prod /
+        # wasted / share_live / reward_delta / 5-step action history /
+        # per-bldg event-explicit). Same chained heads, body=1024 unchanged.
+        "v10-1024":      (OBS_DIM, ACTION_SPACE_SIZE, _mk(1024)),
     }
     entry = KNOWN.get(model_id)
     if entry is None:
