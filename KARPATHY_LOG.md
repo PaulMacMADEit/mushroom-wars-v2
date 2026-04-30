@@ -3668,6 +3668,80 @@ shape across 6 fires now. Unwavering.
 **Queued (this fire):** gamma sweep ({0.95, 0.97, 0.99}) — next round-robin
 axis after n_envs. 3 cells.
 
+### Loop fire 76 — 2026-04-29 19:36 PT — 🟢🟢 lr1e4 backfilled to 1112 (+17 ABOVE parent at n=27); chain RESUMED from lr1e4 root with lr=1e-4 inherited; gamma-hi (0.99) wins this round
+
+**State.** Worker active. Karp queue: gae_lambda-lo running, gae_lambda-mid+hi
+queued, **chain-cont-791d76dd-01 queued by this fire** = depth 4.
+
+**🟢🟢 lr1e4 cont CROSSED THE PARENT.**
+
+| run | config | Δ vs parent (1095) | n | trajectory |
+|---|---|---|---|---|
+| **diag-lr1e4** | lr=1e-4, rotation ON | **+17 ⭐** | 27 | 1068→1073→1078→1085→**1112** |
+| chain-01 | lr=1e-3, rotation ON | -10 | 39 | 1085→1076→1074→1068→**1084** (back up) |
+| diag-norot | rotation OFF | -34 | 15 | unchanged |
+
+**Decisive: lr=1e-4 + rotation didn't just match the parent — it BEAT it by
+17 Elo.** The earlier "chain regression" interpretation was wrong because of
+small-n bench variance. With proper backfill (n≥24), lr=1e-4 is a clean win.
+
+The original chain config (lr=1e-3) settled at -10 — mild regression. Still
+worse than lr=1e-4 by 27 Elo. lr decisively the right lever.
+
+**Action: resumed chain from lr1e4 root.** New chain rooted at `791d76dd`
+(the 1112-Elo lr1e4-diag). Inherits all hyperparams unchanged including the
+proven lr=1e-4. First batch queued:
+
+```
+karpv2-cont-791d76dd-01  (id 935e600d)
+parent       = 791d76dd (lr1e4 diagnostic, Elo 1112)
+budget       = 1200s
+hyperparams  = lr=1e-4, update_epochs=8, opp_pool_mode=rotate_per_update,
+               reward_v=2 (all inherited from parent which inherited from
+               original 0791c618)
+```
+
+Chain helper called with `--max-batches 4`, so up to 80 min of additional
+training will queue automatically as each batch completes. Each loop fire
+will check + queue next.
+
+**gamma sweep complete:**
+
+| label | swept | dur | Elo | n | PFSP |
+|---|---|---|---|---|---|
+| `karpv2-...1905-gamma-lo` | 0.95 | 6.0m | 987.3 | 15 | 0.660 |
+| `karpv2-...1905-gamma-mid` | 0.97 (baseline) | 13.3m | 999.7 | 15 | 0.718 |
+| `karpv2-...1905-gamma-hi` | 0.99 | 20.5m | **1007.0** ⭐ | 15 | 0.722 |
+
+Mild monotonic improvement with higher discount factor. Spread is small (20
+Elo across the cells) but consistent direction. Gamma=0.99 worth considering
+as new baseline candidate after a confirmation run, especially given the
+rollout-density wins (rs=4, n_envs=lo, mb=lo) imply the agent benefits from
+shorter-horizon updates with more long-tail credit assignment.
+
+**Karp leaderboard (post-backfill):**
+
+| run | elo | n | when |
+|---|---|---|---|
+| `karpv2-diag-0791c618-lr1e4-01` | **1111.99** ⭐ | 27 | lr1e4 cont (NEW #1) |
+| `karpv2-260429-1448-cont-update_epochs-hi-20min` | 1094.7 | 37 | parent (former #1) |
+| `karpv2-cont-0791c618-01` | 1084.5 | 39 | chain-01 (lr=1e-3 baseline) |
+| `karpv2-260429-1600-reward_version-hi` | 1078.3 | 18 | fire 70 |
+| `karpv2-...1733-rollout_steps-lo` | 1065.2 | 15 | fire 73 |
+
+**lr1e4 is now the strongest karpv2 ever.** Gap to cron-era champion
+`cron-260428-0407-phase2_selfplay-med-00` (1147 Elo) closed from -52 to **-35**.
+
+**Review games (most-recent rated, gamma-lo 987):**
+
+| game | tag | ticks | decisions | noop% | entropy | value drop | flags |
+|---|---|---|---|---|---|---|---|
+| `5a128e6a` | WIN | 38 | 19 | 26% | 3.34 | -6.38 | ok |
+| `dd1dc99c` | LOSS | 33 | 17 | 47% | 3.76 | +6.23 | ok |
+
+LOSS noop 47% (mild), value-drop +6.23 (consistent with critic mis-cal pattern).
+No degenerate behavior.
+
 ## Code changes during loop
 
 ### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
