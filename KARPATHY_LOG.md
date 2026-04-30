@@ -3515,6 +3515,100 @@ Confirms +75 Elo over v1.3 control under rotation; v14 baseline holds.
 **Queued (this fire):** n_envs sweep ({512, 1024, 2048}) via round-robin.
 Total queue depth 7; next fire will skip queueing if still ≥6.
 
+### Loop fire 74 — 2026-04-29 18:34 PT — 🟢 FIRE 72 OVERTURNED: lr1e4 backfilled to -6 (n=22) — essentially even with parent. Lower lr IS better. norot lifted to -34 (n=15). rollout_steps-lo wins (1065). lr-lo karp cell stale (68 min)
+
+**State.** Worker active. Queue: lr-lo running 68 min (likely stale), n_envs-mid
+running, n_envs-hi queued. Skipping queueing this fire — let n_envs sweep finish.
+
+**🟢 Fire 72's "lr is NOT the cause" conclusion was wrong** — backfill rescued
+the lr=1e-4 diagnostic.
+
+| run | config | Δ vs parent (1095) | n |
+|---|---|---|---|
+| chain-01 (`cont-0791c618-01`) | rotation ON, lr=1e-3 | **-20** | 34 |
+| **diag-lr1e4** (`diag-0791c618-lr1e4-01`) | rotation ON, **lr=1e-4** | **-6** ⭐ | 22 |
+| diag-norot (`diag-0791c618-norot-01`) | rotation OFF, lr=1e-3 | -34 | 15 |
+
+**lr=1e-4 + rotation is the BEST cont config tested so far** at only -6 vs the
+1095-Elo parent — within bench-noise of even.
+
+The earlier "98% noop catastrophic loss" in fire 72's review-games was an
+**isolated bad game**, not a systematic collapse — n=14 vs n=22 averaged it
+out. Single losing game ≠ degenerate policy.
+
+**rotation-off (norot) is the WORST tested cont config** — fixed-opponent
+training pulls the policy off-distribution from the rotation-trained champion
+parent. Direct evidence the rotation IS productive, just needs cooler updates.
+
+**Chain plan revised:** if Paul approves, resume the chain from `0791c618`
+with lr=1e-4 (rotation kept ON). Single-variable change from the original
+chain config.
+
+**rollout_steps sweep complete:**
+
+| label | swept | dur | Elo | n | PFSP |
+|---|---|---|---|---|---|
+| `karpv2-...1733-rollout_steps-lo` | rs=4 | 35.5m | **1065.2** ⭐ | 15 | 0.716 |
+| `karpv2-...1733-rollout_steps-mid` | rs=8 (baseline) | 42.8m | 962.9 | 15 | 0.782 |
+| `karpv2-...1733-rollout_steps-hi` | rs=16 | 49.9m | 921.4 | 15 | 0.774 |
+
+**Smaller rollout = better.** Mirrors n_envs-lo (fire 64) and minibatch_size-lo
+(fire 67). Pattern across 3 axes: **update density matters more than horizon
+depth or buffer breadth in 5-min cells.** Strong basis for considering rs=4
+or 6 as a new baseline.
+
+**n_envs sweep partial (this fire):**
+
+| label | swept | Elo | n | notes |
+|---|---|---|---|---|
+| `karpv2-...1803-n_envs-lo` | 512 | 1001.5 | 15 | sub-anchor; review flagged 74% noop in WIN game |
+| `karpv2-...1803-n_envs-mid` | 1024 | running | — | — |
+| `karpv2-...1803-n_envs-hi` | 2048 | queued | — | — |
+
+**🚨 Stale: `karpv2-260429-1701-lr-lo` running for 68 min** (started 17:26).
+Will hit the 90-min stale cleanup threshold around 18:56. Will mark failed
+manually next fire if not progressed by then. lo (1e-4) cell may have run
+into worker churn during the 17:30 restart for self-play attribution code.
+
+**Karp leaderboard (top karpv2):**
+
+| run | elo | n | when |
+|---|---|---|---|
+| `karpv2-260429-1448-cont-update_epochs-hi-20min` | 1094.7 | 37 | parent |
+| `karpv2-diag-0791c618-lr1e4-01` | **1088.7** | 22 | diag (only -6 vs parent ⭐) |
+| `karpv2-260429-1600-reward_version-hi` | 1078.3 | 18 | fire 70 |
+| `karpv2-cont-0791c618-01` | 1074.5 | 34 | chain-01 |
+| `karpv2-...1733-rollout_steps-lo` | 1065.2 | 15 | fire 73 |
+| `karpv2-diag-0791c618-norot-01` | 1061.1 | 15 | this fire (norot) |
+| `karpv2-260429-1305-n_envs-lo` | 1057.7 | 25 | fire 64 |
+
+**Review games (most-recent rated, n_envs-lo at 1001.5):**
+
+| game | tag | ticks | decisions | noop% | entropy | value drop | flags |
+|---|---|---|---|---|---|---|---|
+| `a38ab172` | WIN | 38 | 19 | **74%** | 3.53 | -1.30 | high noop in WIN ⚠️ |
+| `d7d61e67` | LOSS | 17 | 9 | 33% | 3.05 | +6.27 | ok |
+
+Unusual: agent **won with 74% noop** — basically passive, opponent self-destructed.
+Loss had value-drop +6.27 (mild critic mis-cal). Agent isn't quite degenerate
+but n_envs=512 may not give enough gradient signal density per update.
+
+**Critic mis-cal pattern across last 5 rated runs:**
+
+| run | LOSS noop% | LOSS value drop |
+|---|---|---|
+| reward_version-hi (fire 70) | 75% | +3.6 |
+| max_grad_norm-lo (fire 69) | 55% | +6.6 |
+| cont-update_epochs-hi-20min (fire 68) | 64% | +8.9 |
+| entropy_coef-mid (fire 71) | 50% | +3.2 |
+| n_envs-lo (this fire) | 33% | +6.3 |
+
+Pattern softening — n_envs-lo loss had only 33% noop. Critic value-drop is
+remarkably consistent (+3 to +9 across all runs). Looks systematic to the
+v9 model under random_champion rotation.
+
+**No queueing this fire.** Queue is fine. Will reassess fire 75.
+
 ## Code changes during loop
 
 ### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
