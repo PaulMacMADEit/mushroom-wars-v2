@@ -55,6 +55,9 @@ _REWARD_DRAW_VEC        = jnp.asarray(C.REWARD_DRAW_BY_VERSION,        dtype=jnp
 _REWARD_SPEED_BONUS_VEC = jnp.asarray(C.REWARD_SPEED_BONUS_BY_VERSION, dtype=jnp.float32)
 _REWARD_TICK_BUILDINGS_COEF_VEC = jnp.asarray(C.REWARD_TICK_BUILDINGS_COEF_BY_VERSION, dtype=jnp.float32)
 _REWARD_TICK_UNITS_COEF_VEC     = jnp.asarray(C.REWARD_TICK_UNITS_COEF_BY_VERSION,     dtype=jnp.float32)
+# v1.5+ asymmetric bonuses (zero for v1.2/v1.3/v1.4).
+_REWARD_ENEMY_CAPTURE_BONUS_VEC = jnp.asarray(C.REWARD_ENEMY_CAPTURE_BONUS_BY_VERSION, dtype=jnp.float32)
+_REWARD_ENEMY_LOSS_PENALTY_VEC  = jnp.asarray(C.REWARD_ENEMY_LOSS_PENALTY_BY_VERSION,  dtype=jnp.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -365,14 +368,25 @@ def _resolve_one_target(
     changed = alive_mask & (new_owner_i32 != owner_i32)
     # Version-indexed reward lookups (per-state reward_version).
     rv = reward_version.astype(jnp.int32)
-    r_capture_v = _REWARD_CAPTURE_VEC[rv]
-    r_loss_v    = _REWARD_LOSS_VEC[rv]
+    r_capture_v       = _REWARD_CAPTURE_VEC[rv]
+    r_loss_v          = _REWARD_LOSS_VEC[rv]
+    r_enemy_cap_v     = _REWARD_ENEMY_CAPTURE_BONUS_VEC[rv]
+    r_enemy_loss_v    = _REWARD_ENEMY_LOSS_PENALTY_VEC[rv]
+    # Base capture/loss (any ownership change of an alive slot).
     r_capture_p1 = jnp.where(changed & (new_owner_i32 == C.OWNER_P1), r_capture_v, jnp.float32(0.0))
     r_capture_p2 = jnp.where(changed & (new_owner_i32 == C.OWNER_P2), r_capture_v, jnp.float32(0.0))
     r_loss_p1    = jnp.where(changed & (owner_i32     == C.OWNER_P1), r_loss_v,    jnp.float32(0.0))
     r_loss_p2    = jnp.where(changed & (owner_i32     == C.OWNER_P2), r_loss_v,    jnp.float32(0.0))
-    r1_delta = r_capture_p1 + r_loss_p1
-    r2_delta = r_capture_p2 + r_loss_p2
+    # v1.5 asymmetric bonus: only when ownership transitions DIRECTLY between
+    # the two players (excludes mutual wipeout to neutral).
+    p1_took_from_p2 = changed & (new_owner_i32 == C.OWNER_P1) & (owner_i32 == C.OWNER_P2)
+    p2_took_from_p1 = changed & (new_owner_i32 == C.OWNER_P2) & (owner_i32 == C.OWNER_P1)
+    r_enemy_cap_p1  = jnp.where(p1_took_from_p2, r_enemy_cap_v,  jnp.float32(0.0))
+    r_enemy_cap_p2  = jnp.where(p2_took_from_p1, r_enemy_cap_v,  jnp.float32(0.0))
+    r_enemy_loss_p1 = jnp.where(p2_took_from_p1, r_enemy_loss_v, jnp.float32(0.0))   # P1 lost to P2
+    r_enemy_loss_p2 = jnp.where(p1_took_from_p2, r_enemy_loss_v, jnp.float32(0.0))   # P2 lost to P1
+    r1_delta = r_capture_p1 + r_loss_p1 + r_enemy_cap_p1 + r_enemy_loss_p1
+    r2_delta = r_capture_p2 + r_loss_p2 + r_enemy_cap_p2 + r_enemy_loss_p2
 
     return new_garrison_i32.astype(jnp.int16), new_owner_i32.astype(jnp.int8), r1_delta, r2_delta
 

@@ -101,7 +101,10 @@ training_opponent:
 # ---------------------------------------------------------------------------
 baseline_hyperparams:
   # ----- Rollout shape -----
-  n_envs:        1024              # parallel envs in the vec env
+  n_envs:        1800              # 2026-04-30 fire 99: bumped 1024 -> 1800 per Paul.
+                                   # cont-03 (Step 1 base) was at 1800; lr sweep at 1024 hit
+                                   # 84.4% in 5 min. More parallel diversity should help with
+                                   # the level_mix wandering at smaller batches.
   vec_mode:      "sync"            # sync (in-process) or async (subprocs)
   rollout_steps: 8                 # 2026-04-29 fire 61: cut hard from 64 → 8. Aggressive.
                                    # Under v2 (vs-champion @ ~322 sps) with 5-min cells:
@@ -175,11 +178,15 @@ baseline_hyperparams:
   #   v1.2 (0): legacy; capture 0.10, win 1.0, no speed bonus
   #   v1.3 (1): 5x WIN/LOSE, halved capture, draw -0.5, 4x speed bonus
   #   v1.4 (2): v1.3 + per-tick shaping for buildings_owned + units_held deltas
+  #   v1.5 (3): v1.4 + asymmetric capture/loss (enemy 4× neutral)
   # `reward_version` is canonical (overrides reward_v13 when ≥0).
-  # 2026-04-29: v14 baked as new regime default — produces active varied policies
-  # (fire 55: 19/24 wins, full 4-action vocabulary in losses).
+  # 2026-04-30 fire 99: bumped to v1.5. v1.4 produced 37% timeout_rate on
+  # Step 2 (agent dominates territory but never finishes games). v1.5 gives
+  # explicit asymmetric signal: capture from enemy = +0.20 (4× neutral's
+  # 0.05), lose to enemy = -0.20 (4× neutral's -0.05). Should attack the
+  # "dominate-don't-finish" equilibrium directly.
   reward_v13: true
-  reward_version: 2
+  reward_version: 3
 
   # ----- Level distribution -----
   # NOTE: level_name and level_mix are NOT set here. They are read from

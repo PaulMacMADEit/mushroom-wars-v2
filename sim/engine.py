@@ -302,14 +302,27 @@ def _resolve_arrivals(
             rv = int(state.reward_version)
             r_capture = C.REWARD_CAPTURE_BY_VERSION[rv]
             r_loss    = C.REWARD_LOSS_BY_VERSION[rv]
+            # v1.5+: extra bonus/penalty when ownership transitions directly
+            # between the two players (not via mutual wipeout to neutral).
+            r_enemy_capture_bonus = C.REWARD_ENEMY_CAPTURE_BONUS_BY_VERSION[rv]
+            r_enemy_loss_penalty  = C.REWARD_ENEMY_LOSS_PENALTY_BY_VERSION[rv]
+
             if new_owner == C.OWNER_P1:
                 r1 += r_capture
+                if owner_before == C.OWNER_P2:    # P1 captured FROM enemy (P2)
+                    r1 += r_enemy_capture_bonus
             elif new_owner == C.OWNER_P2:
                 r2 += r_capture
+                if owner_before == C.OWNER_P1:    # P2 captured FROM enemy (P1)
+                    r2 += r_enemy_capture_bonus
             if owner_before == C.OWNER_P1:
                 r1 += r_loss
+                if new_owner == C.OWNER_P2:       # P1 lost TO enemy (P2)
+                    r1 += r_enemy_loss_penalty
             elif owner_before == C.OWNER_P2:
                 r2 += r_loss
+                if new_owner == C.OWNER_P1:       # P2 lost TO enemy (P1)
+                    r2 += r_enemy_loss_penalty
 
     return r1, r2
 

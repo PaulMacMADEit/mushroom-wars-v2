@@ -4287,6 +4287,70 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### Loop fire 99 --- 2026-04-30 15:57 PT --- Stage 1 SHIPPED. reward v1.5 (asymmetric capture/loss) + n_envs=1800. Worker restarted. v10.2.05-LargeMap-Base-01 running.
+
+**Why this fire is the point.** Base-04's 37% timeout_rate exposed that v1.4 reward shaping rewards "holding territory" but not "killing enemy buildings". Agent learned to dominate map without finishing. v1.5 fixes that with explicit asymmetry: enemy capture = 4× neutral capture; loss to enemy = 4× loss to neutral.
+
+**Reward v1.5 design (sim/config.py REWARD_VERSION_V15 = 3):**
+
+| event | v1.4 | v1.5 |
+|---|---|---|
+| Capture from neutral | +0.05 | +0.05 |
+| **Capture from enemy** | +0.05 | **+0.20** (4×) |
+| Lost to neutral (mutual wipeout) | -0.05 | -0.05 |
+| **Lost to enemy** | -0.05 | **-0.20** (4×) |
+| Terminal WIN/LOSE/DRAW | 5 / -5 / -0.5 | 5 / -5 / -0.5 |
+| Per-tick shaping coefs | 0.0010 / 0.0002 | 0.0010 / 0.0002 |
+| Speed bonus | 2.0 | 2.0 |
+
+The "lost to enemy" penalty matters as much as the "capture from enemy" bonus — it gives explicit signal that defending against attacks is more important than holding ground.
+
+**Files shipped (Stage 1):**
+
+| file | change |
+|---|---|
+| sim/config.py | added REWARD_VERSION_V15 = 3; extended all *_BY_VERSION tuples to length 4; added REWARD_ENEMY_CAPTURE_BONUS_BY_VERSION + REWARD_ENEMY_LOSS_PENALTY_BY_VERSION (zero for v1.2-v1.4, ±0.15 for v1.5) |
+| sim/engine.py | numpy backend: applies enemy bonus only when ownership transitions DIRECTLY between players (excludes mutual wipeout to neutral) |
+| sim/engine_jax.py | JAX backend: same logic in JIT-compatible jnp.where form |
+| training/trainer.py | reward_version docstring updated for v1.5 |
+| configs/karpathy_loop.yaml | reward_version 2 → 3; n_envs 1024 → 1800 |
+
+**Sanity test passed (test_v15_reward.py):**
+
+    [ok] all reward tables have 4 entries
+    [ok] v1.4 enemy bonus = 0 (back-compat preserved)
+    [ok] v1.5 enemy bonus = +0.15, loss penalty = -0.15
+    [ok] expected v1.5 deltas:
+          capture from enemy   = 0.20
+          capture from neutral = 0.05
+          lost to enemy        = -0.20
+          lost to neutral      = -0.05
+    [ok] JAX engine v1.5 constants loaded
+
+**Current Step 2 chain status (the gamma=0.99 chain):**
+
+| run | rate (overall) | final_wr | timeout |
+|---|---|---|---|
+| lr-lo (5min from cont-03) | 0.662 | 0.844 | 0.156 |
+| Base-01 (5min from lr-lo) | 0.758 | 0.786 | 0.214 |
+| Base-02 (5min from Base-01) | 0.750 | 0.748 | 0.252 |
+
+Plateauing around 75% rate / 25% timeout. v1.5 should attack the timeout.
+
+**Backstop's 4th wasted sweep this session.** Backstop fired again during Stage 1 dev work, queued v10.2.04-LargeMap-n_envs-{lo,mid,hi} as fresh-init (no warm-start). All 3 discarded. Confirms followup TODO: backstop needs to default to warm-start from latest chain head; standing pattern bug.
+
+**v1.5 launch run:**
+
+    v10.2.05-LargeMap-Base-01  (id 9c0bd087)
+    parent      = 81ea318b (v10.2.03-LargeMap-Base-02)
+    budget      = 300s
+    overrides   = reward_version=3 (v1.5), n_envs=1800
+    inherits    = lr=1e-3, gamma=0.99, level_mix=b6 dict, archive_eval off
+
+**Pass criterion for Stage 1:** timeout_rate drops below 20% within 2 batches (v10.2.05-Base-01 + Base-02). If yes, the reward asymmetry hypothesis is validated. If timeout stays at 25%+, hypothesis falsified — would move to Stage 2 (entropy/rollout sweeps) per the plan.
+
+**Next check:** ~16:30 PT. Expected: Base-01 v1.5 result; queue Base-02 if Stage 1 looks promising.
+
 ### Loop fire 98 --- 2026-04-30 15:16 PT --- LR SWEEP DONE: lr=1e-3 wins by a mile (final 84.4%, timeout 16%). gamma=0.99 was the bug. Chain restarted.
 
 **LR sweep results (warm-started from cont-03, 5 min cells, gamma=0.99):**

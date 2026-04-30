@@ -80,11 +80,14 @@ class PPOConfig:
     fused_rollout:        bool  = False
     action_repeat:        int   = 1     # K: env ticks per agent decision under fused
     # Reward scheme. Two ways to set this:
-    #   - reward_version: int   — canonical, supports v1.2(0)/v1.3(1)/v1.4(2)
+    #   - reward_version: int   — canonical. Supports v1.2(0)/v1.3(1)/v1.4(2)/v1.5(3).
     #   - reward_v13: bool      — back-compat shim. True → v1.3, False → v1.2.
-    # If both are set, reward_version wins. v1.4 = v1.3 + per-tick shaping
-    # for buildings_owned and units_held deltas (sim/config.py
-    # REWARD_TICK_*_COEF_BY_VERSION). See KARPATHY_LOG.md fire 21 + 22.
+    # If both are set, reward_version wins.
+    #   v1.4 = v1.3 + per-tick shaping (buildings/units delta).
+    #   v1.5 = v1.4 + asymmetric capture/loss (enemy 4× neutral). Designed to
+    #          break the 37% timeout_rate observed under v1.4 on big maps —
+    #          agent dominates territory but never finishes games. See
+    #          KARPATHY_LOG.md fire 99 (Stage 1 of the timeout-fix plan).
     reward_v13:           bool  = False
     reward_version:       int   = -1     # -1 = unset (use reward_v13)
     # Opponent pool mode (2026-04-29 fire 65). When set, the trainer rotates
