@@ -49,6 +49,19 @@
         <button id="rr-submit" class="btn-primary" style="height:30px;">Queue rerate</button>
         <span id="rr-status" class="muted small"></span>
       </div>
+      <details style="margin-top:12px; padding-top:12px; border-top:1px solid var(--border);">
+        <summary class="muted small" style="cursor:pointer;">⚠️ full rerank from scratch (destructive)</summary>
+        <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end; margin-top:10px;">
+          <div class="muted small" style="max-width:520px;">
+            Resets every rated run's Elo to 1000 + clears bench_vector / pfsp_weight, then runs <code>rate_all_runs</code> for <em>passes</em> waves so the leaderboard rebuilds itself. Reuses the same level / matches / games / max-runs settings above. Frozen <code>champions</code> archive is not touched.
+          </div>
+          <label class="small muted">passes
+            <br><input id="rrf-passes" type="number" min="1" max="5" value="1" style="width:60px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+          </label>
+          <button id="rrf-submit" class="btn-danger" style="height:30px;">Queue full rerank</button>
+          <span id="rrf-status" class="muted small"></span>
+        </div>
+      </details>
     </div>
     <div class="card muted" id="summary">Loading…</div>
 
@@ -297,6 +310,52 @@
         return;
       }
       $rrStatus.innerHTML = `queued <a href="./run.html?id=${esc(data.id)}">${esc(label)}</a> · pickup by any worker accepting admin jobs`;
+    });
+
+    // Full rerank — destructive: resets every rated run's Elo to 1000
+    // before re-running rate_all_runs. Confirm dialog so a misclick can't
+    // wipe the leaderboard. Reuses the level / matches / games / max-runs
+    // inputs above; adds its own "passes" knob.
+    const $rrfSubmit = document.getElementById('rrf-submit');
+    const $rrfStatus = document.getElementById('rrf-status');
+    $rrfSubmit?.addEventListener('click', async () => {
+      const level    = document.getElementById('rr-level').value;
+      const matches  = parseInt(document.getElementById('rr-matches').value, 10);
+      const games    = parseInt(document.getElementById('rr-games').value, 10);
+      const maxRuns  = parseInt(document.getElementById('rr-max-runs').value, 10);
+      const passes   = parseInt(document.getElementById('rrf-passes').value, 10) || 1;
+      if (!level || !matches || !games || !maxRuns) {
+        $rrfStatus.innerHTML = '<span class="error">fill in level / matches / games / max-runs above</span>';
+        return;
+      }
+      const ok = confirm(
+        `FULL RERANK — DESTRUCTIVE\n\n` +
+        `1. Reset Elo to 1000 (and clear bench_vector / pfsp_weight) on EVERY rated run.\n` +
+        `2. Run rate_all_runs ${passes} pass(es) of max_runs=${maxRuns}, matches=${matches}, games=${games} on ${level}.\n\n` +
+        `Frozen champions archive is NOT touched. Existing Elo will be lost. Continue?`
+      );
+      if (!ok) return;
+      const ts = new Date().toISOString().slice(2,16).replace(/[-T:]/g,'').replace(/(\d{6})(\d{4})/, '$1-$2');
+      const label = `rerate-full-${ts}-${level}-m${matches}-g${games}-r${maxRuns}-p${passes}`;
+      $rrfSubmit.disabled = true;
+      $rrfStatus.textContent = 'queueing…';
+      const { data, error } = await sb.from('runs').insert({
+        project: 'mushroom-wars',
+        model_id: 'admin',
+        simulator_id: 'admin',
+        label,
+        status: 'queued',
+        budget_ms: 0,
+        machine: '',
+        launch_at: Date.now(),
+        hyperparams: { kind: 'rerate_full', level, matches, games, max_runs: maxRuns, passes },
+      }).select('id').single();
+      $rrfSubmit.disabled = false;
+      if (error) {
+        $rrfStatus.innerHTML = `<span class="error">${esc(error.message)}</span>`;
+        return;
+      }
+      $rrfStatus.innerHTML = `queued <a href="./run.html?id=${esc(data.id)}">${esc(label)}</a>`;
     });
 
     // -----------------------------------------------------------------

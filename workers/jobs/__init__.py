@@ -6,10 +6,12 @@ dispatches via `dispatch(job, ...)`.
 """
 from . import rerate
 from . import rerate_one
+from . import rerate_full
 
 HANDLERS = {
-    "rerate":     rerate.handle,
-    "rerate_one": rerate_one.handle,
+    "rerate":      rerate.handle,
+    "rerate_one":  rerate_one.handle,
+    "rerate_full": rerate_full.handle,
 }
 
 
