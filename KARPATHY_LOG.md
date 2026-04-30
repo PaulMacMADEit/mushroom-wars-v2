@@ -4033,6 +4033,69 @@ unblocks the admin queue.
 **Holding pattern continues.** Backstop will fire again at 22:45 PT, queue
 next axis (round-robin: rollout_steps → n_envs).
 
+### Loop fire 83 — 2026-04-29 23:13 PT — 🟢 v10 BENCH WORKS! Paul shipped bug 4 fix (ce43c9b) + flipped pfsp_champion (a3a638f). 2 v10 champions archived. First v10 ratings landed.
+
+**State.** Worker active. Queue depth 1: n_envs-mid running.
+
+**🟢 Paul shipped two commits since fire 82:**
+
+| commit | what |
+|---|---|
+| `ce43c9b` | tournament: add v10 obs fields so bench_eval/auto_rate stop crashing — fixes my-flagged bug 4 |
+| `a3a638f` | karp YAML: flip `training_opponent.name` from `random_legal` → `pfsp_champion` now that v10 has archive presence |
+
+The `_state_to_obs_dict_for_player` now populates v10's new keys (arrivals_p1/p2,
+prev_buildings_owner, prev_p1_units_total/p2, last_actions_p1/p2). Paul also
+refactored `_load_policy` to dispatch encoder by checkpoint version
+(v9 vs v10) so cross-version matches work — preserves v9 history while
+enabling v10 bench.
+
+**🟢 First v10 champions:**
+
+| champion | rate-vs-rl | archived |
+|---|---|---|
+| `karpv2-260429-2215-rollout_steps-mid` | 86.7% (bootstrap) | 22:54 PT |
+| `karpv2-260429-2215-rollout_steps-lo` | 90.0% (bootstrap) | 22:54 PT |
+
+Both rated at Elo ~1012 (n=1, will accumulate as more matches happen).
+**rollout_steps-lo is the FIRST v10 champion ever** — and it's the rs=4 cell,
+confirming the "update density wins" pattern from v9 carries to v10 directly.
+
+**rollout_steps-hi** (rs=16): training rate 0.832 > 0.70 bootstrap threshold,
+should have qualified, but stayed `unrated` — likely bench tried to run
+*before* Paul's fix landed. Will re-bench when GPU is free; for now it
+remains in the data set as "trained but not archived."
+
+**🚨 n_envs-hi (rs=2048) failed with CUDA OOM:**
+```
+OutOfMemoryError: CUDA out of memory. Tried to allocate 20.00 MiB.
+GPU 0 has 7.66 GiB total, 50.06 MiB free. Two processes contesting:
+1607257 (160 MiB) + 2556149 (3.30 GiB).
+```
+Two PyTorch processes simultaneously held GPU — likely worker + bench
+process competing. n_envs=2048 doesn't fit when bench is also resident.
+Single-axis flag: **n_envs=2048 is too aggressive for current GPU + bench
+co-residency.** Either lower GPU mem fraction in worker config, or restrict
+n_envs sweep to {512, 1024} until we have a bigger GPU.
+
+**v10 sweep results so far (v10 era only):**
+
+| label | swept | rate | rated? | era |
+|---|---|---|---|---|
+| `karpv2-...2215-rollout_steps-lo` | rs=4 | 0.860 | ⭐ archived (1012 Elo) | v10 |
+| `karpv2-...2215-rollout_steps-mid` | rs=8 | 0.859 | ⭐ archived (1012 Elo) | v10 |
+| `karpv2-...2215-rollout_steps-hi` | rs=16 | 0.832 | unrated (re-bench needed) | v10 |
+| `karpv2-...2245-n_envs-lo` | n=512 | TBD | running | v10 |
+| `karpv2-...2245-n_envs-mid` | n=1024 | TBD | running | v10 |
+| `karpv2-...2245-n_envs-hi` | n=2048 | — | failed (OOM) | v10 |
+
+**Next karp runs will use pfsp_champion** (per Paul's YAML flip). Round-robin
+will continue picking axes; opponents will be drawn PFSP-weighted from the
+v10 archive (currently 2 entries, will grow). This is the v10 equivalent of
+the v9 random_champion regime.
+
+**No queueing this fire.** Backstop is doing its thing. Just observing now.
+
 ## Code changes during loop
 
 **gae_lambda sweep (last v9 data) — partial:**
