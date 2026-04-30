@@ -1604,36 +1604,6 @@
         row.addEventListener("click", () => toggleGlobalExpand(name));
       }
 
-      // PER-BUILDING — selection bar then 22 rows of 32-slot bar piles
-      const bhead = document.createElement("div");
-      bhead.className = "mi-section-head";
-      bhead.innerHTML = `<span>Per-building</span><span class="mi-section-sub">22 × 32 · click a building to inspect</span>`;
-      $miRows.appendChild(bhead);
-
-      const sel = document.createElement("div");
-      sel.id = "mi-building-selection";
-      sel.className = "mi-selection";
-      sel.innerHTML = `<span class="info">—</span><button id="mi-sel-clear" title="Clear selection">×</button>`;
-      $miRows.appendChild(sel);
-      sel.querySelector("#mi-sel-clear").addEventListener("click", (e) => {
-        e.stopPropagation();
-        _selectedSlot = null;
-        if (player) player.setSelectedSlot(null);
-        updateModelInputs(player ? player.t : 0);
-      });
-
-      for (const name of BUILDING_NAMES) {
-        const row = document.createElement("div");
-        row.className = "mi-row";
-        row.innerHTML = `<span class="mi-name" title="${name}">${name}</span><span class="mi-val">—</span><span class="mi-vis"><svg viewBox="0 0 32 14" preserveAspectRatio="none">${slotBarsTemplate("#60a5fa")}</svg></span>`;
-        $miRows.appendChild(row);
-        _miRowRefs.building[name] = {
-          val: row.querySelector(".mi-val"),
-          bars: row.querySelectorAll("rect"),
-          baseColor: "#60a5fa",
-        };
-      }
-
       // PER-GROUP — name | max | 32-slot bar pile
       const ghead2 = document.createElement("div");
       ghead2.className = "mi-section-head";
@@ -1757,28 +1727,8 @@
       }
       // Per-slot — derive features at the live (fractional) tick.
       const f = computeFeatures(currentData, t);
-      const sel = _selectedSlot;
-      for (const name of BUILDING_NAMES) updateSlotRow(_miRowRefs.building[name], f.building[name], sel);
-      for (const name of GROUP_NAMES)    updateSlotRow(_miRowRefs.group[name],    f.group[name],    null);
-
-      // Selection header text + canvas popup
-      const $sel = document.getElementById("mi-building-selection");
-      if ($sel) {
-        if (sel === null) {
-          $sel.classList.remove("on");
-        } else {
-          $sel.classList.add("on");
-          const owner = f.building.is_p1[sel] ? "P1"
-                      : f.building.is_p2[sel] ? "P2"
-                      : f.building.is_neutral[sel] ? "Neutral"
-                      : "—";
-          const garr = f.building.garrison_norm[sel];   // normalized
-          const garrRaw = Math.round(garr * (currentData.scale ?? 10) * 30);
-          $sel.querySelector(".info").textContent =
-            `Building #${sel} · ${owner} · garrison ${garrRaw}`;
-        }
-      }
-      updateBuildingPopup(f, sel);
+      for (const name of GROUP_NAMES) updateSlotRow(_miRowRefs.group[name], f.group[name], null);
+      updateBuildingPopup(f, _selectedSlot);
     }
 
     /** Render + anchor the per-building popup over the canvas. */
