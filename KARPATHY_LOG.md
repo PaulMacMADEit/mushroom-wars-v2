@@ -4242,6 +4242,41 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### Loop fire 89 --- 2026-04-30 11:08 PT --- TIMER DEAD 57 MIN; restarted. Cont chain complete: peak cont-03 96.7%, fine-tune regressed.
+
+**State.** Resuming after ~9h gap (fire 88 was 02:17 PT). Karp timer inactive 10:14-11:08 PT; reinstalled. Worker healthy (11h uptime).
+
+**Cont chain complete:**
+
+| batch | label | rate | KL | Elo | verdict |
+|---|---|---|---|---|---|
+| n1800 root | karpv2-2e238f3d | 0.954 | -- | 1051.3 | seed |
+| cont-01 | karpv2-cont-2e238f3d-01 | 0.963 | 0.10 | 986.1 | +0.9pp |
+| cont-02 | karpv2-cont-2e238f3d-02 | 0.963 | 0.14 | 1005.5 | plateau |
+| **cont-03** | karpv2-cont-2e238f3d-03 | **0.967** | **0.09** | **1081.9** | peak |
+| cont-04 | karpv2-cont-2e238f3d-04 | 0.962 | 0.22 | 1016.2 | overshot (lr=1e-3) |
+| cont-05-lr1e4 | karpv2-cont-2e238f3d-05-lr1e4 | 0.960 | -- | 1034.6 | regression |
+
+**cont-03 (96.7%, Elo 1082) is the peak.** Fine-tune from cont-03 with lr=1e-4 regressed to 95.96%. Likely: 96.7% includes noise, or 1200s budget too short for lr=1e-4 to move.
+
+Map trigger 97% not reached.
+
+**WARN: bench eval not rating karp- runs.** All karp-260429-* runs: elo_status=unrated (n=0 matches). Cont- runs rate fine. Likely related to bench_eval.yaml config extraction (commit 6cf8077, Apr 29 12:25 PT). Watching v10.1.37-lr-* to see if issue persists.
+
+**Game review -- cont-05-lr1e4 (Elo 1034.6, rated):**
+
+| game | tag | ticks | noop% | entropy | val_drop | flags |
+|---|---|---|---|---|---|---|
+| fa6e99e3 | WIN | 17 | 22% | 2.09 | -1.40 | ok |
+| 6959e63f | LOSS | 66 | 76% | 3.20 | +9.03 | high noop 76% |
+
+High noop in losses -- passive when behind. Watch across next runs.
+
+**Running/queued:** v10.1.37-lr-lo (running), -mid/-hi (queued).
+
+**Next check:** ~11:39 PT.
+
+
 ### Loop fire 88 — 2026-04-30 02:17 PT — 🟡 96.3% PLATEAU. Cont-02 same rate as cont-01. Fine-tune run queued (lr=1e-4).
 
 **State.** Cont-02 finished at 96.26% — identical to cont-01's 96.29%. Genuine plateau.
