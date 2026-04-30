@@ -4242,6 +4242,49 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### Loop fire 88 — 2026-04-30 02:17 PT — 🟡 96.3% PLATEAU. Cont-02 same rate as cont-01. Fine-tune run queued (lr=1e-4).
+
+**State.** Cont-02 finished at 96.26% — identical to cont-01's 96.29%. Genuine plateau.
+
+**Plateau diagnosis — cont-02 final_metrics:**
+
+| metric | value | interpretation |
+|---|---|---|
+| win_rate | 0.962 | same as cont-01, no improvement |
+| approx_kl | 0.139 | high — policy making large jumps |
+| clip_fraction | 24.4% | high — many PPO clips, optimizer fighting itself |
+| grad_norm | 5.63 | large (pre-clip) — consistent with thrashing |
+| explained_variance | 0.909 | value head healthy |
+| training_opp | random_legal | cont chain inherits opp=random_legal from parent |
+
+Pattern: **gradient saturation at lr=1e-3**. Large KL + high clip fraction with no rate gain =
+the policy is oscillating around the local optimum, not converging through it. Classic PPO
+sign that lr is too high for fine-tuning.
+
+**96.3% may be near the noise floor for random_close_4_5.** Truly random moves occasionally
+win by luck (correct placement by chance on a 4-5 building map). Theoretical ceiling may be
+~97-98%. The 3.7% loss rate could be ~1% luck ceiling + 2.7% policy inefficiency — unclear
+without a stronger reference point.
+
+**Two runs queued this fire:**
+
+1. `karpv2-cont-2e238f3d-03` — same config (lr=1e-3), tests whether one more batch breaks through
+2. `karpv2-cont-2e238f3d-finetune-lr1e4` — **lr=1e-4, clip=0.1** from cont-02 weights.
+   Fine-tuning hypothesis: lr=1e-3 is overshooting the 96% → 97% gap. Tighter steps + tighter clip
+   may squeeze the remaining pp.
+
+**New v10.1 sweeps (from PaulLinux backstop):**
+
+Backstop has been running new sweeps under `v10.1.X` label format:
+- gamma (lo/mid/hi): 0.433 / 0.979 / 0.973 — all low, fresh starts vs pfsp_champion
+- gae_lambda (lo/mid/hi): 0.496 / 0.158 / discarded — all unrated or low
+- clip_range (lo/mid/hi): 0.132 / 0.134 / discarded — all low
+
+These fresh-start runs (~5 min from scratch vs pfsp_champion) are expected to be 10-50% at this
+budget. They'll feed the sweep comparison once a few more fire cycles accumulate.
+
+**Next check:** ~03:17 PT. Trigger: rate ≥ 0.97 → change configs/training_levels.yaml to larger map.
+
 ### Loop fire 87 — 2026-04-30 01:08 PT — 🟡 cont-01 finished at 96.3%. Not yet 97%. Cont-02 queued.
 
 **State.** Session resumed from previous context. cont-01 finished just before
