@@ -40,7 +40,14 @@ class OpponentPool:
         snap_dir.mkdir(exist_ok=True)
 
         w_path = snap_dir / "weights.pt"
-        torch.save({k: v.detach().cpu() for k, v in net.state_dict().items()}, w_path)
+        # v10: wrap with encoder_version stamp so loaders dispatch to the
+        # right encoder. Legacy raw saves still load via the back-compat
+        # path in checkpoint.load_state_dict_with_version.
+        from training.checkpoint import save_state_dict
+        save_state_dict(
+            {k: v.detach().cpu() for k, v in net.state_dict().items()},
+            w_path,
+        )
 
         n_path: Optional[Path] = None
         if obs_norm is not None:

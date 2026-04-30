@@ -54,6 +54,17 @@ def infer_body_dim(state_dict: dict, default: int = BODY_DIM) -> int:
     return int(w.shape[0]) if w is not None else default
 
 
+def infer_obs_dim(state_dict: dict, default: int = OBS_DIM) -> int:
+    """Peek the obs size from a saved ActorCritic state_dict.
+
+    `trunk.0.weight` has shape (body_dim, obs_dim). Used by the versioned
+    opponent loader to size the net to whatever encoder produced its
+    weights, even if that encoder is older than the current OBS_DIM.
+    """
+    w = state_dict.get("trunk.0.weight")
+    return int(w.shape[1]) if w is not None else default
+
+
 class ActorCritic(nn.Module):
     """Chained-head actor-critic. Forward is done in pieces so the agent can
     sample source → (type, tgt | source) in two passes sharing the body."""

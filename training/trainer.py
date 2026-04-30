@@ -196,14 +196,24 @@ class PPOTrainer:
         # state_dict + obs_norm into RAM at init. Lets _rotate_opponent_for_update
         # avoid disk I/O on every swap (~10-30ms saving). RAM cost: ~5MB per
         # archive member × 10-20 members = trivial.
-        self._lb_state_dicts: list[dict] = []
+        # Each archive member: (state_dict, encoder_version) so the loader can
+        # dispatch the right encoder per swap. v9.0 archive members default
+        # to "v9.0" via the unstamped-checkpoint fallback.
+        self._lb_state_dicts: list[tuple[dict, str]] = []
         self._lb_obs_norms: list = []
         if self._leaderboard and self.cfg.opponent_pool_mode == "rotate_per_update":
             from sim.envs.opponents import preload_state_dict, preload_obs_norm
+            from training.encoders import get_encoder
             opp_device = (opponent_kwargs or {}).get("device", "cpu")
             for w_path, n_path, _w in self._leaderboard:
-                self._lb_state_dicts.append(preload_state_dict(str(w_path), device=opp_device))
-                self._lb_obs_norms.append(preload_obs_norm(str(n_path) if n_path else None))
+                sd, enc_v = preload_state_dict(str(w_path), device=opp_device)
+                self._lb_state_dicts.append((sd, enc_v))
+                # Size obs_norm to match the encoder version that produced
+                # the saved obs_norm file (the file shape wins anyway).
+                self._lb_obs_norms.append(preload_obs_norm(
+                    str(n_path) if n_path else None,
+                    obs_dim=get_encoder(enc_v).obs_dim,
+                ))
             print(f"[trainer] pre-loaded {len(self._lb_state_dicts)} archive members "
                   f"into RAM for per-update rotation (device={opp_device})")
         # Track which leaderboard indices the agent rotated through so we can
@@ -724,8 +734,8 @@ class PPOTrainer:
         else:
             idx = int(np.random.randint(0, len(self._leaderboard)))
 
-        # Cached state_dict + obs_norm — already in RAM from init.
-        state_dict = self._lb_state_dicts[idx]
+        # Cached (state_dict, encoder_version) + obs_norm — already in RAM from init.
+        state_dict, encoder_version = self._lb_state_dicts[idx]
         obs_norm = self._lb_obs_norms[idx]
         # Track which archive members the agent has faced so end_of_run_rematch
         # can replay each one at the end of training.
@@ -735,6 +745,7 @@ class PPOTrainer:
             state_dict=state_dict,
             obs_norm=obs_norm,
             device=device,
+            encoder_version=encoder_version,
         )
 
         # Swap in both the vec env (legacy path) and the fused_rollout
@@ -865,7 +876,10 @@ class PPOTrainer:
             if eval_ckpt_dir is None:
                 eval_ckpt_dir = Path(tempfile.mkdtemp(prefix="mw2-eval-self-"))
                 self._archive_eval_ckpt_dir = eval_ckpt_dir
-            torch.save(
+            # v10: stamp encoder_version so the eval loader knows what the
+            # weights expect. See training.checkpoint.
+            from training.checkpoint import save_state_dict
+            save_state_dict(
                 {k: v.detach().cpu() for k, v in self.agent.net.state_dict().items()},
                 eval_ckpt_dir / "weights.pt",
             )

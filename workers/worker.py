@@ -828,7 +828,8 @@ def _upload_snapshot(run_id, snap_n: int, trainer) -> str | None:
         with tempfile.TemporaryDirectory(prefix="mw2-snap-") as tmp:
             tmp_path = Path(tmp)
             w_file = tmp_path / "weights.pt"
-            torch.save(trainer.agent.net.state_dict(), w_file)
+            from training.checkpoint import save_state_dict
+            save_state_dict(trainer.agent.net.state_dict(), w_file)
             w_url = storage.upload("models", storage_path, w_file)
 
             n_url = None
@@ -984,7 +985,24 @@ def run_training(
     if job.get("parent") is not None:
         parent_state = _download_parent_state(job["parent"])
         if parent_state["weights"] is not None:
-            net.load_state_dict(parent_state["weights"])
+            # v10: parent saves are wrapped {state_dict, encoder_version}.
+            # For continuations, the parent's encoder version must equal
+            # the child's (same model_id implies same encoder version);
+            # we unwrap silently and trust model_id to enforce the match.
+            raw = parent_state["weights"]
+            if isinstance(raw, dict) and "state_dict" in raw and "encoder_version" in raw:
+                weights = raw["state_dict"]
+                # Optional: warn if the parent's stamp disagrees with the
+                # current encoder. Continuations across encoder versions
+                # are nonsensical (shapes don't line up).
+                from training.encoders import CURRENT_ENCODER_VERSION
+                if raw["encoder_version"] != CURRENT_ENCODER_VERSION:
+                    print(f"[worker] WARNING: parent stamped encoder_version="
+                          f"{raw['encoder_version']!r} but current is "
+                          f"{CURRENT_ENCODER_VERSION!r}; continuation likely will crash.")
+            else:
+                weights = raw
+            net.load_state_dict(weights)
             print(f"[worker] loaded parent weights "
                   f"(params={sum(p.numel() for p in net.parameters()):,})")
 
@@ -1177,8 +1195,8 @@ def _run_rotation_rematch(trainer, run_id: str, metrics_history: list[dict],
     # Save trained weights to a temp file the match runner can load.
     out_dir = Path(tempfile.mkdtemp(prefix="mw2-rematch-"))
     p1_path = out_dir / "weights.pt"
-    import torch
-    torch.save(trainer.agent.net.state_dict(), p1_path)
+    from training.checkpoint import save_state_dict
+    save_state_dict(trainer.agent.net.state_dict(), p1_path)
     if trainer.obs_norm is not None:
         trainer.obs_norm.save(str(out_dir / "obs_norm.pt"))
 
@@ -1263,7 +1281,11 @@ def save_and_upload(
         obs_norm_file  = tmp_path / "obs_norm.pt"
         log_file       = tmp_path / "metrics.json"
 
-        torch.save(trainer.agent.net.state_dict(), weights_file)
+        from training.checkpoint import save_state_dict
+        save_state_dict(trainer.agent.net.state_dict(), weights_file)
+        # Optimizer state isn't routed through the encoder dispatch — its
+        # shape only depends on the net it optimises, which the loader has
+        # already version-resolved by the time it reads optimizer.pt.
         torch.save(trainer.optimizer.state_dict(), optimizer_file)
         if trainer.obs_norm is not None:
             trainer.obs_norm.save(obs_norm_file)

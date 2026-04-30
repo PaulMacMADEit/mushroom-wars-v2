@@ -128,30 +128,50 @@ def _mirror_ownership(obs: dict) -> dict:
     return mirrored
 
 
-def preload_state_dict(weights_path: str, device: str = "cpu") -> dict:
-    """Read a weights .pt file once into RAM. Pair with `make_neural_opponent_cached`
-    for fast per-update swaps under opponent_pool_mode=rotate_per_update.
+def preload_state_dict(
+    weights_path: str,
+    device: str = "cpu",
+) -> tuple[dict, str]:
+    """Read a weights .pt file once into RAM.
 
-    2026-04-29 fire 65: avoids re-reading the file on every swap; the trainer
-    pre-loads every archive member at init, then cycles in-memory.
+    Returns `(state_dict, encoder_version)`. Legacy raw saves (no wrapper)
+    resolve to `DEFAULT_ENCODER_VERSION` ("v9.0") via `checkpoint`.
+
+    Pair with `make_neural_opponent_cached` for fast per-update swaps
+    under opponent_pool_mode=rotate_per_update.
+
+    2026-04-29 fire 65: avoids re-reading the file on every swap; the
+    trainer pre-loads every archive member at init, then cycles in-memory.
     """
     import os
     if device == "cpu":
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
-    import torch
-    return torch.load(str(weights_path), map_location=device, weights_only=True)
+    from training.checkpoint import load_state_dict_with_version
+    # weights_only=False because new wrapped saves include the
+    # `encoder_version` string field which torch's `weights_only` mode
+    # rejects (it whitelists tensors only). The wrapper is project-internal
+    # so this is safe.
+    return load_state_dict_with_version(
+        weights_path, map_location=device, weights_only=False,
+    )
 
 
-def preload_obs_norm(obs_norm_path: Optional[str]):
+def preload_obs_norm(obs_norm_path: Optional[str], obs_dim: Optional[int] = None):
     """Read an obs_norm .pt file once into a RunningNorm instance, or None
-    if path is missing/null."""
+    if path is missing/null.
+
+    `obs_dim` is the expected dimension. RunningNorm.load_state_dict
+    overwrites the shape from the file regardless, so passing the wrong
+    `obs_dim` here is harmless — the file wins. Default uses the current
+    encoder's OBS_DIM, fine for fresh trainer init.
+    """
     if not obs_norm_path:
         return None
     if not Path(str(obs_norm_path)).exists():
         return None
     from training.encoder import OBS_DIM
     from training.obs_norm import RunningNorm
-    norm = RunningNorm(OBS_DIM)
+    norm = RunningNorm(obs_dim if obs_dim is not None else OBS_DIM)
     norm.load(str(obs_norm_path))
     return norm
 
@@ -161,8 +181,15 @@ def make_neural_opponent_cached(
     obs_norm,                            # already-loaded RunningNorm or None
     device: str = "cpu",
     recorder=None,
+    encoder_version: Optional[str] = None,
 ) -> Opponent:
     """Build an Opponent callable from a pre-loaded state_dict + obs_norm.
+
+    `encoder_version` selects which encoder to run on each call (must
+    match the obs distribution the state_dict was trained on). When None,
+    defaults to `DEFAULT_ENCODER_VERSION` — the v9.0 fallback for legacy
+    unstamped checkpoints. Pass the value returned alongside the
+    state_dict by `preload_state_dict`.
 
     Faster than `make_neural_opponent` for hot-swap paths because no disk
     I/O happens here — caller is expected to have called `preload_state_dict`
@@ -171,15 +198,29 @@ def make_neural_opponent_cached(
     Per-call cost: ~10-50ms (net construct + state_dict copy + .to(device)).
     Compare to ~30-100ms for the full disk-read variant.
     """
-    import torch
     from training.agent import PPOAgent
-    from training.net import ActorCritic, infer_body_dim
+    from training.encoders import DEFAULT_ENCODER_VERSION, get_encoder
+    from training.net import ActorCritic, infer_body_dim, infer_obs_dim
 
+    if encoder_version is None:
+        encoder_version = DEFAULT_ENCODER_VERSION
+    encoder_entry = get_encoder(encoder_version)
+
+    # Size the net to the saved trunk's actual obs_dim, not the current
+    # encoder's. A v9.0 checkpoint has trunk.0 ∈ (body, 1002); a v10
+    # checkpoint has (body, 1008). Default ActorCritic(obs_dim=OBS_DIM)
+    # would always pick v10's 1008 and crash on a v9.0 state_dict load.
     body_dim = infer_body_dim(state_dict)
-    net = ActorCritic(body_dim=body_dim)
+    obs_dim  = infer_obs_dim(state_dict)
+    if obs_dim != encoder_entry.obs_dim:
+        raise ValueError(
+            f"checkpoint trunk obs_dim={obs_dim} but encoder_version="
+            f"{encoder_version!r} expects obs_dim={encoder_entry.obs_dim}"
+        )
+    net = ActorCritic(obs_dim=obs_dim, body_dim=body_dim)
     net.load_state_dict(state_dict)
     agent = PPOAgent(net, device=device)
-    return _build_opponent_callable(agent, obs_norm, recorder)
+    return _build_opponent_callable(agent, obs_norm, recorder, encoder_entry.encode)
 
 
 def make_neural_opponent(
@@ -193,6 +234,9 @@ def make_neural_opponent(
     Each vec-env subprocess constructs its own via make_env's factory; the
     `weights_path` is read once at construction (not on every step).
 
+    Routes through the versioned encoder registry so a checkpoint trained
+    against any past encoder version still loads against current code.
+
     When `recorder` is passed (replay capture path), the opponent uses
     `act_one_with_diag` and records P2's decision with the same schema as P1.
 
@@ -203,14 +247,29 @@ def make_neural_opponent(
     waiting for subprocs stuck on `futex_do_wait`). We hide the GPU from
     the subproc's torch *before* importing it so opponents stay CPU-only.
     """
-    state_dict = preload_state_dict(weights_path, device=device)
-    obs_norm = preload_obs_norm(obs_norm_path)
-    return make_neural_opponent_cached(state_dict, obs_norm, device=device, recorder=recorder)
+    state_dict, encoder_version = preload_state_dict(weights_path, device=device)
+    # Size obs_norm to whatever shape the saved file actually has — see
+    # preload_obs_norm; the file's own shape wins regardless of the
+    # constructor arg.
+    from training.encoders import get_encoder
+    obs_norm = preload_obs_norm(
+        obs_norm_path, obs_dim=get_encoder(encoder_version).obs_dim,
+    )
+    return make_neural_opponent_cached(
+        state_dict, obs_norm, device=device, recorder=recorder,
+        encoder_version=encoder_version,
+    )
 
 
-def _build_opponent_callable(agent, obs_norm, recorder):
-    """Closure factory shared between cached + uncached opponent makers."""
-    from training.encoder import encode_obs
+def _build_opponent_callable(agent, obs_norm, recorder, encode_fn=None):
+    """Closure factory shared between cached + uncached opponent makers.
+
+    `encode_fn` selects which encoder to run on the mirrored obs dict.
+    Defaults to the current (v10) encoder for back-compat with callers
+    that haven't been updated to thread `encoder_version` through.
+    """
+    if encode_fn is None:
+        from training.encoder import encode_obs as encode_fn
 
     def opponent(state: State, rng: np.random.Generator) -> int:
         obs_dict = _state_to_obs(state, mask_player=C.OWNER_P2)
@@ -218,7 +277,7 @@ def _build_opponent_callable(agent, obs_norm, recorder):
         # Mask is P2's (computed against real state, not the mirrored dict).
         mirrored["action_mask"] = obs_dict["action_mask"]
 
-        x = encode_obs(mirrored)
+        x = encode_fn(mirrored)
         if obs_norm is not None:
             x = obs_norm.normalize(x)
 

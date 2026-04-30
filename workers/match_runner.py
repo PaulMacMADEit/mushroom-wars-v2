@@ -67,23 +67,52 @@ def download_run_state(weights_url: str | None, obs_norm_url: str | None) -> dic
     }
 
 
-def _load_agent(state: dict, device: torch.device) -> tuple[PPOAgent | None, RunningNorm | None]:
-    """Load an ActorCritic + obs_norm from state dicts.
+def _load_agent(state: dict, device: torch.device):
+    """Load an ActorCritic + obs_norm + encoder fn from state dicts.
 
-    Returns (None, None) for a baseline state (weights is None) — the caller
-    must substitute `random_legal_opponent` when playing that side.
+    Returns (None, None, None) for a baseline state (weights is None) — the
+    caller must substitute `random_legal_opponent` when playing that side.
+
+    Otherwise returns (agent, obs_norm, encode_fn) where `encode_fn` is the
+    encoder version that produced the weights — i.e. v9.0 for unstamped
+    archive checkpoints, v10 for new ones. Loaders that ignored the
+    encoder version pre-v10 silently used the current encoder, which
+    breaks once OBS_DIM diverges across versions.
     """
     if state.get("weights") is None:
-        return None, None
-    from training.net import infer_body_dim
-    net = ActorCritic(body_dim=infer_body_dim(state["weights"]))
-    net.load_state_dict(state["weights"])
+        return None, None, None
+    from training.encoders import DEFAULT_ENCODER_VERSION, get_encoder
+    from training.net import infer_body_dim, infer_obs_dim
+
+    # `state["weights"]` is either a raw state_dict (legacy) or a wrapped
+    # {state_dict, encoder_version} dict (v10+).
+    raw = state["weights"]
+    if isinstance(raw, dict) and "state_dict" in raw and "encoder_version" in raw:
+        weights        = raw["state_dict"]
+        encoder_version = raw["encoder_version"]
+    else:
+        weights        = raw
+        encoder_version = DEFAULT_ENCODER_VERSION
+
+    encoder_entry = get_encoder(encoder_version)
+
+    # Size the net to the trunk's actual obs_dim, not the current OBS_DIM
+    # constant. ActorCritic(obs_dim=…) wires the trunk's first Linear layer.
+    body_dim = infer_body_dim(weights)
+    obs_dim  = infer_obs_dim(weights)
+    if obs_dim != encoder_entry.obs_dim:
+        raise ValueError(
+            f"checkpoint trunk obs_dim={obs_dim} but encoder_version="
+            f"{encoder_version!r} expects {encoder_entry.obs_dim}"
+        )
+    net = ActorCritic(obs_dim=obs_dim, body_dim=body_dim)
+    net.load_state_dict(weights)
     agent = PPOAgent(net, device=device)
     obs_norm: RunningNorm | None = None
     if state["obs_norm"] is not None:
-        obs_norm = RunningNorm(OBS_DIM)
+        obs_norm = RunningNorm(obs_dim)  # file shape wins on load anyway
         obs_norm.load_state_dict(state["obs_norm"])
-    return agent, obs_norm
+    return agent, obs_norm, encoder_entry.encode
 
 
 def _play_one_game(
@@ -95,6 +124,7 @@ def _play_one_game(
     seed: int,
     game_id: str | None = None,
     record: bool = True,
+    p1_encode=None,
 ) -> dict:
     """Run one game. Returns {winner, ticks, wall_ms, phase} plus diagnostics.
 
@@ -130,8 +160,13 @@ def _play_one_game(
     env = MushroomEnv(level_name=level_name, opponent=opponent, seed=seed, recorder=recorder)
     obs, info = env.reset(seed=seed)
 
+    # P1 may have been trained against a different encoder version than
+    # the current one; the caller passes that encoder fn in. Default to
+    # the current (v10) encoder for back-compat.
+    _p1_encode_fn = p1_encode if p1_encode is not None else encode_obs
+
     def _encode(o):
-        x = encode_obs(o)
+        x = _p1_encode_fn(o)
         return x if p1_norm is None else p1_norm.normalize(x)
 
     # P1 action chooser: neural agent if we have one, else random-legal over
@@ -216,7 +251,17 @@ def _materialize(state: dict, dir_path: Path, stem: str) -> tuple[str | None, st
     if state.get("weights") is None:
         return None, None
     w_path = dir_path / f"{stem}-weights.pt"
-    torch.save(state["weights"], w_path)
+    # `state["weights"]` may be either a raw state_dict (legacy S3 payload
+    # produced before the v10 stamp) or already a wrapped {state_dict,
+    # encoder_version} dict (new payloads). Re-wrap-or-passthrough so the
+    # downstream loader (`load_state_dict_with_version`) reads the right
+    # encoder either way. We do NOT default-stamp v10 on legacy payloads —
+    # those are v9.0 by `DEFAULT_ENCODER_VERSION` semantics.
+    weights = state["weights"]
+    if isinstance(weights, dict) and "state_dict" in weights and "encoder_version" in weights:
+        torch.save(weights, w_path)
+    else:
+        torch.save(weights, w_path)  # raw passthrough → loader treats as v9.0
     n_path: str | None = None
     if state["obs_norm"] is not None:
         n_file = dir_path / f"{stem}-obs_norm.pt"
@@ -252,8 +297,8 @@ def run_match(
         a_w, a_n = _materialize(state_a, tmp_path, "a")
         b_w, b_n = _materialize(state_b, tmp_path, "b")
 
-        agent_a, norm_a = _load_agent(state_a, device)
-        agent_b, norm_b = _load_agent(state_b, device)
+        agent_a, norm_a, encode_a = _load_agent(state_a, device)
+        agent_b, norm_b, encode_b = _load_agent(state_b, device)
 
         for i in range(n_games):
             swap = (i % 2 == 1)  # odd games: B is P1, A is P2
@@ -262,17 +307,18 @@ def run_match(
 
             if swap:
                 # B plays as P1 in-process, A plays as P2 (opponent).
-                p1_agent, p1_norm = agent_b, norm_b
+                p1_agent, p1_norm, p1_encode = agent_b, norm_b, encode_b
                 p2_w, p2_n = a_w, a_n
                 p1_run, p2_run = str(run_b_id), str(run_a_id)
             else:
-                p1_agent, p1_norm = agent_a, norm_a
+                p1_agent, p1_norm, p1_encode = agent_a, norm_a, encode_a
                 p2_w, p2_n = b_w, b_n
                 p1_run, p2_run = str(run_a_id), str(run_b_id)
 
             g = _play_one_game(
                 p1_agent, p1_norm, p2_w, p2_n, level_name, seed,
                 game_id=game_id, record=record,
+                p1_encode=p1_encode,
             )
 
             # Resolve winner from side → run id
