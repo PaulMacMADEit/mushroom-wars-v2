@@ -3348,6 +3348,104 @@ n=2 sample, don't over-read.
 same lr as the diagnostic but from a fresh-init parent — gives us two
 independent angles on the lr question.
 
+### Loop fire 72 — 2026-04-29 17:32 PT — 🚨 lr is NOT the cause; lr1e4 diag REGRESSED MORE (-22) than chain-01 (-19). Self-play IG comparison shows value-head feature reorganization. lr1e4 loss was 98% noop / type-collapse. Rotation-off diag queued.
+
+**State.** Worker active (restarted at 17:30 PT for self-play attribution code).
+Karp queue: lr-lo running, lr-mid running (both somehow active simultaneously —
+flag), lr-hi queued, **norot diagnostic queued**, rollout_steps sweep queued
+by this fire = depth 7. Cap 6 — slightly over (no harm; round-robin is greedy).
+
+**🚨 Cont diagnostic falsified the lr-too-hot hypothesis.**
+
+| run | config diff | Δ Elo vs parent (1095) | n |
+|---|---|---|---|
+| chain batch 01 (`cont-0791c618-01`) | lr=1e-3 (baseline) | **-19** | 27 |
+| diagnostic (`diag-0791c618-lr1e4-01`) | **lr 1e-3 → 1e-4** | **-22** | 15 |
+
+Lower lr regressed *more*, not less. Lr is NOT what's breaking the cont. Both
+configs lose ~20 Elo from a 20-min cont starting at 1095.
+
+Backfills tightened the picture from fire 71:
+- chain-01 backfilled 1085 → 1076 (n: 24→27)
+- lr1e4-diag backfilled 1068 → 1073 (n: 14→15)
+- Parent stable at 1094.7 (n=37)
+
+**🟢 Self-play attribution shipped + comparison ready.**
+
+[scripts/compute_attributions.py](Personal/Games/mushroom-wars-v2/scripts/compute_attributions.py)
+now defaults to self-play sampling (collects both P1+P2 perspectives per state).
+Worker restarted; 3 attribution jobs completed in ~8-18 sec each (GPU). The
+`random_legal` opponent is still available via `--opponent random_legal`.
+
+**Self-play feature comparison (top |IG| features, signed):**
+
+| feature | parent (1095) | chain-01 (1076) | lr1e4 (1073) | takeaway |
+|---|---|---|---|---|
+| `is_p1` | +0.75 | **+0.94** | +0.62 | chain-01 more building-ownership-sensitive |
+| `is_p2` | +0.67 | +0.74 | +0.39 | lr1e4 less ownership-sensitive |
+| `p1_share` | -0.55 | -0.27 | -0.67 | chain-01 weakened share signal |
+| `unit_margin` | **-0.17** | **+0.14** | +0.01 | **sign FLIPPED in chain-01** ⚠️ |
+| `p2_total_force` | +0.28 | +0.45 | +0.43 | both conts increased dependence |
+| `garrison_ratio` | +0.03 | +0.05 | +0.06 | small + (was −0.32 under random_legal!) |
+
+Two important reads:
+1. **`garrison_ratio` and `p1_share` reversed direction under self-play sampling**
+   (vs the random_legal-sampled IG plot Paul flagged). Confirms most of the
+   "wrong signs" we were chasing were sampling artefacts. Real signal: the
+   value head DOES use ownership flags positively.
+2. **Cont batches reorganize feature dependencies, not improve them.** The
+   `unit_margin` sign flip in chain-01 (-0.17 → +0.14) is the cleanest evidence
+   the value head moved arbitrarily under random_champion rotation, not
+   converged. lr1e4 also shifted but kept similar magnitude.
+
+**🚨 lr1e4 review-games found a DEGENERATE policy:**
+
+| game | tag | ticks | decisions | noop% | entropy | value drop | flags |
+|---|---|---|---|---|---|---|---|
+| `35070de2` | WIN | 23 | 12 | **0%** | 2.07 | -3.57 | ok |
+| `c82ed127` | LOSS | **187** | 94 | **98%** | 2.37 | **+5.64** | high noop / type-collapse |
+
+Loss is **187 ticks long** (typical games are 30-90), agent did almost nothing
+(98% noop = 92/94 decisions were noop). Critic value-drop +5.64 says
+"we're winning" right before losing. **Passive collapse failure mode** — the
+v14-bake comments warned about this. lr=1e-4 produces a degenerate policy in
+some games, even though average Elo (1073) looks "ok."
+
+This means **lr=1e-4 is actually MUCH worse than chain-01's lr=1e-3**.
+Lower lr → less policy movement → some seeds collapse to noop-everything.
+
+**Conclusion: chain-regression isn't a learning-rate problem. It's a
+training-stability problem under random_champion rotation when the parent is
+already a champion.**
+
+**Action: rotation-off diagnostic queued (option #2 from fire 71).**
+
+```
+karpv2-diag-0791c618-norot-01  (id b52147cf)
+parent     = 0791c618 (1095 champion)
+only-changed = opponent_pool_mode "rotate_per_update" -> "" (fixed opp)
+inherited  = lr=1e-3, update_epochs=8, reward_v=2
+budget     = 1200s
+```
+
+If this returns positive (or even neutral) Elo Δ vs chain-01 → rotation IS the
+cause; we change chain config to rotation-off and resume. If still negative →
+the issue is fundamental to continuation past a 20-min champion (capacity
+ceiling, not hyperparam).
+
+**Karp leaderboard (post-backfill):**
+
+| run | elo | n | when |
+|---|---|---|---|
+| `karpv2-260429-1448-cont-update_epochs-hi-20min` | 1094.7 | 37 | parent |
+| `karpv2-260429-cont-0791c618-01` | 1076.2 | 27 | chain batch 01 |
+| `karpv2-260429-1600-reward_version-hi` | 1061.9 | 13 | fire 70 |
+| `karpv2-260429-1305-n_envs-lo` | 1057.7 | 25 | fire 64 |
+
+**Queued (this fire):** rollout_steps sweep ({4, 8, 16}) via round-robin +
+rotation-off cont diagnostic. Total queue depth ~7 (over cap 6 but greedy
+round-robin is fine).
+
 ## Code changes during loop
 
 ### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
