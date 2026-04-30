@@ -3796,6 +3796,54 @@ All failed with the same `RuntimeError: Error(s) in loading state_dict for Actor
 **No queueing this fire.** Letting the natural backstop drive v10 bootstrap.
 Will resume Karpathy loop logging once v10 cells start producing rated data.
 
+### Loop fire 78 — 2026-04-29 20:38 PT — 🚨 v10 bootstrap STILL FAILING despite YAML fix; root cause = rotate_per_update + leaderboard_bias>0 still load v9 archive even with training_opponent.name=random_legal. Pushed comprehensive fix.
+
+**State.** All 6 karp cells queued by the backstop at 20:15 + 20:30 ALSO failed.
+Same `size mismatch [1024, 1002] vs [1024, 1008]` error. The earlier YAML
+update (training_opponent.name=random_legal) was insufficient.
+
+**Root cause found.** Even with the named opponent set to random_legal, two
+other paths still pull from the v9 archive:
+
+1. `opponent_pool_mode: "rotate_per_update"` — trainer rotates per-update from
+   leaderboard archive, which is full of v9 (1002-dim) weights.
+2. `leaderboard_bias: 0.30` — gates the archive download in `workers/worker.py:899`
+   (`needs_pool = cfg.leaderboard_bias > 0 or cfg.opponent_pool_mode == 'rotate_per_update'`)
+   so the worker downloads v9 weights even when not using them, then per-update
+   loading crashes.
+
+**Fix pushed (`2421ee9`):**
+```yaml
+opponent_pool_mode: ""   # was "rotate_per_update"
+leaderboard_bias:   0.0  # was 0.30
+```
+Both with comments noting "Flip back when first v10 champion lands."
+PaulLinux pulled. queue_karp_sweep.py reads YAML on each backstop fire, so
+next fire (20:45 PT) will queue v10 cells with both archive paths disabled.
+
+**Cleanup of failed v10 sweeps:**
+```
+karpv2-260429-1959-{lr,entropy_coef}-{lo,mid,hi}    (6 runs, all failed)
+karpv2-260429-2000-lr-{lo,mid,hi}                   (3 runs, all failed)
+karpv2-260429-2001-{lr,entropy_coef}-{lo,mid,hi}    (6 runs, all failed)
+karpv2-260429-2015-lr-{lo,mid,hi}                   (3 runs, all failed)
+karpv2-260429-2030-rollout_steps-{lo,mid,hi}        (3 runs, all failed)
+```
+Total 21 runs failed across the v9→v10 transition. All show as `failed` in DB
+already; no manual cleanup needed.
+
+**Expected behavior on next backstop fire (20:45 PT):**
+- queue_karp_sweep.py reads new YAML with both archive paths off
+- 3 cells queued for next round-robin axis (last_used=rollout_steps → next = n_envs)
+- Worker picks first cell, runs training with `random_legal` only (fast on-device JAX)
+- After 5-min cell + bench, FIRST v10 RATED RUN should land in this archive
+
+This is the proper v10 bootstrap. After 1-2 cells produce rated runs, a v10
+champion will be archived; we can then flip both archive paths back on for
+the regular Karpathy schedule.
+
+**No queueing this fire.** Backstop will drive in 7 min.
+
 **gae_lambda sweep (last v9 data) — partial:**
 
 | label | swept | dur | Elo | n | notes |
