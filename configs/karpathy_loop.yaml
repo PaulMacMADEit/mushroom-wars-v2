@@ -41,21 +41,26 @@ queue_policy:
 # Model + simulator IDs + curriculum step
 # ---------------------------------------------------------------------------
 # Run-label convention (2026-04-30 onward):
-#   v{model}.{step}.{exp:02d}-{MajorChange}-{Variable}-{cell}      (sweeps)
-#   v{model}.{step}.{exp:02d}-{MajorChange}-{Kind}-{NN:02d}        (chains)
+#   {version_prefix}.{exp:02d}-{MajorChange}-{Variable}-{cell}     (sweeps)
+#   {version_prefix}.{exp:02d}-{MajorChange}-{Kind}-{NN:02d}       (chains)
 #
-# `model_id` encodes both the model major version AND the curriculum step
-# (e.g. `v10.2` = encoder v10, step 2). `major_change` is the descriptor for
-# what changed in this step — appended to every label so the chart columns
-# read clearly. Update both fields when starting a new curriculum step.
+# Two distinct fields:
+#   `model_id`        - FK to the `models` table; the trained architecture
+#                       (e.g. v10-1024 = encoder v10, body=1024). Stable
+#                       across curriculum steps that share the architecture.
+#   `version_prefix`  - label prefix encoding (model_major).(curriculum_step)
+#                       e.g. "v10.2" = v10 architecture, Step 2 curriculum.
+#                       Bump the .step component when starting a new step.
+#   `major_change`    - human-readable descriptor of what changed in this step
+#                       (LargeMap, ChampOpp, ...). Goes into every label.
 model:
-  model_id:     "v10.2"          # Step 2 (started 2026-04-30): graduated to
-                                 # b6 large-map mix (random_4_8/6_10/8_16/16_24).
+  model_id:       "v10-1024"     # Architecture FK. Step 1+2 share it.
+  simulator_id:   "sim-v1.3"
+  version_prefix: "v10.2"        # Step 2 (started 2026-04-30): graduated
+                                 # to b6 large-map mix random_4_8/6_10/8_16/16_24.
                                  # Step 1 was v10.1 — random_close_4_5 only,
                                  # peaked at v10.1.01-SmallMap-Base-03 (96.7%).
-  simulator_id: "sim-v1.3"
-  major_change: "LargeMap"       # human-readable step descriptor; goes into
-                                 # every label and run description
+  major_change:   "LargeMap"     # Goes into every label + description
 
 # ---------------------------------------------------------------------------
 # Training opponent — who does the agent play against during rollouts?
@@ -114,12 +119,16 @@ baseline_hyperparams:
   # ----- PPO update -----
   update_epochs:  4                # PPO inner-loop passes over the rollout buffer
   minibatch_size: 512              # samples per SGD step
-  lr:             1.0e-3           # 2026-04-29 fire 61: 10× v1 baseline (was 3e-4). v1 cycle-1
-                                   # found lo=1e-4 wins vs random_legal — but that was fine-tuning.
-                                   # v2 bootstrap (vs-champion, 3% win rate, only 3 updates/cell)
-                                   # needs faster policy movement. If this diverges (NaN losses
-                                   # or Elo drops) → revert.
-  gamma:          0.97             # discount factor
+  lr:             3.0e-3           # 2026-04-30 fire 97: 3× the prior 1e-3. Step 2 chain
+                                   # (Base-01..04) showed KL bouncing between 0.002 and 0.275 —
+                                   # cumulative-tiny-then-overshoot. Higher lr gives PPO actual
+                                   # updates per cell instead of stalling. Sweep [1e-3, 3e-3, 1e-2]
+                                   # in fire 97; this baseline is the mid value.
+  gamma:          0.99             # discount factor. 2026-04-30 fire 97: bumped 0.97 -> 0.99.
+                                   # On Step 2 (mean ep_len ~127 ticks), 0.97^127 = 2% — terminal
+                                   # win signal was almost entirely discounted away. 0.99^127 = 28%.
+                                   # 37% timeout_rate on Base-04 confirmed the "win finish" gradient
+                                   # was anemic; longer-horizon discount restores it.
   gae_lambda:     0.95             # GAE smoothing
   clip_range:     0.2              # PPO clipped-surrogate epsilon
   value_coef:     0.5              # weight on critic MSE
@@ -191,9 +200,9 @@ sweep_axes:
 
   - axis: "lr"
     cells:
-      - { label: "lo",  value: 1.0e-4 }
-      - { label: "mid", value: 3.0e-4 }
-      - { label: "hi",  value: 1.0e-3 }
+      - { label: "lo",  value: 1.0e-3 }
+      - { label: "mid", value: 3.0e-3 }
+      - { label: "hi",  value: 1.0e-2 }
 
   - axis: "rollout_steps"
     cells:

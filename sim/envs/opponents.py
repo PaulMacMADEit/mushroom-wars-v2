@@ -44,6 +44,97 @@ def random_legal_opponent(state: State, rng: np.random.Generator) -> int:
     return int(rng.choice(legal))
 
 
+def greedy_capacity_aware_opponent(state: State, rng: np.random.Generator) -> int:
+    """Medium-strength scripted opponent (Step 3 curriculum target).
+
+    Logic (per Paul's spec, 2026-04-30):
+      - Source = P2 building with the most garrison (the "highest" source).
+      - Phase A — neutrals exist:
+          target = lowest-garrison neutral.
+          send 75% from source IFF 0.75 * src_garrison can capture target.
+          Else NOOP (let source grow until it can hit it).
+      - Phase B — no neutrals (all captured):
+          target = lowest-garrison enemy (P1) building.
+          send 75% from source IFF capture-feasible. Else NOOP.
+
+    Capture model:
+      attacker = 0.75 * src_garrison
+      defender = tgt_garrison * (1.0 if neutral else DEF_BONUS_NUM/DEF_BONUS_DEN)
+      capture iff attacker > defender.
+
+    Known weaknesses (intentional — gives the NN room to outplay):
+      - No travel-time accounting; sends leave source naked.
+      - Single-stream sends (one move at a time).
+      - Hard 75% threshold can stall when no neutral is capturable at cap.
+      - Doesn't differentiate building capacity / production rate.
+      - Greedy on neutrals first; ignores enemy expansion during Phase A.
+    """
+    del rng  # deterministic policy
+    owners    = state.buildings_owner
+    garrisons = state.buildings_garrison
+    alive     = state.buildings_alive.astype(bool)
+    mask      = compute_mask(state, C.OWNER_P2)
+
+    # Need at least one P2 building that is alive.
+    p2_alive = alive & (owners == C.OWNER_P2)
+    if not p2_alive.any():
+        return NOOP_INDEX
+
+    # Source = highest-garrison alive P2 building.
+    p2_g = np.where(p2_alive, garrisons, np.iinfo(garrisons.dtype).min)
+    src = int(p2_g.argmax())
+    src_g = int(garrisons[src])
+
+    # 75% send: type_idx 2 (matches SEND_PERCENTAGES = (25, 50, 75, 100)).
+    TYPE_75 = 2
+
+    # Capture feasibility check (defender bonus from sim/config.py).
+    # int math to avoid float-rounding surprises across backends.
+    def can_capture(tgt_idx: int, is_neutral: bool) -> bool:
+        atk = (src_g * 75) // 100                      # 75% rounded down
+        def_units = int(garrisons[tgt_idx])
+        if not is_neutral:
+            def_units = (def_units * C.DEF_BONUS_NUM) // C.DEF_BONUS_DEN
+        return atk > def_units
+
+    def try_send(tgt_idx: int) -> Optional[int]:
+        """Return action index if (TYPE_75, src, tgt_idx) is legal, else None."""
+        action = TYPE_75 * (C.MAX_BUILDING_SLOTS * C.MAX_BUILDING_SLOTS) \
+                 + src * C.MAX_BUILDING_SLOTS + tgt_idx
+        if 0 <= action < mask.size and mask[action]:
+            return action
+        return None
+
+    # Phase A: lowest-garrison neutral.
+    neutral_alive = alive & (owners == C.OWNER_NEUTRAL)
+    if neutral_alive.any():
+        # Lowest neutral by garrison among alive neutrals.
+        nb_g = np.where(neutral_alive, garrisons, np.iinfo(garrisons.dtype).max)
+        tgt = int(nb_g.argmin())
+        if tgt == src:
+            return NOOP_INDEX
+        if can_capture(tgt, is_neutral=True):
+            action = try_send(tgt)
+            if action is not None:
+                return action
+        # Lowest neutral not capturable yet — wait and grow.
+        return NOOP_INDEX
+
+    # Phase B: lowest-garrison enemy (P1).
+    p1_alive = alive & (owners == C.OWNER_P1)
+    if not p1_alive.any():
+        return NOOP_INDEX  # no enemies (game effectively over).
+    e_g = np.where(p1_alive, garrisons, np.iinfo(garrisons.dtype).max)
+    tgt = int(e_g.argmin())
+    if tgt == src:
+        return NOOP_INDEX
+    if can_capture(tgt, is_neutral=False):
+        action = try_send(tgt)
+        if action is not None:
+            return action
+    return NOOP_INDEX
+
+
 def random_legal_opponent_batched(
     p2_mask: np.ndarray,               # (N, ACTION_SPACE_SIZE) bool
     rng: np.random.Generator,

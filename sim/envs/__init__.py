@@ -6,6 +6,7 @@ from typing import Callable, Optional
 from sim.envs.mushroom_env import MushroomEnv
 from sim.envs.opponents import (
     Opponent,
+    greedy_capacity_aware_opponent,
     make_neural_opponent,
     noop_opponent,
     random_legal_opponent,
@@ -13,8 +14,9 @@ from sim.envs.opponents import (
 
 
 _SIMPLE_OPPONENTS = {
-    "random_legal": random_legal_opponent,
-    "noop":         noop_opponent,
+    "random_legal":          random_legal_opponent,
+    "noop":                  noop_opponent,
+    "greedy_capacity_aware": greedy_capacity_aware_opponent,
 }
 
 
@@ -63,6 +65,7 @@ __all__ = [
     "Opponent",
     "noop_opponent",
     "random_legal_opponent",
+    "greedy_capacity_aware_opponent",
     "make_neural_opponent",
     "make_env",
 ]

@@ -113,7 +113,19 @@ def _parse_overrides(spec: str | None) -> dict:
     return out
 
 
-def queue_sweep(axis: str | None, dry_run: bool, baseline_overrides: dict) -> None:
+def queue_sweep(
+    axis: str | None,
+    dry_run: bool,
+    baseline_overrides: dict,
+    from_run_id: str | None = None,
+) -> None:
+    """Queue one sweep (3 cells of one axis).
+
+    `from_run_id` (optional UUID): when set, each cell is queued as a
+    continuation off that parent. The worker loads parent weights at run
+    start; cells start warm instead of from random init. Used to test "same
+    starting point, different lr/etc." sweeps from a known-good checkpoint.
+    """
     cfg = load()
     last = _last_karp_axis()
     if axis is None:
@@ -185,15 +197,16 @@ def queue_sweep(axis: str | None, dry_run: bool, baseline_overrides: dict) -> No
 
     print(f"[karp] training_opponent.mode={opp_mode}")
 
-    model_id = cfg.model["model_id"]
-    major_change = cfg.model.get("major_change", "Unspecified")
-    exp_num = _next_experiment_num(model_id)
+    model_id       = cfg.model["model_id"]                                  # FK
+    version_prefix = cfg.model.get("version_prefix", model_id)               # label prefix
+    major_change   = cfg.model.get("major_change", "Unspecified")
+    exp_num = _next_experiment_num(version_prefix)
     budget_ms = int(cfg.schedule["cell_budget_seconds"]) * 1000
     launch_at = int(time.time() * 1000)
 
     print(f"[karp] axis={axis_obj.axis} (last_used={last!r})")
-    print(f"[karp] model={model_id} major_change={major_change} experiment={exp_num:02d} — "
-          f"{len(cells)} cells × {budget_ms//60000} min each")
+    print(f"[karp] model_id={model_id} version_prefix={version_prefix} major_change={major_change} "
+          f"experiment={exp_num:02d} — {len(cells)} cells × {budget_ms//60000} min each")
 
     rows = []
     for cell in cells:
@@ -211,11 +224,13 @@ def queue_sweep(axis: str | None, dry_run: bool, baseline_overrides: dict) -> No
             hp["self_play"] = True
             hp["fused_rollout"] = False
         # Label format (2026-04-30 onward):
-        #   {model_id}.{exp:02d}-{MajorChange}-{axis}-{cell}
+        #   {version_prefix}.{exp:02d}-{MajorChange}-{axis}-{cell}
         # e.g. v10.2.02-LargeMap-lr-lo, v10.2.02-LargeMap-lr-mid, v10.2.02-LargeMap-lr-hi
         # One karp fire = one exp num shared across the 3 cells.
-        label = f"{model_id}.{exp_num:02d}-{major_change}-{axis_obj.axis}-{cell['label']}"
-        desc  = (f"Step {model_id.split('.')[-1]} ({major_change}): "
+        label = f"{version_prefix}.{exp_num:02d}-{major_change}-{axis_obj.axis}-{cell['label']}"
+        # Step number derived from the .N suffix of version_prefix (e.g. "v10.2" -> "2")
+        step_label = version_prefix.split('.')[-1] if '.' in version_prefix else '?'
+        desc  = (f"Step {step_label} ({major_change}): "
                  f"{axis_obj.axis} sweep — {cell['label']} cell "
                  f"({axis_obj.axis}={cell['value']}, opp={opp_mode})")
         rows.append((cell, label, desc, hp))
@@ -227,26 +242,54 @@ def queue_sweep(axis: str | None, dry_run: bool, baseline_overrides: dict) -> No
         print("[karp] dry-run — no inserts")
         return
 
+    # When --from-run-id is set, each cell becomes a warm-start continuation
+    # off that parent run. Worker reads parent_run_id and loads weights at
+    # job start (same path the chain script uses).
+    if from_run_id:
+        print(f"[karp] warm-starting all cells from run {from_run_id[:8]}")
+
     inserted = []
     with connect() as c, c.cursor() as cur:
         for cell, label, desc, hp in rows:
-            cur.execute(
-                """
-                INSERT INTO runs
-                  (model_id, simulator_id, project, label, description,
-                   status, budget_ms, seed, hyperparams, machine, launch_at)
-                VALUES
-                  (%s, %s, %s, %s, %s,
-                   'queued', %s, %s, %s::jsonb, %s, %s)
-                RETURNING id
-                """,
-                (
-                    cfg.model["model_id"], cfg.model["simulator_id"], PROJECT,
-                    label, desc,
-                    budget_ms, str(cell["label"]),
-                    json.dumps(hp), "unassigned", launch_at,
-                ),
-            )
+            if from_run_id:
+                cur.execute(
+                    """
+                    INSERT INTO runs
+                      (model_id, simulator_id, project, label, description,
+                       status, budget_ms, seed, hyperparams, machine, launch_at,
+                       parent_run_id, is_continuation)
+                    VALUES
+                      (%s, %s, %s, %s, %s,
+                       'queued', %s, %s, %s::jsonb, %s, %s,
+                       %s, true)
+                    RETURNING id
+                    """,
+                    (
+                        cfg.model["model_id"], cfg.model["simulator_id"], PROJECT,
+                        label, desc,
+                        budget_ms, str(cell["label"]),
+                        json.dumps(hp), "unassigned", launch_at,
+                        from_run_id,
+                    ),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO runs
+                      (model_id, simulator_id, project, label, description,
+                       status, budget_ms, seed, hyperparams, machine, launch_at)
+                    VALUES
+                      (%s, %s, %s, %s, %s,
+                       'queued', %s, %s, %s::jsonb, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        cfg.model["model_id"], cfg.model["simulator_id"], PROJECT,
+                        label, desc,
+                        budget_ms, str(cell["label"]),
+                        json.dumps(hp), "unassigned", launch_at,
+                    ),
+                )
             inserted.append((label, str(cur.fetchone()[0])))
         c.commit()
 
@@ -259,6 +302,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--axis", help="force axis name (default: round-robin pick)")
     ap.add_argument("--override", help="comma-sep baseline overrides, eg 'lr=1e-4,n_envs=512'")
+    ap.add_argument("--from-run-id", default=None,
+                    help="warm-start every cell from this run UUID (loads its weights)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -266,6 +311,7 @@ def main():
         axis=args.axis,
         dry_run=args.dry_run,
         baseline_overrides=_parse_overrides(args.override),
+        from_run_id=args.from_run_id,
     )
 
 

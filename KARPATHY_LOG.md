@@ -4287,6 +4287,76 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### Loop fire 97 --- 2026-04-30 14:55 PT --- Step 2 chain paused. lr sweep queued from cont-03 (gamma 0.99, archive_eval off, 5min cells). Heuristic opponent scaffolded.
+
+**Base-04 final result (the run that finished while we were planning this fire):**
+
+| metric | Base-04 | observation |
+|---|---|---|
+| rate (overall) | 0.606 | flat from Base-03 |
+| final win_rate | 0.627 | similar to Base-03's 0.612 |
+| **timeout_rate** | **0.373** | **37% of games hit max_ticks unresolved** |
+| approx_kl | 0.0004 | back to tiny — the Base-03 spike didn't repeat |
+| ep_len | 131.0 | slightly longer than Base-03 |
+
+**The 37% timeout_rate is the smoking gun on Paul's gamma intuition.** With gamma=0.97 and ep_len=131, terminal reward is worth 0.97^131 ~= 1.5% at game start. The agent has effectively no signal to FINISH games, only signal to dominate territory. It learns to maintain a winning position without closing it out. Paul's "longer reward signal for bigger maps" diagnosis was exactly right.
+
+**Decisions this fire (per Paul):**
+
+| change | value | reason |
+|---|---|---|
+| Cell budget | 1800s -> **300s** (already in YAML — confirmed) | Faster iteration |
+| Baseline lr | 1e-3 -> **3e-3** | Step 2 chain showed KL bouncing 0.002-0.275; needs actual updates per cell |
+| lr sweep cells | [1e-4, 3e-4, 1e-3] -> **[1e-3, 3e-3, 1e-2]** | Center the sweep around the new baseline |
+| gamma | 0.97 -> **0.99** | 0.99^131 = 28% terminal signal at game start (was 1.5%) |
+| archive_eval_every | 5 -> **999999** | Master random play first; ladder eval slows training |
+| Step 2 chain | paused | Drift > learning across Base-01..04 |
+
+**Step 2 chain status (pause):**
+
+| batch | rate | final | KL | Elo |
+|---|---|---|---|---|
+| Base-01 | 0.676 | 0.721 | 0.0041 | 945.8 |
+| Base-02 | 0.689 | 0.574 | 0.0023 | 955.1 |
+| Base-03 | 0.606 | 0.612 | 0.2746 | 949.2 |
+| Base-04 | 0.606 | 0.627 | 0.0004 | tbd |
+
+Net learning across 4 batches: ~0pp gain on rate, ~+10 Elo, KL noise. Curve is flat — the lr=1e-3 / gamma=0.97 combo cannot push past this regime. Time to break out with stronger settings.
+
+**lr sweep queued (warm-started from cont-03):**
+
+    v10.2.02-LargeMap-lr-lo   id=1d1e9a77  lr=1e-3   (control)
+    v10.2.02-LargeMap-lr-mid  id=2f8e80e5  lr=3e-3   (3x prior)
+    v10.2.02-LargeMap-lr-hi   id=e279ceb8  lr=1e-2   (10x prior)
+
+All 3 inherit cont-03 weights, gamma=0.99, level_mix=b6, opp=random_legal, 300s each, archive_eval disabled. Total ~15 min for the full sweep.
+
+**Heuristic opponent scaffolded — `greedy_capacity_aware`:**
+
+Per Paul's spec — added to `sim/envs/opponents.py` and registered in `_SIMPLE_OPPONENTS` dict. Logic:
+
+1. Source = highest-garrison alive P2 building.
+2. Phase A (neutrals exist): target = lowest-garrison alive neutral. Send 75% iff `0.75 * src_garrison > tgt_garrison`. Else NOOP (let source grow).
+3. Phase B (no neutrals): target = lowest-garrison alive enemy. Same capture-feasibility check, with DEF_BONUS=1.3 applied to the defender. Else NOOP.
+
+Intentional weaknesses (give the NN room to outplay):
+- No travel-time accounting (sends leave source naked)
+- Single-stream sends (one move at a time)
+- Hard 75% threshold — stalls if source/cap < lowest_neutral + epsilon
+- Greedy on neutrals first; ignores enemy expansion in Phase A
+
+**Path to using it for training (Step 3) — DEFERRED.** Currently numpy-only. JAX backend (the fast training path) requires a JIT-compatible port. For now the heuristic can be used for evaluation matches and numpy-backend training; JAX port is a separate task once Step 2 lr sweep gives us a strong baseline.
+
+**Convention fix.** model_id field was conflated with label-prefix. Now split:
+- `model_id` (e.g. "v10-1024") = FK to the `models` table; the trained architecture
+- `version_prefix` (e.g. "v10.2") = label prefix encoding (model.step)
+
+Caught when first lr-sweep insert tried `model_id="v10.2"` and hit a foreign-key violation. Fixed in karpathy_loop.yaml + queue_karp_sweep.py.
+
+**Worker is on new trainer code** (restarted earlier this session at 14:13). lr sweep cells will populate timeout_rate metric.
+
+**Next check:** ~15:16 PT. Expected: lr sweep 3 cells done (5 min each + bench_eval); compare rate / final_wr / timeout_rate / KL across cells to pick the winning lr.
+
 ### Loop fire 96 --- 2026-04-30 14:45 PT --- Base-04 still running (no archive_eval - confirmed). Awaiting Paul decision on lr/gamma/heuristic.
 
 **Confirmed: archive_eval disable worked.** Worker log for Base-04 shows zero `[archive_eval] u` lines (count stayed at 569 from prior runs). Training silent except for snapshot uploads. The 30-40% GPU saving from skipping interim eval is now active for all Base-04+ runs.
