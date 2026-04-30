@@ -233,6 +233,9 @@ _HTML = r"""<!doctype html>
   .help { color: #93a3b8; font-size: 12px; margin-top: 12px; line-height: 1.5; }
   .help kbd { background: #1f2330; border: 1px solid #2c3242; border-radius: 3px;
               padding: 1px 5px; font-family: ui-monospace, monospace; font-size: 11px; }
+  .pct-row { display: flex; gap: 6px; margin-top: 8px; }
+  .pct-row button { flex: 1; padding: 8px 4px; font-size: 13px; font-weight: 500; }
+  .pct-row button.active { background: #f59e0b; border-color: #f59e0b; color: #11141b; }
   .toast { position: absolute; top: 24px; left: 50%; transform: translateX(-50%);
            background: #1f2330; padding: 6px 14px; border-radius: 4px;
            border: 1px solid #2c3242; opacity: 0; transition: opacity 0.2s;
@@ -265,7 +268,13 @@ _HTML = r"""<!doctype html>
     <div id="phase-banner" class="phase-banner" style="display:none"></div>
   </div>
   <aside>
-    <h3>State</h3>
+    <h3>Send size</h3>
+    <div class="pct-row" id="pct-row">
+      <!-- buttons inserted at runtime from SEND_PERCENTAGES (25/50/75/100) -->
+    </div>
+    <div class="muted small" style="margin-top:6px;">How much of the source garrison to send.</div>
+
+    <h3 style="margin-top:18px">State</h3>
     <div class="legend">
       <span><span class="swatch" style="background:#f87171"></span>You (P1)</span>
       <span><span class="swatch" style="background:#60a5fa"></span>Agent (P2)</span>
@@ -282,8 +291,9 @@ _HTML = r"""<!doctype html>
 
     <h3 style="margin-top:24px">How to play</h3>
     <div class="help">
-      <p><strong>1.</strong> Click one of your (red) buildings to select a source.</p>
-      <p><strong>2.</strong> Click any building to send a squad there.</p>
+      <p><strong>1.</strong> Pick a send size above (or press <kbd>1</kbd>–<kbd>4</kbd>).</p>
+      <p><strong>2.</strong> Click one of your (red) buildings to select a source.</p>
+      <p><strong>3.</strong> Click any building to send that fraction of the garrison there.</p>
       <p><strong>Esc</strong> or <kbd>right-click</kbd> to deselect. The agent moves on the
          next decision interval (every 2 ticks). Game ends when one side has zero buildings
          or you both run out of units.</p>
@@ -430,6 +440,8 @@ function updateSidebar(state) {
 // SLOTS_SQ and MAX_BUILDING_SLOTS are constants pulled from the API on first
 // state to stay decoupled from the JS source.
 let SLOTS = null, SLOTS_SQ = null, NOOP_IDX = null, ACTION_DIM = null;
+let SEND_PERCENTAGES = [25, 50, 75, 100];
+let selectedTypeIdx = 3;  // default 100% — most natural human play
 async function fetchConsts() {
   const r = await fetch('/api/constants');
   const j = await r.json();
@@ -437,11 +449,40 @@ async function fetchConsts() {
   SLOTS_SQ   = j.SLOTS_SQ;
   NOOP_IDX   = j.NOOP_INDEX;
   ACTION_DIM = j.ACTION_SPACE_SIZE;
+  if (Array.isArray(j.SEND_PERCENTAGES) && j.SEND_PERCENTAGES.length > 0) {
+    SEND_PERCENTAGES = j.SEND_PERCENTAGES;
+    selectedTypeIdx = SEND_PERCENTAGES.length - 1;  // last = 100%
+  }
+  buildPctButtons();
 }
-function buildSendAction(srcSlot, tgtSlot, typeIdx /* 0 = SEND default */ ) {
-  // Default to SEND_ALL (type=0). Future: surface UI for type selection.
+function buildPctButtons() {
+  const $row = document.getElementById('pct-row');
+  $row.innerHTML = '';
+  SEND_PERCENTAGES.forEach((pct, idx) => {
+    const btn = document.createElement('button');
+    btn.textContent = `${pct}%`;
+    btn.dataset.idx = idx;
+    if (idx === selectedTypeIdx) btn.classList.add('active');
+    btn.addEventListener('click', () => {
+      selectedTypeIdx = idx;
+      // Refresh active state on all buttons.
+      [...$row.children].forEach(b => b.classList.toggle('active',
+        Number(b.dataset.idx) === selectedTypeIdx));
+    });
+    $row.appendChild(btn);
+  });
+}
+function buildSendAction(srcSlot, tgtSlot, typeIdx) {
+  // typeIdx indexes SEND_PERCENTAGES (0..len-1).
   return typeIdx * SLOTS_SQ + srcSlot * SLOTS + tgtSlot;
 }
+// Number keys 1..N pick a percentage (1=25%, 2=50%, 3=75%, 4=100%).
+window.addEventListener('keydown', (e) => {
+  if (e.key >= '1' && e.key <= String(SEND_PERCENTAGES.length)) {
+    selectedTypeIdx = Number(e.key) - 1;
+    buildPctButtons();
+  }
+});
 
 function buildingAt(canvasX, canvasY) {
   if (!lastState) return null;
@@ -481,7 +522,7 @@ CV.addEventListener('click', async (e) => {
     render(lastState);
     return;
   }
-  const actionIdx = buildSendAction(selectedSrc, tgtSlot, 0);
+  const actionIdx = buildSendAction(selectedSrc, tgtSlot, selectedTypeIdx);
   selectedSrc = null;
   // Fire the action; render will refresh on next poll.
   try {
@@ -580,6 +621,9 @@ class _Handler(BaseHTTPRequestHandler):
                 "SLOTS_SQ":           int(SLOTS_SQ),
                 "NOOP_INDEX":         int(NOOP_INDEX),
                 "ACTION_SPACE_SIZE":  int(ACTION_SPACE_SIZE),
+                # SEND_PERCENTAGES = (25, 50, 75, 100) — type 0..3 indexes the
+                # tuple. UI surfaces this so the user can pick how much to send.
+                "SEND_PERCENTAGES":   list(C.SEND_PERCENTAGES),
             })
             return
         self.send_error(404)
