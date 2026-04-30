@@ -4287,6 +4287,51 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### Loop fire 93 --- 2026-04-30 13:43 PT --- Base-02 done. Mixed: rate up overall (+1.3pp) and Elo up (+9), final-window down (-15pp). Base-03 queued.
+
+**Step 2 chain progress:**
+
+| batch | rate (overall) | rate (final) | ep_len | approx_kl | Elo |
+|---|---|---|---|---|---|
+| Step 1 base (cont-03) | 0.967 | 0.967 | 16.8 | 0.087 | 1096 |
+| Base-01 | 0.676 | 0.721 | 126.8 | 0.0041 | 945.8 |
+| Base-02 | 0.689 | 0.574 | 120.8 | 0.0023 | 955.1 |
+
+**Read.**
+
+| signal | direction | comment |
+|---|---|---|
+| overall rate | +1.3pp ↑ | small but positive |
+| final-window rate | -14.7pp ↓ | concerning - policy regressed in last ~111 episodes of Base-02 |
+| ep_len | -6 ticks ↑ | slightly more efficient |
+| approx_kl | -45% ↓ | even more conservative; model barely moving |
+| Elo vs archive | +9 ↑ | nominal improvement; archive bias against large-map specialist persists |
+
+**The final-window drop is the headline.** Base-01 ended at 72.1%, Base-02 ends at 57.4%. Three possibilities:
+
+1. **Noise in final window (~111 episodes).** With 4 generators in the mix, draw of harder maps can swing final-window rates by a lot.
+2. **Genuine regression.** lr=1e-3 with KL=0.002 is a very small step, but if the optimization landscape has a bad direction, the policy can still drift toward worse params.
+3. **Distributional shift mid-training.** The level_mix is sampled per-env, so different updates see different distributions. The final updates may have hit a higher mass of harder levels (8-16, 16-24).
+
+approx_kl=0.0023 means the model has essentially stopped learning — that is consistent with hypothesis (1) noise at small step size, less consistent with (2) genuine direction-of-regression.
+
+**Action — none yet.** Two more batches (Base-03, Base-04) before the trend is clear. If overall rate keeps climbing while final-window oscillates, hypothesis (1) is supported. If overall rate stalls or drops, hypothesis (2) is real and we need to either:
+
+- bump lr (1e-3 -> 3e-3) to get out of the local rut, OR
+- restart from cont-03 with the level_mix = `{random_4_8: 1.0}` first (gentler graduation), OR
+- reduce mix entropy (drop random_16_24, train on 4_8/6_10/8_16 first)
+
+**Base-03 queued:**
+
+    v10.2.01-LargeMap-Base-03  (id 038fd4fd)
+    parent      = ef658d85 (Base-02)
+    budget      = 1800s
+    inherits    = same as Base-02 (lr=1e-3, n_envs=1800, level_mix dict)
+
+**Backstop fire at 13:15 PT** — found chain active (Base-02 was running), no-op. Working as designed.
+
+**Next check:** ~14:14 PT. Expected: Base-03 done; we will see whether overall rate continues climbing.
+
 ### Loop fire 92 --- 2026-04-30 13:13 PT --- Base-01 rated at Elo 945.8 (-150 vs cont-03). Base-02 running. Fixed karp_review_games for new labels. Bench games not saved (sep issue).
 
 **Base-01 bench rating:** Elo 945.8 (rated, n=10 champs in archive). cont-03's Elo was 1096.3 — Base-01 is **-150 Elo** vs the v10 champion archive. Expected: the archive consists of small-map era champions, and Base-01 trades small-map mastery for large-map adaptability. The bench question (how does this checkpoint stack against archived models on whatever map bench_eval picks) is necessarily kind to the older champions when the eval distribution overlaps small-map territory.
