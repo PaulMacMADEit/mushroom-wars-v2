@@ -3903,6 +3903,69 @@ new sweeps will produce equivalent baseline data.
 
 **No queueing this fire.** Letting the era-filtered bootstrap path do its job.
 
+### Loop fire 80 — 2026-04-29 21:40 PT — 🚨 4 v10 bugs found in bench pipeline. Fixed 3 (opp_pool_mode YAML, era filter, weight unwrap). 4th (tournament obs dict missing v10 keys) is beyond karp-loop scope — needs Paul.
+
+**State.** Worker active. lr-mid (running 30+min in unknown state — possibly stuck on Mac CPU worker), other v10 runs `done` but `unrated`.
+
+**Bugs found this fire (with manual bench_eval test on lr-lo):**
+
+| # | bug | fix | status |
+|---|---|---|---|
+| 1 | `opponent_pool_mode: rotate_per_update` + `leaderboard_bias: 0.30` triggered v9 archive download even with `training_opponent.name=random_legal` | YAML: both → `""` and `0.0` | ✅ shipped fire 78 (`2421ee9`) |
+| 2 | `bench_eval._get_archive` returned ALL champions regardless of arch_era; v10 runs tried to bench against 30 v9 entries → silent crash → unrated | filter by `_current_arch_era()` in `_get_archive` and `_most_recent_champion` | ✅ shipped fire 79 (`2ef2b59`) |
+| 3 | v10 trainer wraps weights as `{state_dict, encoder_version}` but `tournament._load_policy` expected v9 flat-state_dict format | unwrap if both keys present | ✅ shipped fire 80 (`a1a3099`) |
+| 4 | v10 encoder reads new obs keys (`arrivals_p1`, `arrivals_p2`, `prev_buildings_owner`, `prev_p1_units_total`, `last_actions_p1`, `last_actions_p2`, etc.) that `tournament._state_to_obs_dict_for_player` doesn't supply → KeyError | sim-side state tracker needed; obs-dict builder needs v10 contract | ❌ **NOT FIXED** — beyond karp-loop scope |
+
+**Test that revealed bug 4:**
+```
+$ ssh paul@paullinux ".venv/bin/python -m workers.bench_eval 1757a025-..."
+[bench] karpv2-260429-2104-lr-lo: archive thin (0 champs) — running bootstrap gate (30 vs random_legal)
+KeyError: 'arrivals_p1'
+File "training/encoder.py", line 157
+```
+
+**The encoder v10 contract (per `git log` for `372a094`):** "drop dead type_oh, add
+prod/wasted/share/delta/history globals + per-bldg event-explicit." The trainer's
+`fused_rollout` JAX path likely tracks these natively, but the
+tournament/bench-eval CPU path uses `_state_to_obs_dict_for_player` which still
+builds the v9 obs dict.
+
+**Implication.** Until bug 4 is fixed, **no v10 runs can be rated.** They train
+fine (lr-lo at rate 0.84, lr-hi at 0.84, n_envs-lo at 0.84 vs random_legal —
+weights are valid), but bench_eval crashes during the bootstrap gate before any
+rated games complete.
+
+**Recommendation for Paul (this is karp-loop's bound):**
+- Fix `_state_to_obs_dict_for_player` to populate v10 keys: `arrivals_p1/p2`,
+  `prev_buildings_owner`, `prev_p1_units_total`, `prev_p2_units_total`,
+  `last_actions_p1/p2`, plus any others encoder.py reads at the top of `encode_obs`.
+- The data needs to be tracked across ticks — not a stateless transform.
+- Once shipped, bench_eval will bootstrap-archive any of the 5 already-trained
+  v10 runs (n_envs-lo / n_envs-hi / lr-lo / lr-hi / lr-mid), producing the first v10
+  champions. Karp loop resumes normal operation.
+
+**Karp backstop NOT paused** — it'll keep queueing v10 cells that train successfully
+but can't bench. Acceptable: weights and training rates ARE recorded; can rebench
+post-fix. If Paul wants the queue clean while he iterates, run:
+```
+ssh paullinux "systemctl --user stop mushroom-karp.timer"
+```
+
+**Recent v10 training rates (vs random_legal, no Elo):**
+
+| label | swept_var | training rate |
+|---|---|---|
+| `karpv2-260429-2045-n_envs-lo` | 512 | 0.844 |
+| `karpv2-260429-2045-n_envs-hi` | 2048 | 0.774 |
+| `karpv2-260429-2104-lr-lo` | 1e-4 | (running on Mac, partial) |
+| `karpv2-260429-2104-lr-mid` | 3e-4 | 0.778 |
+| `karpv2-260429-2104-lr-hi` | 1e-3 | 0.845 |
+
+Even without bench Elo, this is real data: under v10 the agent is
+hitting 77-85% vs random_legal in 5 minutes of training. Solid baseline.
+**lr=1e-3 (hi) and n_envs=512 (lo) lead** — same pattern as v9 fires
+72/74 ("update density wins").
+
 ## Code changes during loop
 
 **gae_lambda sweep (last v9 data) — partial:**
