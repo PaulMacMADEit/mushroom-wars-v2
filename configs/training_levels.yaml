@@ -11,8 +11,10 @@
 #   2. level_name + level_mix — each env independently samples a level on reset;
 #                               level_name becomes a label only
 #
-# When level_mix is set, each row must be a real key under sim/levels.py
-# (LEVELS dict, or a generator like random_4_8 / random_close_4_5 / asym_8_8).
+# When level_mix is set, it must be a {name: weight} dict OR a list of
+# [name, weight] pairs. Bare lists of strings DO NOT work — trainer.py:280
+# tries float(item[1]) and crashes on string indexing (caught 2026-04-30
+# fire 90 first run, ValueError: could not convert string to float: 'a').
 #
 # Reload cost: zero — both schedulers read fresh from disk each fire.
 
@@ -22,11 +24,11 @@
 #   more varied maps. Same hardcoded opponent (random_legal); the variable is
 #   map size + building count, not opponent strength.
 #
-#   Mix: 4 generators sampled per-env on reset. Range 4-24 buildings, full
-#   700×700 map.
+#   Mix: 4 generators sampled per-env on reset, equal weight. Range 4-24 buildings,
+#   full 700x700 map.
 level_name: random_4_8  # label only when level_mix is set
 level_mix:
-  - random_4_8
-  - random_6_10
-  - random_8_16
-  - random_16_24
+  random_4_8: 1.0
+  random_6_10: 1.0
+  random_8_16: 1.0
+  random_16_24: 1.0

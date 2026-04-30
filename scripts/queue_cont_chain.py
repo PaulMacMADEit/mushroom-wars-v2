@@ -47,12 +47,12 @@ def parse_overrides(s: str | None) -> dict:
     if not s:
         return {}
     out = {}
-    # Split on top-level commas (don't break commas inside [])
+    # Split on top-level commas (don't break commas inside [] or {})
     parts, depth, buf = [], 0, ""
     for ch in s:
-        if ch == "[":
+        if ch in "[{":
             depth += 1; buf += ch
-        elif ch == "]":
+        elif ch in "]}":
             depth -= 1; buf += ch
         elif ch == "," and depth == 0:
             parts.append(buf); buf = ""

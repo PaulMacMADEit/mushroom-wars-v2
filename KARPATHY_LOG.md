@@ -4287,6 +4287,26 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### Loop fire 90.5 --- 2026-04-30 12:13 PT --- BUG: level_mix bare-string list crashed trainer at start. Fixed YAML to dict format. Re-queued.
+
+**What broke.** First Step 2 attempt v10.2.01-LargeMap-Base-01 failed within 1.4s of start with:
+
+    File "training/trainer.py", line 280, in _build_vec
+        level_mix = [(str(item[0]), float(item[1])) for item in raw]
+    ValueError: could not convert string to float: 'a'
+
+trainer.py:280 expects level_mix to be either a {name: weight} dict OR a list of [name, weight] pairs. I shipped fire 90 with a bare list of strings (random_4_8, random_6_10, ...). Iterating that gave individual strings and float(item[1]) is float('a') from the second character.
+
+**Fix.** training_levels.yaml: bare list -> dict {name: weight}. Same for the queue_cont_chain.py --override value (now uses JSON dict syntax). Also extended parse_overrides to track {} depth alongside [] so the JSON dict survives the comma-splitter.
+
+**Re-queued.** v10.2.01-LargeMap-Base-01 (id ed108913) with correct dict format. Started 12:12 PT, running. The failed first attempt renamed to v10.2.01-LargeMap-Base-FAILED-listFmtBug so it does not block the chain regex.
+
+**Why the b6 path didn't catch this.** The b6 phase1_full_mix runs that originally used level_mix were queued via different scripts that produced the dict shape. The new training_levels.yaml flow is the first time the YAML structure is loaded directly into hyperparams - revealing that load_levels in cli/loop_config.py passes the YAML through unchanged (see line 67-69), so the YAML must already be in trainer-acceptable shape.
+
+**Lesson.** When changing the YAML schema for a config that flows directly into trainer hp, run a single-step dry of the trainer init before queueing 6 batches. (Cell budget is 1800s but the fail was 1.4s, so cost was just 1 wasted launch.)
+
+**Next check:** ~12:41 PT. v10.2.01-LargeMap-Base-01 should finish ~12:42 PT (30 min budget), bench_eval ~12:55 PT.
+
 ### Loop fire 90 --- 2026-04-30 11:39 PT --- Step 2 LAUNCHED. Naming convention overhaul. v10.2.01-LargeMap-Base-01 queued from Step 1 base.
 
 **Decision (Paul).** Move on to Step 2 from cont-03 (now v10.1.01-SmallMap-Base-03, 96.7%, Elo 1082). Step 2 graduates to a Large Map mix - more distance + more variation - while keeping the random_legal opponent. Goal: agent learns to win efficiently on bigger maps using the mechanics it already knows.
