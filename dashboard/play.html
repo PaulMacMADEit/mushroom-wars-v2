@@ -142,6 +142,15 @@
 
   <main>
     <h2>Play a game</h2>
+    <div class="card" style="background:#0e1117; border-left:3px solid #34d399; margin-bottom:16px;">
+      <strong>Want to play live yourself?</strong>
+      <div class="muted small" style="margin-top:6px;">
+        Run <span class="mono">python scripts/play_live.py --champion &lt;run_id_prefix&gt;</span>
+        on your local machine and open <a href="http://localhost:8765" target="_blank" class="mono">http://localhost:8765</a>.
+        You play P1 by clicking buildings; the trained agent plays P2.
+        <span class="muted">(Static dashboards can't run sim+net live, so this is local-only.)</span>
+      </div>
+    </div>
     <div class="card">
       <div class="muted small" style="margin-bottom:16px;">
         Queues a multi-game match (default 5), waits for the Mac worker to pick it up, then shows
