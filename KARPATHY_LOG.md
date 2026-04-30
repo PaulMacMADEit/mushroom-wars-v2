@@ -4096,6 +4096,46 @@ the v9 random_champion regime.
 
 **No queueing this fire.** Backstop is doing its thing. Just observing now.
 
+### Loop fire 84 — 2026-04-29 23:44 PT — n_envs experiment underway. karp_preflight shipped (`6f61401`). 3 controlled conts queued from rs-lo champion. Stale n_envs-mid (Mac CPU) cleaned.
+
+**State.** PaulLinux GPU busy (4.5 GB used of 8 GB), running my `rslo-n1024-01`
+experiment. Mac has 2 idle worker processes (intentionally left alone — Paul
+may have started them).
+
+**Queue depth 3:**
+- `karpv2-rslo-n1024-01` running (n_envs=1024, control)
+- `karpv2-rslo-n1536-01` queued (n_envs=1536)
+- `karpv2-rslo-n1800-01` queued (n_envs=1800)
+
+All three are 20-min single-variable conts of the rs-lo champion (rate 0.86,
+Elo ~1012). Same rs=4, lr=1e-3, ue=4, mb=512 inherited from parent. Only
+n_envs differs. Sequential on the GPU → ~60-90 min total wall.
+
+**🚨 Stale row cleaned this fire.** `karpv2-260429-2245-n_envs-mid` was
+"running" for 54 min on a Mac CPU worker that wasn't actually progressing
+(Mac CPU process was at <1% utilization). Marked failed. The Mac worker
+processes will pick up new claims once their poll loop comes back around;
+the stale row was blocking the karp backstop's "queue empty" check.
+
+**🆕 karp_preflight tool shipped (`6f61401`).** 5 invariant checks that
+would have caught tonight's v10 cascade in <30 sec. All checks pass on
+current main: v10 + v9 weights both load (per-checkpoint encoder dispatch
+works), era filter returns 2 v10 entries cleanly, encoder + obs-dict
+contract verified. Tool is at `scripts/karp_preflight.py` — usage:
+```
+python scripts/karp_preflight.py [--skip-smoke]
+```
+Wire as a git pre-push hook on PaulLinux when convenient.
+
+**Pending data.** Once all 3 n_envs experiments bench:
+- Compare bench Elo of {1024, 1536, 1800} from same starting weights
+- Pick winner; resume continuation chain from THAT n_envs
+- Goal per Paul fire 83: push rate from 90% → 99.99% vs random_legal
+  (step 0 — beat random opponent decisively before introducing self-play
+  champion rotation)
+
+**No queueing this fire.** Let the experiments run.
+
 ## Code changes during loop
 
 **gae_lambda sweep (last v9 data) — partial:**
