@@ -272,7 +272,14 @@ _HTML = r"""<!doctype html>
     <div class="pct-row" id="pct-row">
       <!-- buttons inserted at runtime from SEND_PERCENTAGES (25/50/75/100) -->
     </div>
-    <div class="muted small" style="margin-top:6px;">How much of the source garrison to send.</div>
+    <div class="muted small" style="margin-top:6px;">How much of the source garrison to send. Press <kbd>space</kbd> to pass this turn.</div>
+
+    <h3 style="margin-top:18px">Session</h3>
+    <div class="stat"><span class="k">games</span><span class="v" id="s-sess-games">0</span></div>
+    <div class="stat"><span class="k">wins</span><span class="v" id="s-sess-wins" style="color:#34d399">0</span></div>
+    <div class="stat"><span class="k">losses</span><span class="v" id="s-sess-losses" style="color:#f87171">0</span></div>
+    <div class="stat"><span class="k">draws</span><span class="v" id="s-sess-draws">0</span></div>
+    <div class="stat"><span class="k">win rate</span><span class="v" id="s-sess-rate">—</span></div>
 
     <h3 style="margin-top:18px">State</h3>
     <div class="legend">
@@ -433,6 +440,50 @@ function updateSidebar(state) {
   else                        hideBanner();
 }
 
+// Session-stats: how many games this browser session, how many won. Lives in
+// localStorage so reloading the page or restarting the server doesn't reset
+// your streak. Increments exactly once per game-end (tracks last seen phase
+// per session+game so a polled state at phase=1 doesn't bump twice).
+const SESSION_KEY = 'mw2_play_live_session_v1';
+let session = JSON.parse(localStorage.getItem(SESSION_KEY) || '{"games":0,"wins":0,"losses":0,"draws":0,"counted_for":null}');
+function persistSession() {
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  document.getElementById('s-sess-games').textContent  = session.games;
+  document.getElementById('s-sess-wins').textContent   = session.wins;
+  document.getElementById('s-sess-losses').textContent = session.losses;
+  document.getElementById('s-sess-draws').textContent  = session.draws;
+  // Decimal precision: 99.99% mastery target needs 2 decimals to read.
+  const decided = session.wins + session.losses + session.draws;
+  if (decided > 0) {
+    const rate = (session.wins + 0.5 * session.draws) / decided;
+    document.getElementById('s-sess-rate').textContent = `${(rate * 100).toFixed(2)}%`;
+  } else {
+    document.getElementById('s-sess-rate').textContent = '—';
+  }
+}
+function maybeCountGameEnd(state) {
+  if (!state || state.phase === 0 || state.phase === undefined) return;
+  // game_id = (level + opponent + first-seen-tick of this terminal). Identifies
+  // a single game-end so polling repeatedly doesn't double-count it. Reset
+  // clears it because session.counted_for is set per-game.
+  const gid = `${state.level}::${state.opponent}::${state.tick}::${state.phase}`;
+  if (session.counted_for === gid) return;
+  session.counted_for = gid;
+  session.games += 1;
+  if (state.phase === 1) session.wins   += 1;
+  if (state.phase === 2) session.losses += 1;
+  if (state.phase === 3) session.draws  += 1;
+  persistSession();
+}
+document.getElementById('s-sess-games').addEventListener('dblclick', () => {
+  // Hidden reset: double-click "games" stat to wipe session counters.
+  if (confirm('Reset session counters?')) {
+    session = {games:0, wins:0, losses:0, draws:0, counted_for:null};
+    persistSession();
+  }
+});
+persistSession();  // initial render from localStorage
+
 // ----- Click handling -------------------------------------------------------
 // Action encoding mirrors sim/actions.py:
 //   NOOP_INDEX = 4096
@@ -477,10 +528,24 @@ function buildSendAction(srcSlot, tgtSlot, typeIdx) {
   return typeIdx * SLOTS_SQ + srcSlot * SLOTS + tgtSlot;
 }
 // Number keys 1..N pick a percentage (1=25%, 2=50%, 3=75%, 4=100%).
-window.addEventListener('keydown', (e) => {
+// Space passes the current turn (NOOP) — useful when you want to defend / let
+// units accumulate without sending anything.
+window.addEventListener('keydown', async (e) => {
   if (e.key >= '1' && e.key <= String(SEND_PERCENTAGES.length)) {
     selectedTypeIdx = Number(e.key) - 1;
     buildPctButtons();
+    return;
+  }
+  if (e.key === ' ' && lastState && lastState.phase === 0) {
+    e.preventDefault();
+    selectedSrc = null;
+    render(lastState);
+    try {
+      await fetch('/api/action', {
+        method: 'POST', headers: {'content-type': 'application/json'},
+        body: JSON.stringify({idx: NOOP_IDX}),
+      });
+    } catch (err) { showToast('net error: ' + err.message); }
   }
 });
 
@@ -560,6 +625,7 @@ async function poll() {
     lastState = j;
     render(j);
     updateSidebar(j);
+    maybeCountGameEnd(j);
   } catch (err) { /* server might be restarting */ }
 }
 
