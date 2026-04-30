@@ -3966,6 +3966,29 @@ hitting 77-85% vs random_legal in 5 minutes of training. Solid baseline.
 **lr=1e-3 (hi) and n_envs=512 (lo) lead** — same pattern as v9 fires
 72/74 ("update density wins").
 
+### Loop fire 81 — 2026-04-29 22:11 PT — Holding pattern: bug 4 still blocks bench. No new commits from Paul. Stale lr-mid cleaned up to unblock backstop.
+
+**State.** No commits from Paul since fire 80. Bug 4 (tournament obs dict
+missing v10 keys) unfixed. v10 training continues, no bench → no Elo → no
+champions.
+
+**Stale row cleanup:** `karpv2-260429-2104-lr-mid` was stuck "running" for
+60+ min (orphaned by my 21:11 worker restart, row never updated). The karp
+backstop's "skip if any karpv2- queued/running" check meant ONE stale row
+blocked all subsequent backstop fires. Marked failed manually so backstop
+can advance.
+
+**Holding pattern:**
+- Backstop will fire at 22:15 PT, queue next axis (clip_range, after gae_lambda
+  was last completed in v9 era)
+- Cells will train successfully but bench_eval will crash with `KeyError:
+  'arrivals_p1'` (bug 4)
+- Resulting rows = either `done` with `elo_status=unrated` or `failed` if
+  the exception escapes the worker's try/except
+- I'll keep cleaning stale rows + logging until bug 4 lands
+
+**No new ratings, no new champions. No karp leaderboard updates.**
+
 ## Code changes during loop
 
 **gae_lambda sweep (last v9 data) — partial:**
