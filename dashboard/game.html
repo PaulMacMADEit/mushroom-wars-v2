@@ -275,6 +275,36 @@
       margin-right: 4px;
     }
 
+    /* Model Inputs panel — every named feature the encoder produces. */
+    .mi-panel { padding: 8px 12px; }
+    .mi-section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      color: var(--fg-muted);
+      font-size: 10px;
+      letter-spacing: .6px;
+      text-transform: uppercase;
+      padding: 8px 0 3px 0;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 3px;
+    }
+    .mi-section-head .mi-section-sub { font-size: 9px; opacity: .7; }
+    .mi-row {
+      display: grid;
+      grid-template-columns: 130px 44px 1fr;
+      gap: 6px;
+      align-items: center;
+      font-size: 10.5px;
+      padding: 1px 0;
+    }
+    .mi-row .mi-name { color: var(--fg); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mi-row .mi-val  { font-family: var(--mono); color: var(--fg); text-align: right; font-weight: 600; }
+    .mi-row .mi-vis  { height: 14px; min-width: 0; }
+    .mi-row svg { display: block; width: 100%; height: 100%; }
+    .mi-row .mi-spark line { stroke: var(--accent); stroke-width: 1.2; fill: none; }
+    .mi-row .mi-spark .cur  { fill: #fde68a; }
+
     /* KPI panel — per-team reward breakdown, ranked by |contribution|. */
     #reward-breakdown { flex-direction: column; gap: 6px; }
     .kpi-team {
@@ -507,6 +537,11 @@
           </div>
         </div>
 
+        <div class="mind-panel mi-panel" id="model-inputs-panel" style="display:none">
+          <div class="mind-title">Model inputs — what the encoder hands the network</div>
+          <div id="mi-rows"></div>
+        </div>
+
         <div class="mind-panel" id="mind-panel" style="display:none">
           <div class="mind-title">V(s) — "am I winning?"</div>
           <div class="mind-chart"><svg id="mind-chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg></div>
@@ -580,6 +615,10 @@
   <script type="module">
     import { ReplayPlayer, OWNER_NAME } from "./lib/game_renderer.js";
     import { sb, publicUrl } from "./lib/supabase.js";
+    import {
+      GLOBAL_NAMES, BUILDING_NAMES, GROUP_NAMES,
+      computeFeatures, precomputeGlobalSeries,
+    } from "./lib/model_inputs.js";
 
     const $canvas   = document.getElementById("canvas");
     const $wrap     = document.getElementById("canvas-wrap");
@@ -606,6 +645,8 @@
     const $nextGame = document.getElementById("next-game");
     const $gamePos  = document.getElementById("game-pos");
     const $obsPanel = document.getElementById("obs-panel");
+    const $miPanel  = document.getElementById("model-inputs-panel");
+    const $miRows   = document.getElementById("mi-rows");
     const $inflightPanel = document.getElementById("inflight-panel");
     const $inflightChart = document.getElementById("inflight-chart");
     const $obsP1 = {
@@ -629,6 +670,9 @@
 
     // Cached force series for live obs lookup. Populated by renderForceChart.
     let _forceSeries = null;
+    // Cached model-input globals series + per-row DOM refs. Populated by buildModelInputsPanel.
+    let _miGlobals = null;
+    let _miRowRefs = null;
 
     let player = null;
     let currentData = null;
@@ -671,6 +715,7 @@
       renderForceChart(data);
       renderRewardChart(data);
       renderEntropyChart(data);
+      buildModelInputsPanel(data);
       updateObservation(0);
       $dropzone.style.display = "none";
       $play.textContent = "Play";
@@ -1364,6 +1409,143 @@
         cursor.setAttribute('x1', x);
         cursor.setAttribute('x2', x);
       }
+
+      updateModelInputs(t);
+    }
+
+    // --- Model Inputs panel: 41 named features the encoder produces ------
+    /** Build row scaffolding once per loaded replay, then mutate values per tick. */
+    function buildModelInputsPanel(d) {
+      if (!d.map || !d.events) {
+        $miPanel.style.display = "none";
+        _miGlobals = null; _miRowRefs = null;
+        return;
+      }
+      $miPanel.style.display = "block";
+      _miGlobals = precomputeGlobalSeries(d);
+
+      $miRows.innerHTML = "";
+      _miRowRefs = { globals: {}, building: {}, group: {} };
+
+      // GLOBALS — name | value | history sparkline
+      const ghead = document.createElement("div");
+      ghead.className = "mi-section-head";
+      ghead.innerHTML = `<span>Globals</span><span class="mi-section-sub">10</span>`;
+      $miRows.appendChild(ghead);
+      for (const name of GLOBAL_NAMES) {
+        const row = document.createElement("div");
+        row.className = "mi-row";
+        row.innerHTML = `<span class="mi-name" title="${name}">${name}</span><span class="mi-val">—</span><span class="mi-vis"><svg class="mi-spark" viewBox="0 0 100 14" preserveAspectRatio="none"><polyline points="" /><circle class="cur" cx="0" cy="7" r="1.5"/></svg></span>`;
+        $miRows.appendChild(row);
+        _miRowRefs.globals[name] = {
+          val: row.querySelector(".mi-val"),
+          line: row.querySelector("polyline"),
+          dot:  row.querySelector(".cur"),
+        };
+        // Sparkline path is fixed across t — compute once.
+        drawSparkline(_miRowRefs.globals[name].line, _miGlobals.series[name]);
+      }
+
+      // PER-BUILDING — name | max | 32-slot bar pile
+      const bhead = document.createElement("div");
+      bhead.className = "mi-section-head";
+      bhead.innerHTML = `<span>Per-building</span><span class="mi-section-sub">22 × 32</span>`;
+      $miRows.appendChild(bhead);
+      for (const name of BUILDING_NAMES) {
+        const row = document.createElement("div");
+        row.className = "mi-row";
+        row.innerHTML = `<span class="mi-name" title="${name}">${name}</span><span class="mi-val">—</span><span class="mi-vis"><svg viewBox="0 0 32 14" preserveAspectRatio="none">${slotBarsTemplate("#60a5fa")}</svg></span>`;
+        $miRows.appendChild(row);
+        _miRowRefs.building[name] = {
+          val: row.querySelector(".mi-val"),
+          bars: row.querySelectorAll("rect"),
+        };
+      }
+
+      // PER-GROUP — name | max | 32-slot bar pile
+      const ghead2 = document.createElement("div");
+      ghead2.className = "mi-section-head";
+      ghead2.innerHTML = `<span>Per-group</span><span class="mi-section-sub">9 × 32</span>`;
+      $miRows.appendChild(ghead2);
+      for (const name of GROUP_NAMES) {
+        const row = document.createElement("div");
+        row.className = "mi-row";
+        row.innerHTML = `<span class="mi-name" title="${name}">${name}</span><span class="mi-val">—</span><span class="mi-vis"><svg viewBox="0 0 32 14" preserveAspectRatio="none">${slotBarsTemplate("#fbbf24")}</svg></span>`;
+        $miRows.appendChild(row);
+        _miRowRefs.group[name] = {
+          val: row.querySelector(".mi-val"),
+          bars: row.querySelectorAll("rect"),
+        };
+      }
+    }
+
+    /** Inline 32 zero-height rects ready to be sized per tick. */
+    function slotBarsTemplate(color) {
+      let s = "";
+      for (let i = 0; i < 32; i++) {
+        s += `<rect x="${i + 0.1}" y="14" width="0.8" height="0" fill="${color}" />`;
+      }
+      return s;
+    }
+
+    /** Draw a 100×14 polyline through `series` (auto-scaled) into a polyline element. */
+    function drawSparkline(line, series) {
+      if (!series || series.length === 0) return;
+      let lo = Infinity, hi = -Infinity;
+      for (const v of series) { if (v < lo) lo = v; if (v > hi) hi = v; }
+      const span = (hi - lo) || 1;
+      const N = series.length;
+      const pts = [];
+      for (let i = 0; i < N; i++) {
+        const x = N > 1 ? (i / (N - 1)) * 100 : 50;
+        const y = 13 - ((series[i] - lo) / span) * 12;
+        pts.push(`${x.toFixed(2)},${y.toFixed(2)}`);
+      }
+      line.setAttribute("points", pts.join(" "));
+      line.dataset.lo = lo; line.dataset.hi = hi;
+    }
+
+    function updateModelInputs(t) {
+      if (!_miRowRefs || !_miGlobals || !currentData) return;
+      // Globals — current value + sparkline cursor
+      const ti = Math.max(0, Math.min(_miGlobals.maxT, Math.floor(t)));
+      for (const name of GLOBAL_NAMES) {
+        const ref = _miRowRefs.globals[name];
+        const v = _miGlobals.series[name][ti];
+        ref.val.textContent = fmtFeat(v);
+        const lo = parseFloat(ref.line.dataset.lo);
+        const hi = parseFloat(ref.line.dataset.hi);
+        const span = (hi - lo) || 1;
+        const x = _miGlobals.maxT > 0 ? (ti / _miGlobals.maxT) * 100 : 50;
+        const y = 13 - ((v - lo) / span) * 12;
+        ref.dot.setAttribute("cx", x.toFixed(2));
+        ref.dot.setAttribute("cy", y.toFixed(2));
+      }
+      // Per-slot — derive features at the live (fractional) tick.
+      const f = computeFeatures(currentData, t);
+      for (const name of BUILDING_NAMES) updateSlotRow(_miRowRefs.building[name], f.building[name]);
+      for (const name of GROUP_NAMES)    updateSlotRow(_miRowRefs.group[name],    f.group[name]);
+    }
+
+    function updateSlotRow(ref, values) {
+      let mx = 0;
+      for (const v of values) if (v > mx) mx = v;
+      ref.val.textContent = mx === 0 ? "0.00" : mx.toFixed(2);
+      const denom = mx > 0 ? mx : 1;
+      for (let i = 0; i < 32; i++) {
+        const v = values[i] || 0;
+        const h = (v / denom) * 13;
+        const bar = ref.bars[i];
+        bar.setAttribute("height", h.toFixed(2));
+        bar.setAttribute("y", (14 - h).toFixed(2));
+        bar.style.opacity = v > 0 ? "1" : "0.18";
+      }
+    }
+
+    function fmtFeat(v) {
+      if (!isFinite(v)) return "—";
+      if (Math.abs(v) < 0.001 && v !== 0) return v.toExponential(1);
+      return v.toFixed(3);
     }
 
     // Mirrors sim/config.py reward constants and sim/engine.py _check_victory.
