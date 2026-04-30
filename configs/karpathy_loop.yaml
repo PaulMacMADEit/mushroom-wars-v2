@@ -33,19 +33,20 @@ schedule:
 # ---------------------------------------------------------------------------
 queue_policy:
   stale_running_minutes:    90    # 'running' for longer than this → mark failed
-  protected_label_prefix:   "karpv2-"  # NEW REGIME 2026-04-29: vs-champion + curriculum, no random_legal
-  protected_label_patterns: []    # additional regexes never to cancel
+  protected_label_prefix:   "karpv2-"             # legacy karp prefix
+  protected_label_patterns:                       # new format `v10.1.<exp>-<desc>`
+    - "^v\\d+(?:\\.\\d+)+-"
 
 # ---------------------------------------------------------------------------
 # Model + simulator IDs (rarely change)
 # ---------------------------------------------------------------------------
 model:
-  model_id:     "v10-1024"       # 2026-04-29: encoder bump (1002 → 1008 obs).
-                                 # Drops dead type_oh, adds prod/wasted/share_live/
-                                 # reward_delta + 5-step action history + per-bldg
-                                 # event-explicit features (hostile_landed,
-                                 # friendly_landed, ownership_changed). v9.0
-                                 # checkpoints are NOT loadable against v10.
+  model_id:     "v10.1"          # 2026-04-29: same architecture as v10-1024
+                                 # (encoder v10, body=1024). Name format change
+                                 # — drops uninformative body-width suffix.
+                                 # Run labels under this model_id are
+                                 # `v10.1.<exp>-<desc>` (one experiment number
+                                 # per karp fire, shared across the 3 cells).
   simulator_id: "sim-v1.3"
 
 # ---------------------------------------------------------------------------

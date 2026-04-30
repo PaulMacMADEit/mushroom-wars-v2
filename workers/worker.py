@@ -96,6 +96,11 @@ def build_net_for_model(model_id: str, obs_size: int, num_actions: int) -> Actor
         # wasted / share_live / reward_delta / 5-step action history /
         # per-bldg event-explicit). Same chained heads, body=1024 unchanged.
         "v10-1024":      (OBS_DIM, ACTION_SPACE_SIZE, _mk(1024)),
+        # v10.1: same architecture as v10-1024 (encoder v10, body=1024).
+        # Name change only — drops the body-width suffix Paul finds
+        # uninformative. Run labels under this model_id are formatted
+        # `v10.1.<exp>-<desc>` where <exp> is the per-fire experiment number.
+        "v10.1":         (OBS_DIM, ACTION_SPACE_SIZE, _mk(1024)),
     }
     entry = KNOWN.get(model_id)
     if entry is None:
