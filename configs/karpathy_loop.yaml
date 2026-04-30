@@ -131,11 +131,19 @@ baseline_hyperparams:
   # fused_rollout=true (single neural opponent path; just hot-swapped each
   # update). Requires worker to download the archive — gated on this AND
   # leaderboard_bias>0 in workers/worker.py.
-  opponent_pool_mode: "rotate_per_update"
+  #
+  # 2026-04-29 fire 78: TEMPORARILY OFF for v10 bootstrap. The archive is full
+  # of v9 weights (OBS_DIM=1002) which can't load into v10 (1008). Even with
+  # training_opponent.name=random_legal, this path still tries to swap in v9
+  # weights mid-training and crashes. Flip back to 'rotate_per_update' once a
+  # v10 champion exists in the archive.
+  opponent_pool_mode: ""
 
   # ----- Cross-lineage / PFSP archive sampling (training-time) -----
   # Only consulted when self_play=true. Bench-eval-time PFSP is independent.
-  leaderboard_bias:   0.30          # P(env draws from champion archive per snapshot)
+  # 2026-04-29 fire 78: leaderboard_bias also set to 0 during v10 bootstrap to
+  # prevent the worker downloading v9 archive on `needs_pool` gate.
+  leaderboard_bias:   0.0           # P(env draws from champion archive per snapshot) — was 0.30
   leaderboard_source: "pfsp"        # "pfsp" | "elo" (legacy)
   leaderboard_top_k:  10
 
