@@ -328,6 +328,19 @@
         $tabCompleted.innerHTML = `<div class="muted">no runs yet</div>`;
         return;
       }
+      // Inline ❌ for running/failed rows — same shape as the Upcoming tab's
+      // delete button. 'done' rows render an empty cell so completed/scored
+      // runs aren't wipeable from the browser. Confirms before firing.
+      const delCellFor = (r) => {
+        if (r.status !== 'running' && r.status !== 'failed') return '';
+        return `<button class="run-del btn-danger"
+                        data-id="${esc(r.id)}"
+                        data-label="${esc(r.label)}"
+                        data-status="${esc(r.status)}"
+                        title="delete this ${esc(r.status)} run"
+                        style="padding:2px 8px; font-size:13px; line-height:1; cursor:pointer;">×</button>`;
+      };
+
       const rows = data.map(r => {
         const sps = r.result?.steps_per_sec;
         // For running rows, "wall" is now-vs-started so progress reads live.
@@ -354,6 +367,7 @@
             `<span class="muted">—</span>`,
             `<span class="muted">—</span>`,
             `<span class="muted">${fmtTime(tsLabel)}</span>`,
+            delCellFor(r),
           ]);
         }
         return tr([
@@ -369,16 +383,35 @@
           `<span class="mono">${fmtElo(r.elo_score, r.elo_n_matches)}</span>`,
           `<span class="mono">${ticksPerMin(sps)}</span>`,
           `<span class="muted">${fmtTime(tsLabel)}</span>`,
+          delCellFor(r),
         ]);
       });
       $tabCompleted.innerHTML = `
         <table>
           <thead><tr>
             <th>status</th><th>label</th><th>model</th><th>sim</th><th>machine</th>
-            <th>wall</th><th>updates</th><th>games</th><th>rate</th><th>Elo (n)</th><th>ticks/min</th><th>updated</th>
+            <th>wall</th><th>updates</th><th>games</th><th>rate</th><th>Elo (n)</th><th>ticks/min</th><th>updated</th><th></th>
           </tr></thead>
           <tbody>${rows.join('')}</tbody>
         </table>`;
+
+      // Wire up delete buttons. Mirrors loadUpcoming's pattern.
+      $tabCompleted.querySelectorAll('button.run-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.getAttribute('data-id');
+          const label = btn.getAttribute('data-label');
+          const status = btn.getAttribute('data-status');
+          if (!confirm(`Delete ${status} run "${label}"?\n\nThis cannot be undone.`)) return;
+          btn.disabled = true;
+          btn.textContent = '…';
+          // Defensive: only delete if the row is still in the same status
+          // (a running row may finish between page-load and click).
+          const { error } = await sb.from('runs').delete()
+            .eq('id', id).eq('status', status);
+          if (error) { alert(`delete failed: ${error.message}`); btn.disabled = false; btn.textContent = '×'; return; }
+          loadCompleted();
+        });
+      });
     }
 
     async function loadUpcoming() {

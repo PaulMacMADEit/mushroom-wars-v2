@@ -33,6 +33,7 @@ DROP POLICY IF EXISTS anon_read_matches         ON matches;
 DROP POLICY IF EXISTS anon_read_games           ON games;
 DROP POLICY IF EXISTS anon_read_host_telemetry  ON host_telemetry;
 DROP POLICY IF EXISTS anon_delete_queued_runs   ON runs;
+DROP POLICY IF EXISTS anon_delete_runs          ON runs;
 
 CREATE POLICY anon_read_models         ON models         FOR SELECT TO anon, authenticated USING (true);
 CREATE POLICY anon_read_simulators     ON simulators     FOR SELECT TO anon, authenticated USING (true);
@@ -42,19 +43,24 @@ CREATE POLICY anon_read_games          ON games          FOR SELECT TO anon, aut
 CREATE POLICY anon_read_host_telemetry ON host_telemetry FOR SELECT TO anon, authenticated USING (true);
 
 -- ---------------------------------------------------------------------------
--- Delete policy — anon may delete a run ONLY if it's still queued. This wires
--- up the dashboard's "× delete queued run" button (index.html → sb.from('runs')
--- .delete().eq('id',…).eq('status','queued')) without giving anon any other
--- write access. Worst-case blast radius if someone scrapes the public anon
--- key: they can drop pending sweep runs, which are easily re-queued via
--- queue_karp_sweep.py / the cron-agent. They CANNOT touch running/done runs
--- (USING filter blocks them at the RLS layer) and still cannot UPDATE/INSERT
--- (revoked at the GRANT layer below).
+-- Delete policy — anon may delete a run if its status is queued, running, or
+-- failed. This wires up the dashboard's "×" buttons (index.html, both the
+-- Upcoming tab and the Active/Completed table) without giving anon any other
+-- write access. 'done' is excluded so finished, scored runs cannot be wiped
+-- from the browser even by accident.
+--
+-- Worst-case blast radius if someone scrapes the public anon key: they can
+-- drop pending/running/failed runs. Pending runs re-queue cheaply from
+-- queue_karp_sweep.py / the cron-agent; failed rows are debris anyway; a
+-- live running row only loses the in-flight worker's state — annoying, but
+-- the worker writes a fresh run on next start. They still cannot touch any
+-- 'done' row, and still cannot UPDATE/INSERT (revoked at the GRANT layer
+-- below).
 -- ---------------------------------------------------------------------------
 
-CREATE POLICY anon_delete_queued_runs ON runs
+CREATE POLICY anon_delete_runs ON runs
   FOR DELETE TO anon, authenticated
-  USING (status = 'queued');
+  USING (status IN ('queued', 'running', 'failed'));
 
 -- ---------------------------------------------------------------------------
 -- Revoke the dangerous default grants on the anon role.
