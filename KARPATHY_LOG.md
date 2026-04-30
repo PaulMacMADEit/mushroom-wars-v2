@@ -3446,6 +3446,75 @@ ceiling, not hyperparam).
 rotation-off cont diagnostic. Total queue depth ~7 (over cap 6 but greedy
 round-robin is fine).
 
+### Loop fire 73 — 2026-04-29 18:03 PT — 🟡 norot diag finished UNRATED at Elo 1034.6 (n=8 — bench backfill needed); lr sweep mid (3e-4) is the worst karp cell ever at 897; n_envs sweep queued
+
+**State.** Worker active. Queue: lr-lo running (37min in flight, may be stale —
+review next fire), rollout_steps-{lo,mid,hi} queued, n_envs-{lo,mid,hi} queued
+by this fire = depth 7.
+
+**🟡 Rotation-off diagnostic FINISHED but unrated:**
+
+| run | config | Δ vs parent (1095) | n |
+|---|---|---|---|
+| chain-01 | rotation ON, lr=1e-3 | -19 | 27 |
+| diag-lr1e4 | rotation ON, lr=1e-4 | -22 | 18 (backfilled +5) |
+| **diag-norot** | **rotation OFF**, lr=1e-3 | **-60** | 8 (unrated) |
+
+Preliminary read: rotation-off is **WORSE** than rotation-on. n=8 is too low
+to commit — bench will backfill. But the direction matches "fixed opponent =
+agent over-fits to that single opponent's quirks, then fails generalization."
+
+**DO NOT DRAW CONCLUSIONS yet.** This run had the highest variance because
+n=8. Wait one fire for backfill.
+
+If norot still <-30 at n=20: rotation isn't the chain problem. Both
+rotation-on and rotation-off regressed similar amounts. The chain regression
+is **continuation-on-a-champion fundamental** — moving past the parent's peak
+is harder than the per-cell hyperparams can fix.
+
+If norot lifts above -20 at n=20: rotation IS the cause; resume chain with
+rotation-off config.
+
+**lr sweep results (since fire 72):**
+
+| label | swept_var | dur | Elo | n | PFSP | review notes |
+|---|---|---|---|---|---|---|
+| `karpv2-...1701-lr-mid` | lr=3e-4 | 30.9m | **897.4** | 15 | 0.756 | win 4/24 (17%) — **worst karp cell ever** |
+| `karpv2-...1701-lr-hi` | lr=1e-3 (baseline) | 38.2m | 969.5 | 15 | 0.677 | sub-anchor |
+| `karpv2-...1701-lr-lo` | lr=1e-4 | running 37m | — | — | — | possibly stale; will re-check fire 74 |
+
+**Karp lr sweep is currently U-shaped or single-cell artifact:** mid (3e-4) at 897
+is hard to reconcile with hi (1e-3) at 970 unless mid hit a bad seed/opp mix.
+lo (1e-4) result needed.
+
+**Review games (most-recent rated, lr-mid 897.4):**
+
+| game | tag | ticks | decisions | noop% | entropy | value drop | flags |
+|---|---|---|---|---|---|---|---|
+| `a681cbc2` | WIN | 27 | 14 | 7% | 3.82 | -7.37 | ok |
+| `68cc38a4` | LOSS | 22 | 11 | 18% | 3.07 | +2.60 | ok |
+
+**No degenerate noop pattern** — agent is acting (only 18% noop in losses).
+Different failure mode from lr1e4-diag's passive collapse. lr-mid is
+"actively losing" not "passive." Critic still mildly mis-calibrated
+(value drop +2.60). Win game has value drop **-7.37** — agent didn't expect
+to win. Critic poorly calibrated in BOTH directions, but no catastrophe.
+
+**Karp leaderboard (top karpv2 unchanged):**
+
+| run | elo | n | when |
+|---|---|---|---|
+| `karpv2-260429-1448-cont-update_epochs-hi-20min` | 1094.7 | 37 | parent |
+| `karpv2-260429-1600-reward_version-hi` | 1078.3 | 18 | fire 70 (backfilled +16) |
+| `karpv2-260429-cont-0791c618-01` | 1076.2 | 27 | chain batch 01 |
+| `karpv2-260429-1305-n_envs-lo` | 1057.7 | 25 | fire 64 |
+
+reward_version-hi (v1.4) backfilled to 1078 — second-highest karpv2 by Elo.
+Confirms +75 Elo over v1.3 control under rotation; v14 baseline holds.
+
+**Queued (this fire):** n_envs sweep ({512, 1024, 2048}) via round-robin.
+Total queue depth 7; next fire will skip queueing if still ≥6.
+
 ## Code changes during loop
 
 ### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
