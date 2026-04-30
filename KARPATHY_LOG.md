@@ -4242,6 +4242,49 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### Loop fire 87 — 2026-04-30 01:08 PT — 🟡 cont-01 finished at 96.3%. Not yet 97%. Cont-02 queued.
+
+**State.** Session resumed from previous context. cont-01 finished just before
+this fire check.
+
+**cont-01 result:**
+
+| run | rate vs random | Elo | Δ rate vs parent |
+|---|---|---|---|
+| `karpv2-cont-2e238f3d-01` | **0.9629 (96.3%)** | 986.1 | +0.9pp vs n1800's 95.4% |
+
+96.3% — close to 97% map-expansion trigger but not there yet. Elo dipped
+(986 vs parent 1051) reflecting bench variance — the policy is PFSP-rated
+against stronger v10 opponents each time as the archive grows. The rate
+improvement vs random_legal is the reliable signal; Elo oscillation is normal.
+
+**Map expansion trigger: 97% rate vs random_legal.** Not yet triggered.
+When triggered: change `configs/training_levels.yaml` from `random_close_4_5`
+to a bigger level mix (e.g. `random_4_8` + `random_6_10` — full 700×700 maps,
+more buildings).
+
+**cont-02 queued:**
+
+```
+karpv2-cont-2e238f3d-02  (id c478a064)
+parent      = 5d1f3439 (cont-01, rate 0.963)
+budget      = 1200s
+inherits    = n_envs=1800, lr=1e-3, rs=4, ue=4, mb=512, reward_v=2
+```
+
+**Bug fix:** `queue_cont_chain.py` had `head_id[:8]` where `head_id` is a UUID
+object (not str) — fixed to `str(head_id)[:8]`.
+
+**Rate trajectory so far:**
+
+| batch | rate | Elo |
+|---|---|---|
+| n1800 root | 0.954 | 1051.3 |
+| cont-01 | 0.963 | 986.1 (bench variance) |
+| cont-02 | TBD | — |
+
+**Next check:** ~02:08 PT (1 hour). Trigger: rate ≥ 0.97 → expand map.
+
 ## Code changes during loop
 
 **gae_lambda sweep (last v9 data) — partial:**

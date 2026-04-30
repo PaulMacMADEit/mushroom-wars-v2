@@ -84,7 +84,7 @@ def main():
             launch_at = int(time.time() * 1000)
 
             print(f"[chain] queueing {new_label}")
-            print(f"        budget={args.budget_sec}s, parent={head_id[:8]}, seed={seed}")
+            print(f"        budget={args.budget_sec}s, parent={str(head_id)[:8]}, seed={seed}")
             print(f"        update_epochs={hp.get('update_epochs')} lr={hp.get('lr')} "
                   f"opp_pool_mode={hp.get('opponent_pool_mode')} reward_v={hp.get('reward_version')}")
 
