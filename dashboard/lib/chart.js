@@ -30,6 +30,7 @@ const PALETTE = {
   episode_return_min:      '#3f3f46',
   episode_return_max:      '#3f3f46',
   mean_episode_length:     '#fb7185',  // rose — game length in ticks (often on 2nd y-axis)
+  timeout_rate:            '#eab308',  // yellow — episodes that hit max_ticks (phase=0); W+L+D+T=100%
 };
 
 /** Episode-return band chart: faint min/max envelope, shaded p10–p90 band,

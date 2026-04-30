@@ -640,6 +640,13 @@ class PPOTrainer:
             metrics["win_rate"]            = float((phases == 1).mean())
             metrics["loss_rate"]           = float((phases == 2).mean())
             metrics["draw_rate"]           = float((phases == 3).mean())
+            # phase==0 (PHASE_PLAYING) means the episode ended via the
+            # max_ticks cap without resolution. Tracking this so
+            # W+L+D+T = 100% on the chart — a high timeout_rate means the
+            # agent isn't finishing games (common on big maps where the
+            # agent dominates but doesn't eliminate the opponent before
+            # max_ticks). Added 2026-04-30.
+            metrics["timeout_rate"]        = float((phases == 0).mean())
             # Min/max/p10/p90 bands. Mean alone hides variance collapse —
             # AlphaStar Nature paper plots min/max bands for this reason.
             metrics["episode_return_min"]  = float(returns.min())

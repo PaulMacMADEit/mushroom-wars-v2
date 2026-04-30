@@ -450,11 +450,13 @@
         }
       };
 
-      // win_rate / draw_rate / loss_rate + game length — see if a stalled
-      // cell is turtling (high draw_rate, long games) vs actually losing
-      // (high loss_rate). Game length on right-axis (ticks); rates on left
-      // (0-100%). Older runs lack some keys; chart auto-skips missing ones.
-      renderOne('chart-win',    ['win_rate_vs_leaderboard', 'win_rate', 'draw_rate', 'loss_rate'],
+      // win_rate / draw_rate / loss_rate / timeout_rate + game length.
+      // The four rates sum to 100% (timeout_rate covers episodes that hit
+      // max_ticks without resolution — phase=0). Game length on right-axis
+      // (ticks); rates on left (0-100%). Older runs lack some keys; chart
+      // auto-skips missing ones, so pre-2026-04-30 runs render fine.
+      renderOne('chart-win',    ['win_rate_vs_leaderboard', 'win_rate',
+                                  'draw_rate', 'loss_rate', 'timeout_rate'],
                 { yLabel: 'rate', yMin: 0, yMax: 1, yPct: true,
                   secondaryKeys: ['mean_episode_length'],
                   secondaryYLabel: 'game length (ticks)',

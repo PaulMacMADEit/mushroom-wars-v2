@@ -4287,6 +4287,34 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### Loop fire 94 --- 2026-04-30 13:50 PT --- Paul flagged W+L+D!=100% (timeouts not tracked) and archive_eval slowdown. Both fixed for Base-04+.
+
+**Paul's two questions:**
+
+1. **Why W+L+D != 100%?** Chart at update 25 showed win=46.7%, draw=0%, loss=0%. The math gap is `phase==0` (`PHASE_PLAYING`): episodes that hit max_ticks without any side being eliminated. On big maps (mean ep_len 127 ticks vs cap 200), many games run out the clock — agent dominates but doesn't eliminate the random opponent.
+
+2. **Why eval against archive? Slowing things down, want to master random first.** Right call. `[archive_eval]` runs every 5 updates against 10 champions = 100 games × ~28s = burns ~30-40% of GPU time on a leaderboard match Step 2 doesn't care about.
+
+**Fixes shipped this fire:**
+
+| change | file |
+|---|---|
+| Add `timeout_rate = (phases == 0).mean()` so W+L+D+T = 100% | training/trainer.py:643 |
+| Add `timeout_rate` to PALETTE (yellow) and chart-win | dashboard/lib/chart.js + run.html |
+| Disable archive_eval for Step 2 chain via `archive_eval_every: 999999` | will pass via --override on queue_cont_chain.py from Base-04+ |
+
+**Why Base-03 still has archive_eval running.** Worker process is 14h old — it loaded the OLD trainer.py at startup, so my code changes won't take effect until worker restarts. Killing Base-03 mid-flight (5min into 30min) to restart was tempting but lossy; chose instead to let Base-03 finish on old code and restart between Base-03 -> Base-04. Side effect: Base-03 won't have timeout_rate metric and will keep running archive_eval. Sunk cost ~10 min of GPU time. Acceptable.
+
+**Updated Base-03 hp in Supabase (archive_eval_every=999999) is technically dead code** for that run — worker reads hp at start, won't reload. Left it in place because it represents the intended config; future inspectors won't be misled.
+
+**Action for next fire (~14:14 PT):**
+1. Wait for Base-03 to finish (~14:13 PT)
+2. Restart `mushroom-worker.service` to load new trainer.py (gives timeout_rate to Base-04+)
+3. Queue Base-04 with --override 'archive_eval_every=999999'
+4. Confirm worker log shows no `[archive_eval]` lines after restart
+
+**Next check:** ~14:14 PT.
+
 ### Loop fire 93 --- 2026-04-30 13:43 PT --- Base-02 done. Mixed: rate up overall (+1.3pp) and Elo up (+9), final-window down (-15pp). Base-03 queued.
 
 **Step 2 chain progress:**
