@@ -55,10 +55,23 @@ def handle(job: dict, mark_done_fn, mark_failed_fn) -> None:
             last_flush = now
 
     # ---------------------------------------------------------------
-    # Phase 1: reset
+    # Phase 1: snapshot + reset
     # ---------------------------------------------------------------
-    _say("[phase 1] resetting leaderboard…")
+    _say("[phase 1] snapshotting current top 30 + resetting leaderboard…")
     with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id::text, label, elo_score, elo_n_matches FROM runs
+            WHERE project = %s AND simulator_id <> 'admin'
+              AND elo_n_matches >= 1
+            ORDER BY elo_score DESC LIMIT 30
+            """,
+            (PROJECT,),
+        )
+        top_before = [
+            {"id": r[0], "label": r[1], "elo": r[2], "n": r[3], "rank": i + 1}
+            for i, r in enumerate(cur.fetchall())
+        ]
         cur.execute(
             """
             UPDATE runs
@@ -76,7 +89,7 @@ def handle(job: dict, mark_done_fn, mark_failed_fn) -> None:
         )
         n_reset = cur.rowcount
         conn.commit()
-    _say(f"[phase 1] reset {n_reset} runs to Elo 1000 (unrated)")
+    _say(f"[phase 1] snapshotted top {len(top_before)} · reset {n_reset} runs to Elo 1000")
 
     # ---------------------------------------------------------------
     # Phase 2: rebuild via rate_all_runs.py — one pass per iteration.
@@ -128,14 +141,18 @@ def handle(job: dict, mark_done_fn, mark_failed_fn) -> None:
     with connect() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT label, elo_score, elo_n_matches FROM runs
+            SELECT id::text, label, elo_score, elo_n_matches FROM runs
             WHERE project = %s AND simulator_id <> 'admin'
               AND elo_n_matches >= 1
-            ORDER BY elo_score DESC LIMIT 10
+            ORDER BY elo_score DESC LIMIT 30
             """,
             (PROJECT,),
         )
-        top10 = [{"label": r[0], "elo": r[1], "n": r[2]} for r in cur.fetchall()]
+        top_after = [
+            {"id": r[0], "label": r[1], "elo": r[2], "n": r[3], "rank": i + 1}
+            for i, r in enumerate(cur.fetchall())
+        ]
+        top10 = top_after[:10]
 
     _say("")
     _say(f"[done] reset {n_reset} runs, ran {passes} pass(es), "
@@ -150,7 +167,9 @@ def handle(job: dict, mark_done_fn, mark_failed_fn) -> None:
                    "games": games, "level": level, "passes": passes},
         "n_reset": n_reset,
         "passes": pass_summaries,
-        "top10_after": top10,
+        "top_before":  top_before,   # 30 rows, snapshotted before reset
+        "top_after":   top_after,    # 30 rows, post-rebuild
+        "top10_after": top10,        # legacy/back-compat
         "log": _tail("\n".join(log_lines)),
         "wall_s": round(wall_ms / 1000, 1),
     }

@@ -251,6 +251,8 @@
           </div>
         </div>
 
+        <div id="rerate-full-diff"></div>
+
         <h2>Training curves</h2>
         <div class="card">
           <div class="stat-label">win rate vs leaderboard (sparse — every N updates) + vs training opponent (every update)</div>
@@ -371,6 +373,12 @@
         }
         $rr1Status.innerHTML = `queued <a href="./run.html?id=${esc(data.id)}">${esc(label)}</a>`;
       });
+
+      // For rerate_full admin jobs, render a before/after leaderboard diff
+      // table so the impact of the rerank is legible at a glance.
+      if (run.simulator_id === 'admin' && run.result?.kind === 'rerate_full') {
+        renderRerateFullDiff(run.result);
+      }
 
       // Render structured hyperparams — driven by run.hyperparams which is
       // available immediately. No need to wait for metrics.json.
@@ -510,6 +518,92 @@
       renderWinRateProgression(points, run ?? {});
       renderLevelMix(points);
       renderRotationRematch(run ?? {});
+    }
+
+    /** rerate_full before/after diff: pulls top_before + top_after from
+     * the job's result jsonb and renders a unioned table. Each row shows
+     * label, Elo before/after, Δ-Elo, and rank change ↑↓→. */
+    function renderRerateFullDiff(result) {
+      const $root = document.getElementById('rerate-full-diff');
+      if (!$root) return;
+      const before = Array.isArray(result?.top_before) ? result.top_before : [];
+      const after  = Array.isArray(result?.top_after)  ? result.top_after  : [];
+      if (!before.length && !after.length) return;
+
+      // Index by run id so we can union and look up the matching row.
+      const idxBefore = Object.fromEntries(before.map(r => [r.id, r]));
+      const idxAfter  = Object.fromEntries(after.map(r => [r.id, r]));
+      const allIds = Array.from(new Set([...before.map(r => r.id), ...after.map(r => r.id)]));
+
+      // Sort by AFTER rank (then before rank for runs that fell off).
+      allIds.sort((a, b) => {
+        const ra = idxAfter[a]?.rank ?? 999;
+        const rb = idxAfter[b]?.rank ?? 999;
+        if (ra !== rb) return ra - rb;
+        return (idxBefore[a]?.rank ?? 999) - (idxBefore[b]?.rank ?? 999);
+      });
+
+      const arrow = (delta) => {
+        if (delta == null) return '<span class="muted">—</span>';
+        if (delta === 0)   return '<span class="muted">→ 0</span>';
+        if (delta > 0)     return `<span class="win">↑ ${delta}</span>`;
+        return                    `<span class="lose">↓ ${-delta}</span>`;
+      };
+      const eloDelta = (b, a) => {
+        if (b == null || a == null) return null;
+        return Math.round(a - b);
+      };
+      const eloDeltaStr = (d) => {
+        if (d == null) return '<span class="muted">—</span>';
+        if (d === 0)   return '<span class="muted">0</span>';
+        const cls = d > 0 ? 'win' : 'lose';
+        return `<span class="${cls}">${d > 0 ? '+' : ''}${d}</span>`;
+      };
+
+      const rows = allIds.map(id => {
+        const b = idxBefore[id];
+        const a = idxAfter[id];
+        const label = (a?.label ?? b?.label ?? '').slice(0, 60);
+        const beforeRank = b ? `#${b.rank}` : '<span class="muted">—</span>';
+        const afterRank  = a ? `#${a.rank}` : '<span class="muted">dropped</span>';
+        const beforeElo  = b ? Math.round(b.elo) : null;
+        const afterElo   = a ? Math.round(a.elo) : null;
+        const dElo       = eloDelta(beforeElo, afterElo);
+        const dRank      = (b && a) ? (b.rank - a.rank) : null;  // positive = moved up
+        return `<tr>
+          <td><a href="./run.html?id=${esc(id)}">${esc(label)}</a></td>
+          <td class="mono">${beforeRank}</td>
+          <td class="mono">${afterRank}</td>
+          <td class="mono">${arrow(dRank)}</td>
+          <td class="mono">${beforeElo ?? '<span class="muted">—</span>'}</td>
+          <td class="mono">${afterElo  ?? '<span class="muted">—</span>'}</td>
+          <td class="mono">${eloDeltaStr(dElo)}</td>
+        </tr>`;
+      }).join('');
+
+      const movedUp   = allIds.filter(id => idxBefore[id] && idxAfter[id] && idxBefore[id].rank > idxAfter[id].rank).length;
+      const movedDown = allIds.filter(id => idxBefore[id] && idxAfter[id] && idxBefore[id].rank < idxAfter[id].rank).length;
+      const dropped   = allIds.filter(id => idxBefore[id] && !idxAfter[id]).length;
+      const arrived   = allIds.filter(id => !idxBefore[id] && idxAfter[id]).length;
+
+      $root.innerHTML = `
+        <h2>Before / after</h2>
+        <div class="card">
+          <div class="muted small" style="margin-bottom:10px;">
+            Snapshot of top 30 before reset vs top 30 after rebuild. Sorted by post-rebuild rank.
+            <strong>${movedUp}</strong> moved up · <strong>${movedDown}</strong> moved down ·
+            <strong>${dropped}</strong> dropped out · <strong>${arrived}</strong> arrived.
+          </div>
+          <table>
+            <thead><tr>
+              <th>run</th>
+              <th>before</th><th>after</th><th>Δ rank</th>
+              <th>Elo before</th><th>Elo after</th><th>Δ Elo</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
     }
 
     /** End-of-run rematch panel: shows the final policy's win rate vs each
