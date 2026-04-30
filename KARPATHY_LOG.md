@@ -3282,6 +3282,72 @@ opponent to calibrate against them**. Candidate fixes for a future axis:
 **Queued.** entropy_coef sweep ({0.003, 0.01, 0.03}) via round-robin. New cycle
 starts; round-robin wrapped after reward_version.
 
+### Loop fire 71 — 2026-04-29 17:01 PT — 🔻 cont chain batch 01 regressed (-13pp rematch); diagnostic lr=1e-4 cont queued; entropy_coef-lo crashed on MPS-on-Linux
+
+**State.** Worker active, backstop active. Karp queue: entropy_coef-hi running,
+diag-lr1e4 queued, lr-{lo,mid,hi} queued by this fire = depth 5.
+
+**🔻 Cont chain batch 01 result (`karpv2-cont-0791c618-01`):**
+
+Bench Elo backfilled cleanly: 1043.5 → **1084.9** (n: 10→24). Initial -51
+reading was small-n noise. Real Δ vs parent (1094.7, n=37) is **-10 Elo**.
+
+End-of-run rematch (Paul flagged this fire): **-13pp avg across 13 opponents.**
+Worst regression vs strongest opp `0952f5cc` (cron-1147 champion): 80% → 52%
+(-28pp). Cleanest signature of "policy walked backward from a champion peak,
+losing ground specifically against strong opps." Diagnosis (best hypothesis):
+**bootstrap-era hyperparams are wrong for fine-tuning a champion** — lr=1e-3,
+update_epochs=8, random_champion rotation are too hot for a starting point
+already at 80-98% vs bench.
+
+**Chain paused.** Will not queue batch 02 until lr1e4 diagnostic returns.
+
+**Diagnostic queued (`karpv2-diag-0791c618-lr1e4-01`, id `791d76dd`):**
+
+| field | value |
+|---|---|
+| parent | `0791c618` (1095-Elo) |
+| only-changed | `lr` 1e-3 → 1e-4 |
+| inherited | update_epochs=8, opp_pool_mode=rotate_per_update, reward_v=2 |
+| budget | 1200s |
+
+If this returns positive end-of-run rematch Δ → lr was the cause; we update
+chain config and resume from `0791c618`. If still negative → run option #2
+next (rotation off).
+
+**Other karp runs since fire 70:**
+
+| label | swept | dur | Elo | n | PFSP | notes |
+|---|---|---|---|---|---|---|
+| `karpv2-...1630-entropy_coef-lo` | 0.003 | 5.0m | **failed** | — | — | 🚨 `AttributeError: module 'torch.mps' has no attribute 'current_device'` — MPS code path on a Linux/CUDA worker. Needs separate investigation; not blocking. |
+| `karpv2-...1630-entropy_coef-mid` | 0.01 | 25.5m | 960.3 | 18 | 0.770 | normal |
+| `karpv2-...1630-entropy_coef-hi` | 0.03 | running | — | — | — | in flight |
+
+**Karp leaderboard (top karpv2):**
+
+| run | elo | n | when |
+|---|---|---|---|
+| `karpv2-260429-1448-cont-update_epochs-hi-20min` | 1094.7 | 37 | parent (backfilled) |
+| `karpv2-260429-cont-0791c618-01` | 1084.9 | 24 | chain batch 01 (-10 vs parent) |
+| `karpv2-260429-1600-reward_version-hi` | 1061.9 | 13 | fire 70 |
+| `karpv2-260429-1305-n_envs-lo` | 1057.7 | 25 | fire 64 |
+
+**Review games (most-recent rated, `karpv2-...1630-entropy_coef-mid`):**
+
+| game | tag | ticks | decisions | noop% | entropy | value drop | top types | flags |
+|---|---|---|---|---|---|---|---|---|
+| `7a2cc2d1` | WIN | 38 | 19 | 21% | 3.61 | -5.24 | 75%=26% 25%=26% noop=21% | ok |
+| `f3c72e84` | LOSS | 27 | 14 | 50% | 3.62 | +3.20 | noop=50% 50%=21% 25%=14% | ok |
+
+✓ First loss across 4 fires that did NOT trigger the high-noop anomaly flag
+(50% is on the threshold). Critic value-drop still positive (+3.20) but the
+mildest yet. May indicate entropy_coef=mid moderates the rotation noise, but
+n=2 sample, don't over-read.
+
+**Queued.** lr sweep ({1e-4, 3e-4, 1e-3}) via round-robin. lr-lo (1e-4) is the
+same lr as the diagnostic but from a fresh-init parent — gives us two
+independent angles on the lr question.
+
 ## Code changes during loop
 
 ### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
