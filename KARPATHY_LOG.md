@@ -4287,6 +4287,53 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### Loop fire 98 --- 2026-04-30 15:16 PT --- LR SWEEP DONE: lr=1e-3 wins by a mile (final 84.4%, timeout 16%). gamma=0.99 was the bug. Chain restarted.
+
+**LR sweep results (warm-started from cont-03, 5 min cells, gamma=0.99):**
+
+| cell | lr | rate (overall) | final_wr | timeout_rate | ep_len | KL |
+|---|---|---|---|---|---|---|
+| **lo** ⭐ | **1e-3** | 0.662 | **0.844** | **0.156** | **114.8** | 0.0033 |
+| mid | 3e-3 | 0.667 | 0.642 | 0.358 | 122.0 | 0.0048 |
+| hi | 1e-2 | 0.601 | 0.619 | 0.381 | 137.7 | 0.0247 |
+
+**Headline: gamma=0.99 was the entire fix.** Final win_rate jumped 62.7% (Base-04, gamma=0.97) → 84.4% (lr-lo, gamma=0.99) in 5 min of training. Timeout_rate dropped 37% → 16%. Episode length down 15 ticks. Paul's gamma intuition was dead-on; lr was a red herring.
+
+**Higher lr makes it worse.** mid (3e-3) and hi (1e-2) overshot — same pattern as Step 1's cont-04. lr=1e-3 is the right setting; the problem was never lr, it was the discount factor cutting terminal reward to 1.5% on big-map games.
+
+**timeout_rate is the new diagnostic.** It's the cleanest single signal of whether the agent is closing games out: high timeout = dominating but not finishing; low timeout = winning decisively. For Step 2 we want timeout < 10% in the chain.
+
+**Backstop side-effect.** While we were in the lr sweep, the karp_backstop fired and queued a fresh-init `rollout_steps` sweep (no warm-start) — wasteful for Step 2 curriculum. Discarded all 3 rollout_steps cells. The lo cell was already running (~5 min sunk) when discarded.
+
+**Action this fire:** new chain from the lr-lo winner.
+
+    v10.2.03-LargeMap-Base-01  (id 5377c87e)
+    parent      = 1d1e9a77 (v10.2.02-LargeMap-lr-lo, final 0.844)
+    budget      = 300s (5 min — Paul: drop budget for faster iteration)
+    inherits    = lr=1e-3, n_envs=1024, gamma=0.99, level_mix=b6 dict,
+                  archive_eval_every=999999, opp=random_legal
+
+**Backstop awareness gap.** Backstop calls `queue_karp_sweep.py` without --from-run-id, so cells start from random init. For curriculum work we want warm-start from latest-best. Either:
+
+1. Modify backstop to pass `--from-run-id <latest_chain_head>` automatically, OR
+2. Disable backstop while we're focused on chains, re-enable when we want auto-sweeps
+
+Option 1 is the right answer long-term. For now (this session) backstop stays as-is; will fix in a later fire if it keeps queueing fresh sweeps that we have to discard.
+
+**Step 2 progress arc:**
+
+| run | rate (overall) | final_wr | timeout | KL |
+|---|---|---|---|---|
+| Base-01 | 0.676 | 0.721 | (no metric) | 0.004 |
+| Base-02 | 0.689 | 0.574 | (no metric) | 0.002 |
+| Base-03 | 0.606 | 0.612 | (no metric) | 0.275 |
+| Base-04 | 0.606 | 0.627 | 0.373 | 0.0004 |
+| **v10.2.02-lr-lo (new base)** | **0.662** | **0.844** | **0.156** | **0.003** |
+
+The lr-lo result establishes a new Step 2 base in 5 minutes that beats 4 batches × 30 min of Base-01..04. The remaining v10.2.03-LargeMap-Base-* chain should push into the 90%+ regime.
+
+**Next check:** ~15:47 PT. Expected: Base-01 done; queue Base-02; verify timeout_rate continues climbing down toward < 10%.
+
 ### Loop fire 97 --- 2026-04-30 14:55 PT --- Step 2 chain paused. lr sweep queued from cont-03 (gamma 0.99, archive_eval off, 5min cells). Heuristic opponent scaffolded.
 
 **Base-04 final result (the run that finished while we were planning this fire):**
