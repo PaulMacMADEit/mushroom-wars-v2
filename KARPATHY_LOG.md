@@ -4136,6 +4136,47 @@ Wire as a git pre-push hook on PaulLinux when convenient.
 
 **No queueing this fire.** Let the experiments run.
 
+### Loop fire 85 — 2026-04-30 00:15 PT — 🟢 n_envs=1536 wins early at rate 0.949 (+9pp over parent rs-lo). Promoted to v10 archive (#3). 1024 + 1800 still running.
+
+**State.** Mixed parallel run state — Mac worker grinding `rslo-n1024-01`
+(36 min in, slow on CPU), PaulLinux GPU just started `rslo-n1800-01`
+(10 min in).
+
+**🟢 First experiment result — n_envs=1536:**
+
+| run | n_envs | parent rate | new rate | Δ | bench Elo | archived? |
+|---|---|---|---|---|---|---|
+| `karpv2-rslo-n1536-01` | 1536 | 0.860 | **0.949** | **+9pp** | 1012.8 (n=1) | ⭐ promoted |
+
+Cleanest forward signal we've seen on v10: a 20-min continuation with the
+right hyperparams produced a +9pp jump from 86% → 95% vs random_legal.
+**Step 0 progress.** Need ~5pp more to reach Paul's 99.99% target.
+
+The 1024 + 1800 cells still running — full picture in next fire.
+
+**v10 champion archive (now 3 entries):**
+
+| era | label | rate-vs-rl | archived |
+|---|---|---|---|
+| v10 | `karpv2-rslo-n1536-01` ⭐ | 0.949 | 00:05 PT |
+| v10 | `karpv2-260429-2215-rollout_steps-mid` | 0.867 | 22:54 PT |
+| v10 | `karpv2-260429-2215-rollout_steps-lo` | 0.900 | 22:54 PT |
+
+n_envs=1536 is now the strongest v10 model. It will become the parent for
+the next chain batch once we confirm 1800 doesn't beat it.
+
+**Why this matters for 99.99% target.**
+- Step 0 = "beat random_legal 99.99%"
+- We're at 94.9% after one 20-min cont. To reach 99.99% probably needs 3-5
+  more 20-min batches (each delivering diminishing returns as the agent
+  approaches saturation).
+- **Plan after the experiment finishes:** queue cont chain from the winner
+  (likely 1536, possibly 1800) for 4-6 batches × 20 min = ~2 hours of
+  training, target 99%+ rate before flipping to step 1 (self-play / champion
+  rotation).
+
+**No queueing this fire.** Awaiting 1024 + 1800 results.
+
 ## Code changes during loop
 
 **gae_lambda sweep (last v9 data) — partial:**
