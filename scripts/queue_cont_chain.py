@@ -47,8 +47,14 @@ def main():
             chain = cur.fetchall()
 
             if chain:
-                head_id, head_label, head_status = chain[-1]
-                head_index = int(head_label.split("-")[-1])
+                # Only consider runs whose label ends in a numeric index (skip e.g. -finetune-lr1e4)
+                numbered = [(id_, lbl, st) for id_, lbl, st in chain if lbl.split("-")[-1].isdigit()]
+                if numbered:
+                    head_id, head_label, head_status = numbered[-1]
+                    head_index = int(head_label.split("-")[-1])
+                else:
+                    head_id, head_label, head_status = args.root, None, "done"
+                    head_index = 0
                 print(f"[chain] {len(chain)} batches found, head: {head_label} ({head_status})")
             else:
                 head_id, head_label, head_status = args.root, None, "done"
