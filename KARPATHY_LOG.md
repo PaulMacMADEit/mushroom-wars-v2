@@ -3742,6 +3742,73 @@ shorter-horizon updates with more long-tail credit assignment.
 LOSS noop 47% (mild), value-drop +6.23 (consistent with critic mis-cal pattern).
 No degenerate behavior.
 
+### Loop fire 77 — 2026-04-29 20:07 PT — 🔄 REGIME CHANGE: sim v9.0 → v9.1, encoder v9 → v10. v9 cont chain DEAD. v10 bootstrap underway with random_legal opponent (no v10 champions yet)
+
+**State.** Paul pushed 3 commits between 19:54-20:00 PT (after fire 76):
+- `3131f0c` — sim v9.0 → v9.1: travel speed halved, tick ceiling raised
+- `372a094` — encoder v9 → v10: dropped dead `type_oh`, added prod/wasted/share/delta/history globals + per-bldg event-explicit. **OBS_DIM 1002 → 1008.**
+- `725ea91` — worker: register `v10-1024` in `build_net_for_model` dispatch
+
+**Major version bump** per `.claude/rules/training-discipline.md` — new
+observation shape invalidates ALL existing v9 checkpoints. `configs/karpathy_loop.yaml`
+already updated to `model_id: v10-1024` + `training_opponent.name: random_legal`
+(required during v10 bootstrap because the v9 archive is OBS_DIM=1002 and v10
+produces 1008 — incompatible).
+
+**🔄 v9 cont chain TERMINATED.** The chain I queued at fire 76
+(`karpv2-cont-791d76dd-01` from the 1112-Elo lr1e4 root) was DISCARDED with
+shape-mismatch error: worker tried to load v9 weights (1024×1002) into v10
+architecture (1024×1008). All future v9 conts would fail the same way.
+**Chain helper should NOT be called against v9 roots until a v10 champion
+exists.**
+
+**v9 cascade of failures (20:00-20:01)** — 12 runs failed in ~3 minutes during
+the worker restart / YAML update race window:
+
+```
+karpv2-260429-1959-{lr,entropy_coef}-{lo,mid,hi}  (6 runs, 0.1-0.6m duration)
+karpv2-260429-2000-lr-{lo,mid,hi}                 (3 runs, 0.5-1.6m duration)
+karpv2-260429-2001-{lr,entropy_coef}-{lo,mid,hi}  (6 runs, 2.0-4.8m duration)
+```
+
+All failed with the same `RuntimeError: Error(s) in loading state_dict for ActorCritic: size mismatch for trunk.0.weight: copying a param with shape torch.Size([1024, 1002]) from checkpoint, the shape in current model is torch.Size([1024, 1008]).` Cleanup not needed — already in `failed` state.
+
+**🏆 v9 final leaderboard (frozen as historical):**
+
+| run | elo | n | notes |
+|---|---|---|---|
+| `karpv2-diag-0791c618-lr1e4-01` | **1136.2** | 30 | v9 strongest karpv2 ever — exceeded parent by +41 |
+| `karpv2-cont-0791c618-01` | 1103.3 | 42 | v9 chain-01 (lr=1e-3) |
+| `karpv2-260429-1448-cont-update_epochs-hi-20min` | 1094.7 | 37 | v9 parent |
+| `karpv2-260429-1600-reward_version-hi` | 1078.3 | 18 | v9 reward A/B treatment |
+| `cron-260428-0407-phase2_selfplay-med-00` | 1147 | 100+ | v9 cron-era champion (still untouched in v9) |
+
+**Two important v9 findings worth porting to v10:**
+1. **lr=1e-4 is the right cont config** — proved by lr1e4 climbing to 1136 vs chain-01's 1103. Lower lr is better for fine-tuning a champion. Lock in for v10 conts when applicable.
+2. **Smaller rollout buffers win** — n_envs-lo, minibatch_size-lo, rollout_steps-lo all won their sweeps. **Update density > horizon depth in 5-min cells.** Carry to v10 baseline: rs=4 or 6, n_envs=512, mb=256.
+
+**v10 bootstrap status:**
+- 0 v10 champions in archive yet
+- karp backstop fires next at 20:15 PT — will queue v10 cells with `random_legal` opponent
+- Once a v10 champion is archived, switch YAML back to `random_champion` rotation
+- Per discipline rule: first v10 run should be EXACT v9 baseline hyperparams to establish reference. Karp sweeps that change one variable can resume after that.
+
+**No queueing this fire.** Letting the natural backstop drive v10 bootstrap.
+Will resume Karpathy loop logging once v10 cells start producing rated data.
+
+**gae_lambda sweep (last v9 data) — partial:**
+
+| label | swept | dur | Elo | n | notes |
+|---|---|---|---|---|---|
+| `karpv2-...1930-gae_lambda-lo` | 0.90 | 6.0m | 987.1 | 5 (unrated) | killed by v10 deploy |
+| `karpv2-...1930-gae_lambda-mid` | 0.95 (baseline) | 12.3m | 991.7 | 15 | rated |
+| `karpv2-...1930-gae_lambda-hi` | 0.98 | 19.7m | 893.7 | 15 | rated, weak |
+
+Baseline (0.95) wins this round. hi (0.98) is the worst gae_lambda result —
+combined with lr-mid (3e-4) at 897 and gamma-lo (0.95) at 987, the v9 worst
+cells cluster around small/conservative discount choices. Likely v10 will be
+similar.
+
 ## Code changes during loop
 
 ### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
