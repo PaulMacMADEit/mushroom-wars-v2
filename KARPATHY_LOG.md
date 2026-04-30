@@ -4287,6 +4287,34 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### Loop fire 96 --- 2026-04-30 14:45 PT --- Base-04 still running (no archive_eval - confirmed). Awaiting Paul decision on lr/gamma/heuristic.
+
+**Confirmed: archive_eval disable worked.** Worker log for Base-04 shows zero `[archive_eval] u` lines (count stayed at 569 from prior runs). Training silent except for snapshot uploads. The 30-40% GPU saving from skipping interim eval is now active for all Base-04+ runs.
+
+**Base-04 status (as of fire):** still running. Started 14:14 PT, 1800s budget => deadline 14:44 PT. We are at 14:45, so it is wrapping up. 2 snapshots uploaded (snapshot cadence is every N updates). Final metrics + Elo should populate within minutes.
+
+**Step 2 chain status (no new data this fire):**
+
+| batch | rate (overall) | rate (final) | KL | Elo |
+|---|---|---|---|---|
+| Base-01 | 0.676 | 0.721 | 0.0041 | 945.8 |
+| Base-02 | 0.689 | 0.574 | 0.0023 | 955.1 |
+| Base-03 | 0.606 | 0.612 | 0.2746 | 949.2 |
+| Base-04 | running | - | - | - |
+
+**Strategic discussion in flight with Paul.** Three open proposals from my side:
+
+1. **Tactical:** drop cell budget 1800s -> 600s; bump lr 1e-3 -> 3e-3 (or sweep); bump gamma 0.97 -> 0.99 for big maps (Paul's spot — long-horizon discount means terminal reward is worth ~2% at start of a 127-tick game; explains weak gradient on Step 2).
+2. **Strategic:** hardcoded heuristic is a STEPPING STONE not endpoint. Mirrors AlphaStar's supervised-from-humans bootstrap (we have neither MCTS nor human replays, so heuristic plays that role). Then transition to self-play.
+3. **Heuristic strength:** medium, not near-optimal. greedy_capacity_aware (send when source > 50% cap, target = weakest enemy neighbor). NN should beat it 70-80% then move to self-play.
+
+**Holding chain at Base-04** until Paul decides whether to:
+- Continue Base-05/06 unchanged
+- Re-queue from cont-03 with new lr/gamma
+- Skip ahead to Step 3 with heuristic opponent
+
+**Next check:** ~15:16 PT.
+
 ### Loop fire 95 --- 2026-04-30 14:14 PT --- Base-03 done with KL SPIKE (0.275 vs 0.002 prior). Worker restarted; Base-04 queued without archive_eval.
 
 **Step 2 chain through 3 batches:**
