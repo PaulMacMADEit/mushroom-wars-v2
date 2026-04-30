@@ -4287,6 +4287,48 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### Loop fire 95 --- 2026-04-30 14:14 PT --- Base-03 done with KL SPIKE (0.275 vs 0.002 prior). Worker restarted; Base-04 queued without archive_eval.
+
+**Step 2 chain through 3 batches:**
+
+| batch | rate (overall) | rate (final) | ep_len | approx_kl | Elo |
+|---|---|---|---|---|---|
+| Step 1 base (cont-03) | 0.967 | 0.967 | 16.8 | 0.087 | 1096 |
+| Base-01 | 0.676 | 0.721 | 126.8 | 0.0041 | 945.8 |
+| Base-02 | 0.689 | 0.574 | 120.8 | 0.0023 | 955.1 |
+| **Base-03** | **0.606** | 0.612 | 127.3 | **0.2746** | **949.2** |
+
+**Big read on Base-03.** KL jumped from 0.002 to 0.275 — that is **100x larger** than Base-01/02 and **10x past PPO's typical target (0.01-0.03)**. The model finally moved meaningfully — but rate dropped (-8pp from Base-02). Pattern matches cont-04 from Step 1 ("overshot, lr too high"). Two clean reads:
+
+1. **Cumulative drift hit a tipping point.** Base-01/02 made tiny accumulating updates (KL=0.002 each); by Base-03 the cumulative direction crossed a ridge and the optimizer made a big correction. The new policy is stable (final 0.612 ~= overall 0.606) but worse than Base-02's policy.
+2. **lr=1e-3 is too high for stable Step 2 convergence.** This is the same diagnosis from cont-04. The fact that we hit it again on Step 2 suggests the Step 2 chain needs a lower lr (1e-4 or 3e-4) to converge smoothly without overshoot.
+
+Either way, **chain is oscillating, not climbing smoothly**. Two more batches (04, 05) will tell whether Base-04 recovers or continues drifting.
+
+**Base-03 bench Elo: 949.2** — slightly below Base-02's 955.1. The Elo trend matches the rate trend — small slip.
+
+**Worker restarted at 14:13 PT** to load new trainer.py (with timeout_rate metric). Base-04 claimed and loaded parent weights from Base-03 (id 038fd4fd, 2.35M params). Training initialising.
+
+**Base-04 queued with archive_eval disabled:**
+
+    v10.2.01-LargeMap-Base-04  (id 59e1f367)
+    parent      = 038fd4fd (Base-03)
+    budget      = 1800s
+    overrides   = archive_eval_every=999999  ⟶ no interim leaderboard eval
+    expected    = ~30-40% more GPU time on actual training; first run with timeout_rate metric in metrics_history
+
+**Open question for Paul.** With KL spike + rate drop on Base-03, two paths for Base-04+:
+
+| option | description | tradeoff |
+|---|---|---|
+| **A. Stay course** | Let Base-04..06 run on lr=1e-3, see if it recovers | Cheap; if it drifts down, we will know in 90 min |
+| **B. Drop lr to 3e-4** | Re-queue from Base-02 (last stable) with lower lr | More principled; mirrors cont-05's lr=1e-4 fine-tune approach |
+| **C. Gentler level mix** | Re-queue from cont-03 with random_4_8 only first | Restarts the chain; expensive but addresses curriculum-gap hypothesis |
+
+I would default to A (low cost, fastest signal). If Base-04 also drops, drop to B between Base-04 and Base-05.
+
+**Next check:** ~14:45 PT. Expect: Base-04 done with timeout_rate populated, archive_eval-free run faster than Base-01..03.
+
 ### Loop fire 94 --- 2026-04-30 13:50 PT --- Paul flagged W+L+D!=100% (timeouts not tracked) and archive_eval slowdown. Both fixed for Base-04+.
 
 **Paul's two questions:**
