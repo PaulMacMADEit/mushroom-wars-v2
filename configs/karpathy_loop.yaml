@@ -40,7 +40,12 @@ queue_policy:
 # Model + simulator IDs (rarely change)
 # ---------------------------------------------------------------------------
 model:
-  model_id:     "v9.0-1024"      # body width 1024, factored heads
+  model_id:     "v10-1024"       # 2026-04-29: encoder bump (1002 → 1008 obs).
+                                 # Drops dead type_oh, adds prod/wasted/share_live/
+                                 # reward_delta + 5-step action history + per-bldg
+                                 # event-explicit features (hostile_landed,
+                                 # friendly_landed, ownership_changed). v9.0
+                                 # checkpoints are NOT loadable against v10.
   simulator_id: "sim-v1.3"
 
 # ---------------------------------------------------------------------------
@@ -56,11 +61,16 @@ training_opponent:
   # 2026-04-29 fire 65: per-cell random opponent picking from champion archive.
   # Modes:
   #   latest_champion  — most-recent archived champion (single, no diversity)
-  #   random_champion  — uniform random from archive per cell ← RECOMMENDED
+  #   random_champion  — uniform random from archive per cell
   #   pfsp_champion    — PFSP-weighted random per cell (favours stronger opps)
   #   self_play        — trainer's self_play=true (requires fused_rollout=false)
   #   neural           — explicit run_id in kwargs (legacy)
-  name: "random_champion"
+  #   random_legal     — uniform-random legal moves (no archive). Required during
+  #                      v10 bootstrap because the existing archive is OBS_DIM=1002
+  #                      and v10 produces 1008 — incompatible. Flip back to
+  #                      pfsp_champion / random_champion after a few v10 cells
+  #                      have seeded a v10 champion in the archive.
+  name: "random_legal"
   kwargs: {}
 
 # ---------------------------------------------------------------------------

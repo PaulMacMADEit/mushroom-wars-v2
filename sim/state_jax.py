@@ -56,6 +56,17 @@ class StateJax:
     groups_progress: jnp.ndarray   # int16
     groups_travel:   jnp.ndarray   # int16
 
+    # v10 decision-interval bookkeeping. arrivals_* are accumulated by the
+    # engine each tick. prev_* and last_actions_* are snapshotted by the
+    # env at the start of each decision interval (in jax_vec_env.step_chunk).
+    arrivals_p1:           jnp.ndarray   # (N,)        int16
+    arrivals_p2:           jnp.ndarray   # (N,)        int16
+    prev_buildings_owner:  jnp.ndarray   # (N,)        int8
+    prev_p1_units_total:   jnp.ndarray   # int32 scalar
+    prev_p2_units_total:   jnp.ndarray   # int32 scalar
+    last_actions_p1:       jnp.ndarray   # (HISTORY_K, 4) int8 — idx 0 = newest
+    last_actions_p2:       jnp.ndarray   # (HISTORY_K, 4) int8
+
     # Precomputed once at reset (on numpy, lifted to device in from_numpy_state).
     travel_matrix: jnp.ndarray     # (N, N) int16
 
@@ -107,6 +118,13 @@ def from_numpy_state(state: State, rng_key: jnp.ndarray | None = None) -> StateJ
         groups_count    = jnp.array(state.groups_count,    dtype=jnp.int16),
         groups_progress = jnp.array(state.groups_progress, dtype=jnp.int16),
         groups_travel   = jnp.array(state.groups_travel,   dtype=jnp.int16),
+        arrivals_p1            = jnp.array(state.arrivals_p1,            dtype=jnp.int16),
+        arrivals_p2            = jnp.array(state.arrivals_p2,            dtype=jnp.int16),
+        prev_buildings_owner   = jnp.array(state.prev_buildings_owner,   dtype=jnp.int8),
+        prev_p1_units_total    = jnp.array(state.prev_p1_units_total,    dtype=jnp.int32),
+        prev_p2_units_total    = jnp.array(state.prev_p2_units_total,    dtype=jnp.int32),
+        last_actions_p1        = jnp.array(state.last_actions_p1,        dtype=jnp.int8),
+        last_actions_p2        = jnp.array(state.last_actions_p2,        dtype=jnp.int8),
         travel_matrix   = jnp.array(state.travel_matrix,   dtype=jnp.int16),
         tick            = jnp.array(state.tick,  dtype=jnp.int32),
         phase           = jnp.array(state.phase, dtype=jnp.int8),
@@ -137,10 +155,17 @@ def to_numpy_state(state_jax: StateJax) -> State:
     out.groups_count[:]    = np.asarray(state_jax.groups_count,    dtype=np.int16)
     out.groups_progress[:] = np.asarray(state_jax.groups_progress, dtype=np.int16)
     out.groups_travel[:]   = np.asarray(state_jax.groups_travel,   dtype=np.int16)
+    out.arrivals_p1[:]            = np.asarray(state_jax.arrivals_p1,            dtype=np.int16)
+    out.arrivals_p2[:]            = np.asarray(state_jax.arrivals_p2,            dtype=np.int16)
+    out.prev_buildings_owner[:]   = np.asarray(state_jax.prev_buildings_owner,   dtype=np.int8)
+    out.last_actions_p1[:]        = np.asarray(state_jax.last_actions_p1,        dtype=np.int8)
+    out.last_actions_p2[:]        = np.asarray(state_jax.last_actions_p2,        dtype=np.int8)
     out.travel_matrix[:]   = np.asarray(state_jax.travel_matrix,   dtype=np.int16)
     out.tick  = int(state_jax.tick)
     out.phase = int(state_jax.phase)
     out.reward_version = int(state_jax.reward_version)
+    out.prev_p1_units_total = int(state_jax.prev_p1_units_total)
+    out.prev_p2_units_total = int(state_jax.prev_p2_units_total)
     return out
 
 
@@ -163,6 +188,11 @@ def states_equal(a: State, b: State) -> bool:
         ("groups_count",    a.groups_count,    b.groups_count),
         ("groups_progress", a.groups_progress, b.groups_progress),
         ("groups_travel",   a.groups_travel,   b.groups_travel),
+        ("arrivals_p1",          a.arrivals_p1,          b.arrivals_p1),
+        ("arrivals_p2",          a.arrivals_p2,          b.arrivals_p2),
+        ("prev_buildings_owner", a.prev_buildings_owner, b.prev_buildings_owner),
+        ("last_actions_p1",      a.last_actions_p1,      b.last_actions_p1),
+        ("last_actions_p2",      a.last_actions_p2,      b.last_actions_p2),
         ("travel_matrix",   a.travel_matrix,   b.travel_matrix),
     ]
     for name, ax, bx in checks:
@@ -171,5 +201,9 @@ def states_equal(a: State, b: State) -> bool:
     if int(a.tick) != int(b.tick):
         return False
     if int(a.phase) != int(b.phase):
+        return False
+    if int(a.prev_p1_units_total) != int(b.prev_p1_units_total):
+        return False
+    if int(a.prev_p2_units_total) != int(b.prev_p2_units_total):
         return False
     return True

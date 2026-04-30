@@ -1,11 +1,16 @@
-"""v9.0 actor-critic with chained source → type → target heads.
+"""v10 actor-critic with chained source → type → target heads.
 
-ARCHITECTURE §9.4. The 4097-way action space is the product of (source slot,
-send percentage or noop, target slot); a flat 4097-way head has to learn
-every triple independently. Factoring the decision into three conditional
-heads drops the policy head from ~524k params → ~32k and lets the body
-learn "slot K is strong" info once instead of repeating it across 32 × 4
-target×type combinations.
+Architecture is unchanged from v9.0. v10 is an **encoder** version bump
+(OBS_DIM 1002 → 1008, see training/encoder.py docstring for the field
+diff). The body's first linear layer width changes implicitly with OBS_DIM
+but every other head + the action space stay the same.
+
+The 4097-way action space is the product of (source slot, send percentage
+or noop, target slot); a flat 4097-way head has to learn every triple
+independently. Factoring the decision into three conditional heads drops
+the policy head from ~524k params → ~32k and lets the body learn "slot
+K is strong" info once instead of repeating it across 32 × 4 target×type
+combinations.
 
   body           OBS_DIM → 128 → 128           shared features
   source_head    128 → 64 → 32                 "which of my slots sends?"

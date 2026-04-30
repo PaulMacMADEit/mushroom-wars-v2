@@ -47,30 +47,14 @@ def _warmup(state, n_ticks: int, rng: np.random.Generator) -> None:
 
 
 def _stack_states(states) -> StateJax:
+    """Stack a list of numpy States into one batched StateJax.
+
+    Uses tree_map so it inherits any new fields added to StateJax without
+    needing to enumerate them here (was a footgun pre-v10).
+    """
     leaves = [from_numpy_state(s) for s in states]
     import jax
-    batched = jax.tree_util.tree_map(lambda *xs: np.stack(xs, axis=0), *leaves)
-    return StateJax(
-        buildings_alive    = jnp.asarray(batched.buildings_alive),
-        buildings_owner    = jnp.asarray(batched.buildings_owner),
-        buildings_type     = jnp.asarray(batched.buildings_type),
-        buildings_garrison = jnp.asarray(batched.buildings_garrison),
-        buildings_capacity = jnp.asarray(batched.buildings_capacity),
-        buildings_x        = jnp.asarray(batched.buildings_x),
-        buildings_y        = jnp.asarray(batched.buildings_y),
-        groups_alive    = jnp.asarray(batched.groups_alive),
-        groups_owner    = jnp.asarray(batched.groups_owner),
-        groups_src      = jnp.asarray(batched.groups_src),
-        groups_tgt      = jnp.asarray(batched.groups_tgt),
-        groups_count    = jnp.asarray(batched.groups_count),
-        groups_progress = jnp.asarray(batched.groups_progress),
-        groups_travel   = jnp.asarray(batched.groups_travel),
-        travel_matrix   = jnp.asarray(batched.travel_matrix),
-        tick            = jnp.asarray(batched.tick),
-        phase           = jnp.asarray(batched.phase),
-        reward_version  = jnp.asarray(batched.reward_version),
-        rng_key         = jnp.asarray(batched.rng_key),
-    )
+    return jax.tree_util.tree_map(lambda *xs: jnp.stack(xs, axis=0), *leaves)
 
 
 @pytest.mark.parametrize(

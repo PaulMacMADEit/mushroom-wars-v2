@@ -27,7 +27,22 @@ from sim.actions import ACTION_SPACE_SIZE, compute_mask, decode
 from sim.engine import step_tick
 from sim.envs.opponents import Opponent, random_legal_opponent
 from sim.levels import reset as level_reset
-from sim.state import State
+from sim.state import State, count_owned_units
+
+
+# v10 helper: encode an Action dataclass into the (4,) int8 history slot.
+# kind: 0=noop, 1=send. type_idx/src/tgt are zero for noop.
+_ACTION_KIND_NOOP = 0
+_ACTION_KIND_SEND = 1
+
+
+def _action_to_history_row(action) -> np.ndarray:
+    if action.kind == "send":
+        return np.array(
+            [_ACTION_KIND_SEND, int(action.type_idx), int(action.src), int(action.tgt)],
+            dtype=np.int8,
+        )
+    return np.zeros(4, dtype=np.int8)
 
 
 class MushroomEnv(gym.Env):
@@ -62,7 +77,9 @@ class MushroomEnv(gym.Env):
 
         N = C.MAX_BUILDING_SLOTS
         M = C.MAX_UNIT_GROUP_SLOTS
+        K = C.HISTORY_K
         i16_hi = np.iinfo(np.int16).max
+        i32_hi = np.iinfo(np.int32).max
         self.observation_space = spaces.Dict(
             {
                 "buildings_alive":    spaces.Box(0, 1, shape=(N,), dtype=np.int8),
@@ -80,8 +97,19 @@ class MushroomEnv(gym.Env):
                 "groups_progress":    spaces.Box(0, i16_hi, shape=(M,), dtype=np.int16),
                 "groups_travel":      spaces.Box(0, i16_hi, shape=(M,), dtype=np.int16),
                 "travel_matrix":      spaces.Box(0, i16_hi, shape=(N, N), dtype=np.int16),
-                "tick":               spaces.Box(0, np.iinfo(np.int32).max, shape=(), dtype=np.int32),
+                "tick":               spaces.Box(0, i32_hi, shape=(), dtype=np.int32),
                 "action_mask":        spaces.Box(0, 1, shape=(ACTION_SPACE_SIZE,), dtype=bool),
+                # v10 decision-interval bookkeeping.
+                "arrivals_p1":          spaces.Box(0, i16_hi, shape=(N,), dtype=np.int16),
+                "arrivals_p2":          spaces.Box(0, i16_hi, shape=(N,), dtype=np.int16),
+                "prev_buildings_owner": spaces.Box(0, 2, shape=(N,), dtype=np.int8),
+                "prev_p1_units_total":  spaces.Box(0, i32_hi, shape=(), dtype=np.int32),
+                "prev_p2_units_total":  spaces.Box(0, i32_hi, shape=(), dtype=np.int32),
+                # action history: (HISTORY_K, 4) — [kind, type_idx, src, tgt]
+                # int8 stored, but spaces.Box requires nonneg-bounded ints; use a
+                # generous upper bound (kind/type/idx all small).
+                "last_actions_p1":      spaces.Box(0, 127, shape=(K, 4), dtype=np.int8),
+                "last_actions_p2":      spaces.Box(0, 127, shape=(K, 4), dtype=np.int8),
             }
         )
         self.action_space = spaces.Discrete(ACTION_SPACE_SIZE)
@@ -118,6 +146,13 @@ class MushroomEnv(gym.Env):
         action_p2_idx = int(self._opponent(self.state, self._rng))
         action_p2 = decode(action_p2_idx)
 
+        # v10: snapshot prev-state at the start of the decision interval.
+        # The encoder reads (current vs prev) to surface "tower flipped" /
+        # "you took/lost units" — signals that vanish from the per-tick state.
+        # arrivals_* are accumulated by the engine; reset them here so the
+        # encoder sees only landings WITHIN this interval.
+        self._snapshot_decision_boundary(action_p1, action_p2)
+
         # First tick of the decision interval carries both players' actions;
         # subsequent ticks run with nothing submitted (implicit idle).
         r1_total = 0.0
@@ -153,9 +188,34 @@ class MushroomEnv(gym.Env):
     # Helpers
     # ------------------------------------------------------------------
 
+    def _snapshot_decision_boundary(self, action_p1, action_p2) -> None:
+        """v10 boundary work — runs at the START of every step():
+
+        1. Snapshot current owner array → prev_buildings_owner (so the encoder
+           can flag towers that flip during this interval).
+        2. Snapshot total internal units per side → prev_p1/p2_units_total
+           (encoder uses this for reward_delta).
+        3. Reset arrivals_p1/p2 to 0 — engine accumulates landings during the
+           interval; encoder reads them at the END (i.e. on the obs returned
+           from this step).
+        4. Push the new actions to the history ring buffers (idx 0 = newest).
+        """
+        st = self.state
+        st.prev_buildings_owner[:] = st.buildings_owner
+        st.prev_p1_units_total = count_owned_units(st, C.OWNER_P1)
+        st.prev_p2_units_total = count_owned_units(st, C.OWNER_P2)
+        st.arrivals_p1[:] = 0
+        st.arrivals_p2[:] = 0
+        # Ring-buffer push: shift down, write newest at index 0.
+        st.last_actions_p1[1:] = st.last_actions_p1[:-1]
+        st.last_actions_p1[0]  = _action_to_history_row(action_p1)
+        st.last_actions_p2[1:] = st.last_actions_p2[:-1]
+        st.last_actions_p2[0]  = _action_to_history_row(action_p2)
+
     def _make_obs(self, player: int) -> dict:
         b = self.state.buildings
         g = self.state.unit_groups
+        st = self.state
         return {
             "buildings_alive":    b["alive"].copy(),
             "buildings_owner":    b["owner"].copy(),
@@ -171,9 +231,18 @@ class MushroomEnv(gym.Env):
             "groups_count":       g["count"].copy(),
             "groups_progress":    g["progress"].copy(),
             "groups_travel":      g["travel_ticks"].copy(),
-            "travel_matrix":      self.state.travel_matrix.copy(),
-            "tick":               np.int32(self.state.tick),
-            "action_mask":        compute_mask(self.state, player),
+            "travel_matrix":      st.travel_matrix.copy(),
+            "tick":               np.int32(st.tick),
+            "action_mask":        compute_mask(st, player),
+            # v10 decision-interval features. Mirrored P1↔P2 by the
+            # opponent-perspective wrapper in opponents._mirror_ownership.
+            "arrivals_p1":          st.arrivals_p1.copy(),
+            "arrivals_p2":          st.arrivals_p2.copy(),
+            "prev_buildings_owner": st.prev_buildings_owner.copy(),
+            "prev_p1_units_total":  np.int32(st.prev_p1_units_total),
+            "prev_p2_units_total":  np.int32(st.prev_p2_units_total),
+            "last_actions_p1":      st.last_actions_p1.copy(),
+            "last_actions_p2":      st.last_actions_p2.copy(),
         }
 
     def _make_info(self) -> dict[str, Any]:

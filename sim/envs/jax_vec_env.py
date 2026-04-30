@@ -129,6 +129,48 @@ def _step_chunk_single(state, action_p1, action_p2, K: int):
     return final, r1s.sum(), r2s.sum(), dones.any()
 
 
+def _decision_boundary_snapshot(state, action_p1, action_p2):
+    """v10 mirror of MushroomEnv._snapshot_decision_boundary — runs on device
+    just before the chunk's K ticks fire. Snapshots prev_owner + per-side
+    unit totals, zeros arrivals counters, and pushes the new actions onto
+    the (HISTORY_K, 4) ring buffers (idx 0 = newest).
+    """
+    # Per-side unit totals (internal units): garrison sum + in-flight sum.
+    alive       = state.buildings_alive == 1
+    owned_p1    = alive & (state.buildings_owner == C.OWNER_P1)
+    owned_p2    = alive & (state.buildings_owner == C.OWNER_P2)
+    p1_garrison = jnp.where(owned_p1, state.buildings_garrison, jnp.int16(0)).sum()
+    p2_garrison = jnp.where(owned_p2, state.buildings_garrison, jnp.int16(0)).sum()
+    g_alive     = state.groups_alive == 1
+    p1_flight   = jnp.where(
+        g_alive & (state.groups_owner == C.OWNER_P1), state.groups_count, jnp.int16(0)
+    ).sum()
+    p2_flight   = jnp.where(
+        g_alive & (state.groups_owner == C.OWNER_P2), state.groups_count, jnp.int16(0)
+    ).sum()
+    p1_total = (p1_garrison.astype(jnp.int32) + p1_flight.astype(jnp.int32))
+    p2_total = (p2_garrison.astype(jnp.int32) + p2_flight.astype(jnp.int32))
+
+    # Ring-buffer push: shift down, write newest at row 0. action_p* is (4,) int32;
+    # store as int8 to match StateJax dtype.
+    new_hist_p1 = jnp.concatenate(
+        [action_p1[None, :].astype(jnp.int8), state.last_actions_p1[:-1]], axis=0
+    )
+    new_hist_p2 = jnp.concatenate(
+        [action_p2[None, :].astype(jnp.int8), state.last_actions_p2[:-1]], axis=0
+    )
+
+    return state.replace(
+        prev_buildings_owner = state.buildings_owner,
+        prev_p1_units_total  = p1_total,
+        prev_p2_units_total  = p2_total,
+        arrivals_p1          = jnp.zeros_like(state.arrivals_p1),
+        arrivals_p2          = jnp.zeros_like(state.arrivals_p2),
+        last_actions_p1      = new_hist_p1,
+        last_actions_p2      = new_hist_p2,
+    )
+
+
 def _make_step_chunk_batched(K: int):
     """Build a (state, a1, a2) -> (state, r1, r2, done) function for a fixed K.
 
@@ -137,6 +179,10 @@ def _make_step_chunk_batched(K: int):
     keyed on the chunk size.
     """
     def _chunk(state, a1, a2):
+        # v10: decision-boundary snapshot BEFORE the K ticks fire so the
+        # arrivals_* counters cleanly accumulate just this interval's
+        # landings, and the encoder reads "what happened during this turn".
+        state = _decision_boundary_snapshot(state, a1, a2)
         return _step_chunk_single(state, a1, a2, K)
 
     return jax.jit(jax.vmap(_chunk, in_axes=(0, 0, 0)))
@@ -413,10 +459,17 @@ class JaxVecEnv:
             s.groups_count[:]    = host.groups_count[i]
             s.groups_progress[:] = host.groups_progress[i]
             s.groups_travel[:]   = host.groups_travel[i]
+            s.arrivals_p1[:]            = host.arrivals_p1[i]
+            s.arrivals_p2[:]            = host.arrivals_p2[i]
+            s.prev_buildings_owner[:]   = host.prev_buildings_owner[i]
+            s.last_actions_p1[:]        = host.last_actions_p1[i]
+            s.last_actions_p2[:]        = host.last_actions_p2[i]
             s.travel_matrix[:]   = host.travel_matrix[i]
             s.tick  = int(host.tick[i])
             s.phase = int(host.phase[i])
             s.reward_version = int(host.reward_version[i])
+            s.prev_p1_units_total = int(host.prev_p1_units_total[i])
+            s.prev_p2_units_total = int(host.prev_p2_units_total[i])
             out.append(s)
         return out
 

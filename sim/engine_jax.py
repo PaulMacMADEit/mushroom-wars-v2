@@ -30,9 +30,14 @@ _jax_config.update("jax_enable_x64", True)
 
 import jax
 import jax.numpy as jnp
+import numpy as _np
 
 from sim import config as C
 from sim.state_jax import StateJax
+
+
+# Saturating bound for arrivals_* accumulators (int16 storage).
+_I16_MAX_HOST = int(_np.iinfo(_np.int16).max)
 
 
 # ---------------------------------------------------------------------------
@@ -519,6 +524,20 @@ def _step_tick_impl(
 
     # Phase 3: movement → incoming table.
     s, incoming = _advance_movement(s)
+
+    # v10: accumulate per-bldg landing counts into the state's arrival
+    # counters (reset by the env each decision interval). Saturate at int16
+    # max defensively — a single decision interval can't realistically
+    # produce >32k landings on one building.
+    incoming_p1 = jnp.minimum(
+        s.arrivals_p1.astype(jnp.int32) + incoming[:, C.OWNER_P1].astype(jnp.int32),
+        jnp.int32(_I16_MAX_HOST),
+    ).astype(jnp.int16)
+    incoming_p2 = jnp.minimum(
+        s.arrivals_p2.astype(jnp.int32) + incoming[:, C.OWNER_P2].astype(jnp.int32),
+        jnp.int32(_I16_MAX_HOST),
+    ).astype(jnp.int16)
+    s = s.replace(arrivals_p1=incoming_p1, arrivals_p2=incoming_p2)
 
     # Phase 4: resolve arrivals → combat rewards.
     s, r1_combat, r2_combat = _resolve_arrivals(s, incoming)

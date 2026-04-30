@@ -138,6 +138,18 @@ class State:
     groups_progress: np.ndarray     # int16
     groups_travel:   np.ndarray     # int16
 
+    # v10 decision-interval bookkeeping. arrivals_* updated by the engine
+    # every tick; prev_* and last_actions_* snapshotted by the env at the
+    # start of each decision interval. Encoder reads them to surface
+    # "you were attacked" / "tower flipped" / "your action history" —
+    # signals otherwise invisible when travel < decision interval. Mirrored
+    # P1↔P2 by the opponent path, same as buildings_owner.
+    arrivals_p1:           np.ndarray   # (N,)        int16 — landings per bldg, P1
+    arrivals_p2:           np.ndarray   # (N,)        int16 — landings per bldg, P2
+    prev_buildings_owner:  np.ndarray   # (N,)        int8  — owner snapshot at interval start
+    last_actions_p1:       np.ndarray   # (HISTORY_K, 4) int8 — [kind, type_idx, src, tgt], idx 0 = newest
+    last_actions_p2:       np.ndarray   # (HISTORY_K, 4) int8
+
     # Precomputed once in reset(). Read-only during play.
     travel_matrix:   np.ndarray  # (MAX_BUILDING_SLOTS, MAX_BUILDING_SLOTS) int16 ticks
     distance_matrix: np.ndarray  # (MAX_BUILDING_SLOTS, MAX_BUILDING_SLOTS) float32 raw
@@ -148,6 +160,10 @@ class State:
     # Reward scheme. 0 = v1.2 (default, back-compat), 1 = v1.3 (rebalance).
     # Engine indexes into REWARD_*_BY_VERSION lookups via this field.
     reward_version: int = C.REWARD_VERSION_V12
+    # v10: snapshots of total units per side at the start of the current
+    # decision interval. Used by the encoder for the reward_delta feature.
+    prev_p1_units_total: int = 0
+    prev_p2_units_total: int = 0
 
     # Lightweight per-subsystem profiling (nanoseconds accumulated this game).
     perf: dict = field(default_factory=lambda: {
@@ -197,6 +213,7 @@ def empty_state() -> State:
     """Zero-initialized state. Use `levels.apply(state, level)` to populate."""
     N = C.MAX_BUILDING_SLOTS
     M = C.MAX_UNIT_GROUP_SLOTS
+    K = C.HISTORY_K
     return State(
         buildings_alive    = np.zeros(N, dtype=np.int8),
         buildings_owner    = np.zeros(N, dtype=np.int8),
@@ -212,6 +229,11 @@ def empty_state() -> State:
         groups_count    = np.zeros(M, dtype=np.int16),
         groups_progress = np.zeros(M, dtype=np.int16),
         groups_travel   = np.zeros(M, dtype=np.int16),
+        arrivals_p1          = np.zeros(N,        dtype=np.int16),
+        arrivals_p2          = np.zeros(N,        dtype=np.int16),
+        prev_buildings_owner = np.zeros(N,        dtype=np.int8),
+        last_actions_p1      = np.zeros((K, 4),   dtype=np.int8),
+        last_actions_p2      = np.zeros((K, 4),   dtype=np.int8),
         travel_matrix   = np.zeros((N, N), dtype=np.int16),
         distance_matrix = np.zeros((N, N), dtype=np.float32),
     )

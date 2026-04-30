@@ -262,6 +262,15 @@ def apply(
     state.groups_count[:]    = 0
     state.groups_progress[:] = 0
     state.groups_travel[:]   = 0
+    # v10 decision-interval bookkeeping — fresh game starts with empty
+    # arrival counters, no prev-state, and zero history.
+    state.arrivals_p1[:]            = 0
+    state.arrivals_p2[:]            = 0
+    state.prev_buildings_owner[:]   = 0
+    state.last_actions_p1[:]        = 0
+    state.last_actions_p2[:]        = 0
+    state.prev_p1_units_total = 0
+    state.prev_p2_units_total = 0
 
     for slot, (owner, x, y, garrison_real, type_id) in enumerate(level):
         if type_id not in C.BUILDING_STATS:

@@ -301,25 +301,24 @@ class _JaxVecAdapter:
             "travel_matrix":      np.asarray(state.travel_matrix),
             "tick":               np.asarray(state.tick),
             "phase":              np.asarray(state.phase),
+            # v10 decision-interval state.
+            "arrivals_p1":          np.asarray(state.arrivals_p1),
+            "arrivals_p2":          np.asarray(state.arrivals_p2),
+            "prev_buildings_owner": np.asarray(state.prev_buildings_owner),
+            "prev_p1_units_total":  np.asarray(state.prev_p1_units_total),
+            "prev_p2_units_total":  np.asarray(state.prev_p2_units_total),
+            "last_actions_p1":      np.asarray(state.last_actions_p1),
+            "last_actions_p2":      np.asarray(state.last_actions_p2),
         }
 
-    def _make_obs_batch_from_host(self, host: dict) -> dict:
-        """Build the gym-style obs dict from an already-pulled `host` snapshot.
-
-        Reset path uses this directly (no actions to pack). Step path uses
-        `_pack_step_inputs_and_obs` which does the same thing plus the
-        opponent/action loop.
+    def _build_obs_dict(self, host: dict, p1_mask) -> dict:
+        """Build the gym-style obs dict from an already-pulled `host` snapshot
+        + a precomputed P1 action mask. Single source of truth for both reset
+        and step paths so v10's new fields stay in sync.
         """
         import numpy as np
-        from sim import config as C
-        from sim.actions import compute_mask_batched
 
         N = self.n_envs
-        p1_mask = compute_mask_batched(
-            host["buildings_alive"], host["buildings_owner"],
-            host["buildings_garrison"], host["groups_alive"],
-            C.OWNER_P1,
-        )
         return {
             "buildings_alive":    host["buildings_alive"].astype(np.int8, copy=True),
             "buildings_owner":    host["buildings_owner"].astype(np.int8, copy=True),
@@ -339,7 +338,36 @@ class _JaxVecAdapter:
             "tick":               host["tick"].astype(np.int32, copy=True)
                                      if host["tick"].ndim else np.full((N,), int(host["tick"]), dtype=np.int32),
             "action_mask":        p1_mask,
+            # v10 decision-interval features.
+            "arrivals_p1":          host["arrivals_p1"].astype(np.int16, copy=True),
+            "arrivals_p2":          host["arrivals_p2"].astype(np.int16, copy=True),
+            "prev_buildings_owner": host["prev_buildings_owner"].astype(np.int8, copy=True),
+            "prev_p1_units_total": (host["prev_p1_units_total"].astype(np.int32, copy=True)
+                                     if host["prev_p1_units_total"].ndim
+                                     else np.full((N,), int(host["prev_p1_units_total"]), dtype=np.int32)),
+            "prev_p2_units_total": (host["prev_p2_units_total"].astype(np.int32, copy=True)
+                                     if host["prev_p2_units_total"].ndim
+                                     else np.full((N,), int(host["prev_p2_units_total"]), dtype=np.int32)),
+            "last_actions_p1":      host["last_actions_p1"].astype(np.int8, copy=True),
+            "last_actions_p2":      host["last_actions_p2"].astype(np.int8, copy=True),
         }
+
+    def _make_obs_batch_from_host(self, host: dict) -> dict:
+        """Build the gym-style obs dict from an already-pulled `host` snapshot.
+
+        Reset path uses this directly (no actions to pack). Step path uses
+        `_pack_step_inputs_and_obs` which does the same thing plus the
+        opponent/action loop.
+        """
+        from sim import config as C
+        from sim.actions import compute_mask_batched
+
+        p1_mask = compute_mask_batched(
+            host["buildings_alive"], host["buildings_owner"],
+            host["buildings_garrison"], host["groups_alive"],
+            C.OWNER_P1,
+        )
+        return self._build_obs_dict(host, p1_mask)
 
     def _pack_step_inputs_and_obs(
         self,
@@ -378,26 +406,7 @@ class _JaxVecAdapter:
             C.OWNER_P1,
         )
 
-        obs = {
-            "buildings_alive":    host["buildings_alive"].astype(np.int8, copy=True),
-            "buildings_owner":    host["buildings_owner"].astype(np.int8, copy=True),
-            "buildings_type":     host["buildings_type"].astype(np.int8, copy=True),
-            "buildings_garrison": host["buildings_garrison"].astype(np.int16, copy=True),
-            "buildings_capacity": host["buildings_capacity"].astype(np.int16, copy=True),
-            "buildings_x":        host["buildings_x"].astype(np.int16, copy=True),
-            "buildings_y":        host["buildings_y"].astype(np.int16, copy=True),
-            "groups_alive":       host["groups_alive"].astype(np.int8, copy=True),
-            "groups_owner":       host["groups_owner"].astype(np.int8, copy=True),
-            "groups_src":         host["groups_src"].astype(np.int8, copy=True),
-            "groups_tgt":         host["groups_tgt"].astype(np.int8, copy=True),
-            "groups_count":       host["groups_count"].astype(np.int16, copy=True),
-            "groups_progress":    host["groups_progress"].astype(np.int16, copy=True),
-            "groups_travel":      host["groups_travel"].astype(np.int16, copy=True),
-            "travel_matrix":      host["travel_matrix"].astype(np.int16, copy=True),
-            "tick":               host["tick"].astype(np.int32, copy=True)
-                                     if host["tick"].ndim else np.full((N,), int(host["tick"]), dtype=np.int32),
-            "action_mask":        p1_mask,
-        }
+        obs = self._build_obs_dict(host, p1_mask)
 
         a_batch = np.zeros((N, 2, action_dim), dtype=np.int32)
 

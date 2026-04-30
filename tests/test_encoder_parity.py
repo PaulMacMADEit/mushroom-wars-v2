@@ -38,6 +38,14 @@ def _obs_dict_from_state(state):
         "groups_progress":    state.groups_progress,
         "groups_travel":      state.groups_travel,
         "tick":               np.int32(state.tick),
+        # v10 fields — encoder reads them directly.
+        "arrivals_p1":          state.arrivals_p1,
+        "arrivals_p2":          state.arrivals_p2,
+        "prev_buildings_owner": state.prev_buildings_owner,
+        "prev_p1_units_total":  np.int32(state.prev_p1_units_total),
+        "prev_p2_units_total":  np.int32(state.prev_p2_units_total),
+        "last_actions_p1":      state.last_actions_p1,
+        "last_actions_p2":      state.last_actions_p2,
     }
 
 
@@ -76,33 +84,12 @@ def test_encoder_parity_single_states(level, n_warmup):
         axis=0,
     )
 
-    # JAX: stack states into one batched StateJax, encode.
-    leaves = [from_numpy_state(s) for s in states]
+    # JAX: stack states into one batched StateJax via tree_map (picks up new fields automatically).
     import jax
-    batched = jax.tree_util.tree_map(lambda *xs: np.stack(xs, axis=0), *leaves)
-    # tree_map returns numpy arrays here; lift to jnp via the encoder's input.
     import jax.numpy as jnp
-    from sim.state_jax import StateJax
-    batched_jax = StateJax(
-        buildings_alive    = jnp.asarray(batched.buildings_alive),
-        buildings_owner    = jnp.asarray(batched.buildings_owner),
-        buildings_type     = jnp.asarray(batched.buildings_type),
-        buildings_garrison = jnp.asarray(batched.buildings_garrison),
-        buildings_capacity = jnp.asarray(batched.buildings_capacity),
-        buildings_x        = jnp.asarray(batched.buildings_x),
-        buildings_y        = jnp.asarray(batched.buildings_y),
-        groups_alive    = jnp.asarray(batched.groups_alive),
-        groups_owner    = jnp.asarray(batched.groups_owner),
-        groups_src      = jnp.asarray(batched.groups_src),
-        groups_tgt      = jnp.asarray(batched.groups_tgt),
-        groups_count    = jnp.asarray(batched.groups_count),
-        groups_progress = jnp.asarray(batched.groups_progress),
-        groups_travel   = jnp.asarray(batched.groups_travel),
-        travel_matrix   = jnp.asarray(batched.travel_matrix),
-        tick            = jnp.asarray(batched.tick),
-        phase           = jnp.asarray(batched.phase),
-        reward_version  = jnp.asarray(batched.reward_version),
-        rng_key         = jnp.asarray(batched.rng_key),
+    leaves = [from_numpy_state(s) for s in states]
+    batched_jax = jax.tree_util.tree_map(
+        lambda *xs: jnp.stack(xs, axis=0), *leaves
     )
     jx_out = np.asarray(encode_obs_batched_jit(batched_jax))
 
@@ -126,24 +113,12 @@ def test_encoder_parity_through_env_step():
 
     for tick in range(30):
         np_vec = encode_obs(obs_dict)
-        # JAX path reads the underlying State, not the obs dict.
-        sj = from_numpy_state(env.state)
-        # Add the batch dim that encode_obs_batched expects.
+        # JAX path reads the underlying State, not the obs dict. Lift via
+        # tree_map so any field added to StateJax flows through unchanged.
+        import jax
         import jax.numpy as jnp
-        from sim.state_jax import StateJax
-        sj_b = StateJax(
-            **{k: jnp.asarray(getattr(sj, k))[None] for k in (
-                "buildings_alive", "buildings_owner", "buildings_type",
-                "buildings_garrison", "buildings_capacity", "buildings_x", "buildings_y",
-                "groups_alive", "groups_owner", "groups_src", "groups_tgt",
-                "groups_count", "groups_progress", "groups_travel",
-                "travel_matrix",
-            )},
-            tick           = jnp.asarray(sj.tick)[None],
-            phase          = jnp.asarray(sj.phase)[None],
-            reward_version = jnp.asarray(sj.reward_version)[None],
-            rng_key        = jnp.asarray(sj.rng_key),
-        )
+        sj = from_numpy_state(env.state)
+        sj_b = jax.tree_util.tree_map(lambda x: jnp.asarray(x)[None], sj)
         jx_vec = np.asarray(encode_obs_batched_jit(sj_b))[0]
 
         max_diff = float(np.abs(np_vec - jx_vec).max())

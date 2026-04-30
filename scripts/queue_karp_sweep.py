@@ -104,6 +104,15 @@ def queue_sweep(axis: str | None, dry_run: bool, baseline_overrides: dict) -> No
             return "neural", {}, True
         if mode == "neural":
             return "neural", dict(base_kwargs), False
+        if mode == "random_legal":
+            # Bootstrap mode — used after a major encoder bump when the champion
+            # archive is OBS_DIM-incompatible. No archive read; trainer picks
+            # uniform-random legal moves for P2.
+            print(f"[karp]   {cell_label}: random_legal")
+            return "random_legal", {}, False
+        if mode == "noop":
+            print(f"[karp]   {cell_label}: noop")
+            return "noop", {}, False
         # All champion-* modes pull from the archive
         with connect() as c, c.cursor() as cur:
             if mode == "latest_champion":

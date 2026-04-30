@@ -1,7 +1,9 @@
 """PyTorch RL code. Depends on `sim/`; never the other way around.
 
-Phase 2 smoke scope is intentionally minimal — encoder is ~200 dims (not the
-full v9.0 1150 spec) and the policy uses a flat 4097-way action head instead
-of the chained source/type/target heads. Both upgrade paths are architectural
-no-ops; this just gets the loop closed end-to-end.
+v10 encoder (1008 dims): drops dead `type_oh` block, adds prod_rate /
+wasted_prod / total_alive / share_live / reward_delta globals plus
+HISTORY_K=5 own/opponent action history, plus per-building event-explicit
+features (hostile_landed / friendly_landed / ownership_changed_this_interval)
+to fix close-map signal loss when MIN_TRAVEL_TICKS < DECISION_INTERVAL_TICKS.
+See `training/encoder.py` docstring for the full diff vs v9.0.
 """

@@ -88,19 +88,43 @@ def _state_to_obs(state: State, mask_player: int) -> dict:
         "travel_matrix":      state.travel_matrix.copy(),
         "tick":               np.int32(state.tick),
         "action_mask":        compute_mask(state, mask_player),
+        # v10 decision-interval features.
+        "arrivals_p1":          state.arrivals_p1.copy(),
+        "arrivals_p2":          state.arrivals_p2.copy(),
+        "prev_buildings_owner": state.prev_buildings_owner.copy(),
+        "prev_p1_units_total":  np.int32(state.prev_p1_units_total),
+        "prev_p2_units_total":  np.int32(state.prev_p2_units_total),
+        "last_actions_p1":      state.last_actions_p1.copy(),
+        "last_actions_p2":      state.last_actions_p2.copy(),
     }
 
 
 def _mirror_ownership(obs: dict) -> dict:
-    """Swap P1↔P2 in the owner fields. Returns a shallow-copied dict with
-    fresh owner arrays; all other fields reference the originals unchanged."""
+    """Swap P1↔P2 in every owner-keyed field. Returns a shallow-copied dict
+    with fresh owner arrays; all other fields reference the originals.
+
+    v10: also swaps `arrivals_p1` ↔ `arrivals_p2`, prev_p*_units_total,
+    last_actions_p1 ↔ p2, and re-codes prev_buildings_owner P1↔P2. So the
+    encoder always sees the active player as "P1" regardless of true side.
+    """
     mirrored = dict(obs)
-    for key in ("buildings_owner", "groups_owner"):
+    for key in ("buildings_owner", "groups_owner", "prev_buildings_owner"):
+        if key not in obs:
+            continue
         orig = obs[key]
         swapped = orig.copy()
         swapped = np.where(orig == C.OWNER_P1, C.OWNER_P2, swapped)
         swapped = np.where(orig == C.OWNER_P2, C.OWNER_P1, swapped)
         mirrored[key] = swapped.astype(orig.dtype)
+    # Per-player arrays just swap labels.
+    for key_p1, key_p2 in (
+        ("arrivals_p1",         "arrivals_p2"),
+        ("last_actions_p1",     "last_actions_p2"),
+        ("prev_p1_units_total", "prev_p2_units_total"),
+    ):
+        if key_p1 in obs and key_p2 in obs:
+            mirrored[key_p1] = obs[key_p2]
+            mirrored[key_p2] = obs[key_p1]
     return mirrored
 
 

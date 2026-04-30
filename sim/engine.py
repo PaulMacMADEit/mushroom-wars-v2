@@ -241,6 +241,8 @@ def _resolve_arrivals(
     # Group arrivals by target. Use per-target fixed-shape (3,) int arrays
     # indexed by owner (0=neutral, 1=P1, 2=P2) so combat resolution is
     # arithmetic-only — no Python dict in the hot path.
+    # Side-effect: also accumulate state.arrivals_p1/p2 for the v10 encoder
+    # (decision-interval landing counts per building).
     by_target: dict[int, np.ndarray] = {}
     for tgt, owner, count in arrivals:
         tgt = int(tgt)
@@ -249,6 +251,16 @@ def _resolve_arrivals(
             by_owner = np.zeros(3, dtype=np.int64)
             by_target[tgt] = by_owner
         by_owner[int(owner)] += int(count)
+        if owner == C.OWNER_P1:
+            state.arrivals_p1[tgt] = min(
+                int(state.arrivals_p1[tgt]) + int(count),
+                np.iinfo(np.int16).max,
+            )
+        elif owner == C.OWNER_P2:
+            state.arrivals_p2[tgt] = min(
+                int(state.arrivals_p2[tgt]) + int(count),
+                np.iinfo(np.int16).max,
+            )
 
     for tgt, by_owner in by_target.items():
         if not state.buildings_alive[tgt]:
