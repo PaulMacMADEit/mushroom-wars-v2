@@ -96,6 +96,7 @@ export class ReplayPlayer {
     this.t = 0;
     this.speed = 1;
     this.playing = false;
+    this._selectedSlot = null;
 
     this._lastFrame = null;
     this._loop = this._loop.bind(this);
@@ -142,6 +143,26 @@ export class ReplayPlayer {
   }
 
   setSpeed(s) { this.speed = s; }
+
+  /** Hit-test a screen-space click against the laid-out building positions.
+   * Returns the clicked slot id (within ~30 css px) or null. */
+  buildingAt(clientX, clientY) {
+    const rect = this.canvas.getBoundingClientRect();
+    const cssX = clientX - rect.left;
+    const cssY = clientY - rect.top;
+    let best = null, bestDist = 32;
+    for (const b of this.data.map.buildings) {
+      const [sx, sy] = this._worldToScreen(b.x, b.y);
+      const d = Math.hypot(sx - cssX, sy - cssY);
+      if (d < bestDist) { best = b.slot; bestDist = d; }
+    }
+    return best;
+  }
+
+  setSelectedSlot(slot) {
+    this._selectedSlot = slot;
+    this.render();
+  }
 
   onTick(cb)        { this._onTick = cb; }
   onStateChange(cb) { this._onStateChange = cb; }
@@ -287,6 +308,17 @@ export class ReplayPlayer {
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(Math.floor(real), sx, sy);
+    }
+
+    // Selection ring (drawn last so it sits above building fills).
+    if (this._selectedSlot !== null) {
+      const sb = this.buildingById[this._selectedSlot];
+      if (sb) {
+        const [sx, sy] = this._worldToScreen(sb.x, sb.y);
+        ctx.strokeStyle = "#fde68a";
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(sx, sy, 32, 0, Math.PI * 2); ctx.stroke();
+      }
     }
   }
 

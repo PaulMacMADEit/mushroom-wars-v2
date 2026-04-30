@@ -304,6 +304,53 @@
     .mi-row svg { display: block; width: 100%; height: 100%; }
     .mi-row .mi-spark line { stroke: var(--accent); stroke-width: 1.2; fill: none; }
     .mi-row .mi-spark .cur  { fill: #fde68a; }
+    .mi-global-wrap { display: contents; }
+    .mi-global-wrap .mi-row { cursor: pointer; }
+    .mi-global-wrap .mi-row:hover { background: rgba(96,165,250,0.06); border-radius: 3px; }
+    .mi-global-wrap .mi-row.expanded { background: rgba(234,179,8,0.10); border-radius: 3px; }
+    .mi-detail {
+      display: none;
+      padding: 6px 6px 8px 6px;
+      margin: 2px 0 6px 0;
+      background: rgba(11,13,18,0.6);
+      border-left: 2px solid #fde68a;
+      border-radius: 3px;
+    }
+    .mi-detail.open { display: block; }
+    .mi-detail svg { width: 100%; height: 80px; display: block; }
+    .mi-detail .axis { font-size: 9px; fill: var(--fg-muted); font-family: var(--mono); }
+    .mi-detail .grid { stroke: rgba(255,255,255,0.06); stroke-width: 0.5; }
+    .mi-detail .line { stroke: var(--accent); stroke-width: 1.4; fill: none; }
+    .mi-detail .area { fill: rgba(96,165,250,0.10); stroke: none; }
+    .mi-detail .cursor { stroke: #fde68a; stroke-width: 1; }
+    .mi-detail .dot { fill: #fde68a; }
+
+    .mi-selection {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px;
+      margin: 3px 0 4px 0;
+      background: rgba(234,179,8,0.10);
+      border: 1px solid rgba(234,179,8,0.30);
+      border-radius: 4px;
+      font-size: 10.5px;
+      font-family: var(--mono);
+    }
+    .mi-selection.on { display: flex; }
+    .mi-selection .info { flex: 1; color: #fde68a; }
+    .mi-selection button {
+      background: transparent;
+      color: var(--fg-muted);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: 10px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .mi-selection button:hover { color: var(--fg); border-color: var(--fg-muted); }
+    #canvas { cursor: pointer; }
 
     /* KPI panel — per-team reward breakdown, ranked by |contribution|. */
     #reward-breakdown { flex-direction: column; gap: 6px; }
@@ -673,6 +720,8 @@
     // Cached model-input globals series + per-row DOM refs. Populated by buildModelInputsPanel.
     let _miGlobals = null;
     let _miRowRefs = null;
+    let _selectedSlot = null;
+    let _expandedGlobal = null;
 
     let player = null;
     let currentData = null;
@@ -759,6 +808,14 @@
     $speed.addEventListener("change", () => {
       if (!player) return;
       player.setSpeed(parseFloat($speed.value));
+    });
+    $canvas.addEventListener("click", (e) => {
+      if (!player) return;
+      const slot = player.buildingAt(e.clientX, e.clientY);
+      if (slot === null) return;
+      _selectedSlot = (slot === _selectedSlot) ? null : slot;
+      player.setSelectedSlot(_selectedSlot);
+      updateModelInputs(player.t);
     });
 
     // --- Log narration ---------------------------------------------------
@@ -1423,34 +1480,77 @@
       }
       $miPanel.style.display = "block";
       _miGlobals = precomputeGlobalSeries(d);
+      _selectedSlot = null;
+      _expandedGlobal = null;
 
       $miRows.innerHTML = "";
       _miRowRefs = { globals: {}, building: {}, group: {} };
 
-      // GLOBALS — name | value | history sparkline
+      // GLOBALS — clickable; click to expand a bigger sparkline
       const ghead = document.createElement("div");
       ghead.className = "mi-section-head";
-      ghead.innerHTML = `<span>Globals</span><span class="mi-section-sub">10</span>`;
+      ghead.innerHTML = `<span>Globals</span><span class="mi-section-sub">10 · click to expand</span>`;
       $miRows.appendChild(ghead);
       for (const name of GLOBAL_NAMES) {
-        const row = document.createElement("div");
-        row.className = "mi-row";
-        row.innerHTML = `<span class="mi-name" title="${name}">${name}</span><span class="mi-val">—</span><span class="mi-vis"><svg class="mi-spark" viewBox="0 0 100 14" preserveAspectRatio="none"><polyline points="" /><circle class="cur" cx="0" cy="7" r="1.5"/></svg></span>`;
-        $miRows.appendChild(row);
+        const wrap = document.createElement("div");
+        wrap.className = "mi-global-wrap";
+        wrap.innerHTML = `
+          <div class="mi-row" data-name="${name}">
+            <span class="mi-name" title="${name}">${name}</span>
+            <span class="mi-val">—</span>
+            <span class="mi-vis"><svg class="mi-spark" viewBox="0 0 100 14" preserveAspectRatio="none"><polyline points="" /><circle class="cur" cx="0" cy="7" r="1.5"/></svg></span>
+          </div>
+          <div class="mi-detail" data-name="${name}">
+            <svg viewBox="0 0 320 80" preserveAspectRatio="none">
+              <path class="area" d="" />
+              <polyline class="line" points="" />
+              <line class="cursor" x1="0" y1="0" x2="0" y2="80" />
+              <circle class="dot" cx="0" cy="0" r="2.5" />
+              <text class="axis" x="2" y="10"></text>
+              <text class="axis" x="2" y="76"></text>
+              <text class="axis" x="318" y="10" text-anchor="end"></text>
+              <text class="axis" x="318" y="76" text-anchor="end"></text>
+            </svg>
+          </div>
+        `;
+        $miRows.appendChild(wrap);
+        const row = wrap.querySelector(".mi-row");
+        const detail = wrap.querySelector(".mi-detail");
         _miRowRefs.globals[name] = {
-          val: row.querySelector(".mi-val"),
+          row,
+          val:  row.querySelector(".mi-val"),
           line: row.querySelector("polyline"),
           dot:  row.querySelector(".cur"),
+          detail,
+          detailLine:   detail.querySelector(".line"),
+          detailArea:   detail.querySelector(".area"),
+          detailCursor: detail.querySelector(".cursor"),
+          detailDot:    detail.querySelector(".dot"),
+          detailAxes:   detail.querySelectorAll(".axis"),
         };
-        // Sparkline path is fixed across t — compute once.
         drawSparkline(_miRowRefs.globals[name].line, _miGlobals.series[name]);
+        drawBigSparkline(_miRowRefs.globals[name], _miGlobals.series[name]);
+        row.addEventListener("click", () => toggleGlobalExpand(name));
       }
 
-      // PER-BUILDING — name | max | 32-slot bar pile
+      // PER-BUILDING — selection bar then 22 rows of 32-slot bar piles
       const bhead = document.createElement("div");
       bhead.className = "mi-section-head";
-      bhead.innerHTML = `<span>Per-building</span><span class="mi-section-sub">22 × 32</span>`;
+      bhead.innerHTML = `<span>Per-building</span><span class="mi-section-sub">22 × 32 · click a building to inspect</span>`;
       $miRows.appendChild(bhead);
+
+      const sel = document.createElement("div");
+      sel.id = "mi-building-selection";
+      sel.className = "mi-selection";
+      sel.innerHTML = `<span class="info">—</span><button id="mi-sel-clear" title="Clear selection">×</button>`;
+      $miRows.appendChild(sel);
+      sel.querySelector("#mi-sel-clear").addEventListener("click", (e) => {
+        e.stopPropagation();
+        _selectedSlot = null;
+        if (player) player.setSelectedSlot(null);
+        updateModelInputs(player ? player.t : 0);
+      });
+
       for (const name of BUILDING_NAMES) {
         const row = document.createElement("div");
         row.className = "mi-row";
@@ -1459,6 +1559,7 @@
         _miRowRefs.building[name] = {
           val: row.querySelector(".mi-val"),
           bars: row.querySelectorAll("rect"),
+          baseColor: "#60a5fa",
         };
       }
 
@@ -1475,8 +1576,58 @@
         _miRowRefs.group[name] = {
           val: row.querySelector(".mi-val"),
           bars: row.querySelectorAll("rect"),
+          baseColor: "#fbbf24",
         };
       }
+    }
+
+    function toggleGlobalExpand(name) {
+      if (!_miRowRefs) return;
+      if (_expandedGlobal === name) {
+        _miRowRefs.globals[name].row.classList.remove("expanded");
+        _miRowRefs.globals[name].detail.classList.remove("open");
+        _expandedGlobal = null;
+        return;
+      }
+      if (_expandedGlobal) {
+        _miRowRefs.globals[_expandedGlobal].row.classList.remove("expanded");
+        _miRowRefs.globals[_expandedGlobal].detail.classList.remove("open");
+      }
+      _expandedGlobal = name;
+      _miRowRefs.globals[name].row.classList.add("expanded");
+      _miRowRefs.globals[name].detail.classList.add("open");
+      updateModelInputs(player ? player.t : 0);
+    }
+
+    /** One-shot draw of the big sparkline geometry; cursor moves per tick. */
+    function drawBigSparkline(ref, series) {
+      if (!series || series.length === 0) return;
+      let lo = Infinity, hi = -Infinity;
+      for (const v of series) { if (v < lo) lo = v; if (v > hi) hi = v; }
+      const span = (hi - lo) || 1;
+      const N = series.length;
+      const W = 320, H = 80, padY = 6;
+      const innerH = H - padY * 2;
+      const pts = [];
+      const path = [];
+      for (let i = 0; i < N; i++) {
+        const x = N > 1 ? (i / (N - 1)) * W : W / 2;
+        const y = padY + (1 - (series[i] - lo) / span) * innerH;
+        pts.push(`${x.toFixed(2)},${y.toFixed(2)}`);
+        path.push(`${i === 0 ? 'M' : 'L'}${x.toFixed(2)} ${y.toFixed(2)}`);
+      }
+      ref.detailLine.setAttribute("points", pts.join(" "));
+      // close the area path back to the bottom
+      const last = pts[pts.length - 1].split(",");
+      const first = pts[0].split(",");
+      ref.detailArea.setAttribute("d", path.join(" ") + ` L${last[0]} ${H} L${first[0]} ${H} Z`);
+      ref.detail.dataset.lo = lo;
+      ref.detail.dataset.hi = hi;
+      ref.detail.dataset.maxT = N - 1;
+      ref.detailAxes[0].textContent = hi.toFixed(3);   // top-left  = max
+      ref.detailAxes[1].textContent = lo.toFixed(3);   // bot-left  = min
+      ref.detailAxes[2].textContent = `t=0`;
+      ref.detailAxes[3].textContent = `t=${N - 1}`;
     }
 
     /** Inline 32 zero-height rects ready to be sized per tick. */
@@ -1507,7 +1658,7 @@
 
     function updateModelInputs(t) {
       if (!_miRowRefs || !_miGlobals || !currentData) return;
-      // Globals — current value + sparkline cursor
+      // Globals — current value + sparkline cursor + (if expanded) big chart cursor
       const ti = Math.max(0, Math.min(_miGlobals.maxT, Math.floor(t)));
       for (const name of GLOBAL_NAMES) {
         const ref = _miRowRefs.globals[name];
@@ -1520,25 +1671,63 @@
         const y = 13 - ((v - lo) / span) * 12;
         ref.dot.setAttribute("cx", x.toFixed(2));
         ref.dot.setAttribute("cy", y.toFixed(2));
+        if (name === _expandedGlobal) {
+          const dlo = parseFloat(ref.detail.dataset.lo);
+          const dhi = parseFloat(ref.detail.dataset.hi);
+          const dspan = (dhi - dlo) || 1;
+          const padY = 6, H = 80, innerH = H - padY * 2;
+          const dx = _miGlobals.maxT > 0 ? (ti / _miGlobals.maxT) * 320 : 160;
+          const dy = padY + (1 - (v - dlo) / dspan) * innerH;
+          ref.detailCursor.setAttribute("x1", dx);
+          ref.detailCursor.setAttribute("x2", dx);
+          ref.detailDot.setAttribute("cx", dx);
+          ref.detailDot.setAttribute("cy", dy);
+        }
       }
       // Per-slot — derive features at the live (fractional) tick.
       const f = computeFeatures(currentData, t);
-      for (const name of BUILDING_NAMES) updateSlotRow(_miRowRefs.building[name], f.building[name]);
-      for (const name of GROUP_NAMES)    updateSlotRow(_miRowRefs.group[name],    f.group[name]);
+      const sel = _selectedSlot;
+      for (const name of BUILDING_NAMES) updateSlotRow(_miRowRefs.building[name], f.building[name], sel);
+      for (const name of GROUP_NAMES)    updateSlotRow(_miRowRefs.group[name],    f.group[name],    null);
+
+      // Selection header text
+      const $sel = document.getElementById("mi-building-selection");
+      if ($sel) {
+        if (sel === null) {
+          $sel.classList.remove("on");
+        } else {
+          $sel.classList.add("on");
+          const owner = f.building.is_p1[sel] ? "P1"
+                      : f.building.is_p2[sel] ? "P2"
+                      : f.building.is_neutral[sel] ? "Neutral"
+                      : "—";
+          const garr = f.building.garrison_norm[sel];   // normalized
+          const garrRaw = Math.round(garr * (currentData.scale ?? 10) * 30);
+          $sel.querySelector(".info").textContent =
+            `Building #${sel} · ${owner} · garrison ${garrRaw}`;
+        }
+      }
     }
 
-    function updateSlotRow(ref, values) {
+    function updateSlotRow(ref, values, selectedSlot) {
       let mx = 0;
       for (const v of values) if (v > mx) mx = v;
-      ref.val.textContent = mx === 0 ? "0.00" : mx.toFixed(2);
       const denom = mx > 0 ? mx : 1;
+      const display = (selectedSlot != null) ? (values[selectedSlot] || 0) : mx;
+      ref.val.textContent = display === 0 ? "0.00" : display.toFixed(2);
       for (let i = 0; i < 32; i++) {
         const v = values[i] || 0;
         const h = (v / denom) * 13;
         const bar = ref.bars[i];
         bar.setAttribute("height", h.toFixed(2));
         bar.setAttribute("y", (14 - h).toFixed(2));
-        bar.style.opacity = v > 0 ? "1" : "0.18";
+        if (i === selectedSlot) {
+          bar.setAttribute("fill", "#fde68a");
+          bar.style.opacity = "1";
+        } else {
+          bar.setAttribute("fill", ref.baseColor);
+          bar.style.opacity = v > 0 ? (selectedSlot != null ? "0.45" : "1") : "0.18";
+        }
       }
     }
 
