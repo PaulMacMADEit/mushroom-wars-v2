@@ -132,6 +132,10 @@ def _load_policy(path: str | Path, device: torch.device):
     if not Path(weights_path).exists():
         raise FileNotFoundError(f"weights.pt not found at {weights_path}")
     state_dict = torch.load(str(weights_path), map_location=device, weights_only=True)
+    # 2026-04-29 fire 80: v10 trainer wraps weights as {state_dict, encoder_version}.
+    # v9 saved a flat state_dict. Unwrap if needed for backward compat.
+    if isinstance(state_dict, dict) and "state_dict" in state_dict and "encoder_version" in state_dict:
+        state_dict = state_dict["state_dict"]
     body_dim = infer_body_dim(state_dict)
     net = ActorCritic(body_dim=body_dim)
     net.load_state_dict(state_dict)
