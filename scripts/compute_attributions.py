@@ -81,15 +81,28 @@ assert len(GROUP_FEATURES) == GROUP_FEATS == 9
 
 
 def collect_states(agent, obs_norm, level: str, n_games: int,
-                   max_ticks: int, seed: int) -> np.ndarray:
-    """Roll out policy vs random_legal; capture every P1 decision-tick obs.
-    Returns (M, OBS_DIM) of *normalized* observations — what the net sees."""
+                   max_ticks: int, seed: int,
+                   opponent: str = "self") -> np.ndarray:
+    """Roll out the policy and capture decision-tick obs.
+
+    opponent="self"        — neural agent on both sides (mirror match). Collects
+                             obs from BOTH P1 and P2 perspectives → 2× sample
+                             size and a state distribution that matches what the
+                             agent actually sees in real games.
+    opponent="random_legal" — neural P1 vs random_legal P2. P1-only obs.
+                              Legacy mode; biases sample toward winning states
+                              because random_legal is very weak.
+
+    Returns (M, OBS_DIM) of *normalized* observations.
+    """
     import jax.numpy as jnp
 
     vec = JaxVecEnv(n_envs=n_games, level_name=level, base_seed=seed)
     rng = np.random.default_rng(seed)
     finished = np.zeros(n_games, dtype=bool)
     obs_buffer: list[np.ndarray] = []
+
+    is_self_play = opponent == "self"
 
     for _ in range(max_ticks):
         states = vec.snapshot_numpy_states()
@@ -99,15 +112,24 @@ def collect_states(agent, obs_norm, level: str, n_games: int,
         bulk_galive   = np.stack([s.groups_alive       for s in states])
         masks_p1 = compute_mask_batched(bulk_alive, bulk_owner, bulk_garrison,
                                         bulk_galive, C.OWNER_P1)
+        if is_self_play:
+            masks_p2 = compute_mask_batched(bulk_alive, bulk_owner, bulk_garrison,
+                                            bulk_galive, C.OWNER_P2)
 
         for i, s in enumerate(states):
             if finished[i]:
                 continue
-            d = _state_to_obs_dict_for_player(s, masks_p1[i], C.OWNER_P1)
-            obs_buffer.append(encode_obs(d))
+            d1 = _state_to_obs_dict_for_player(s, masks_p1[i], C.OWNER_P1)
+            obs_buffer.append(encode_obs(d1))
+            if is_self_play:
+                d2 = _state_to_obs_dict_for_player(s, masks_p2[i], C.OWNER_P2)
+                obs_buffer.append(encode_obs(d2))
 
-        a1 = _pick_actions("neural",       agent, obs_norm, states, C.OWNER_P1, rng)
-        a2 = _pick_actions("random_legal", None,  None,     states, C.OWNER_P2, rng)
+        a1 = _pick_actions("neural", agent, obs_norm, states, C.OWNER_P1, rng)
+        if is_self_play:
+            a2 = _pick_actions("neural", agent, obs_norm, states, C.OWNER_P2, rng)
+        else:
+            a2 = _pick_actions("random_legal", None, None, states, C.OWNER_P2, rng)
         a_batch = np.zeros((n_games, 2, ACTION_DIM), dtype=np.int32)
         for i in range(n_games):
             _decode_action_to_packed(int(a1[i]), a_batch[i, 0])
@@ -238,6 +260,7 @@ def upsert(run_id: str, agg: dict, wl2: dict, n_states: int) -> int:
 def compute_for_run(run_id: str, level: str | None = None, n_games: int = 16,
                     ig_steps: int = 50, max_states: int = 2000,
                     max_ticks: int = 200, seed: int = 0,
+                    opponent: str = "self",
                     device: torch.device | None = None) -> int:
     """Run the full attribution pipeline for a single run_id and upsert to
     run_feature_importance. Returns the number of states actually used.
@@ -257,7 +280,7 @@ def compute_for_run(run_id: str, level: str | None = None, n_games: int = 16,
             raise RuntimeError(f"run {run_id} not found")
         level = json.loads(row[0]).get("level_name") or "random_8_16"
 
-    print(f"[attributions] run={run_id} level={level} device={device}")
+    print(f"[attributions] run={run_id} level={level} opponent={opponent} device={device}")
 
     t0 = time.perf_counter()
     kind, agent, obs_norm = _load_policy(run_id, device)
@@ -266,7 +289,8 @@ def compute_for_run(run_id: str, level: str | None = None, n_games: int = 16,
     print(f"[attributions] policy loaded in {time.perf_counter()-t0:.1f}s")
 
     t0 = time.perf_counter()
-    obs_arr = collect_states(agent, obs_norm, level, n_games, max_ticks, seed)
+    obs_arr = collect_states(agent, obs_norm, level, n_games, max_ticks, seed,
+                             opponent=opponent)
     print(f"[attributions] collected {obs_arr.shape[0]} states in {time.perf_counter()-t0:.1f}s")
 
     if obs_arr.shape[0] > max_states:
@@ -306,11 +330,15 @@ def main():
     ap.add_argument("--max-states", type=int, default=2000)
     ap.add_argument("--ig-steps", type=int, default=50)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--opponent", default="self", choices=["self", "random_legal"],
+                    help="State-sampling opponent. 'self' = mirror match (collects "
+                         "P1+P2 obs, default); 'random_legal' = legacy P1-only.")
     args = ap.parse_args()
     compute_for_run(
         run_id=args.run_id, level=args.level, n_games=args.games,
         ig_steps=args.ig_steps, max_states=args.max_states,
         max_ticks=args.max_ticks, seed=args.seed,
+        opponent=args.opponent,
     )
 
 

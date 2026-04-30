@@ -1455,8 +1455,8 @@
         <div class="fi-help">
           What drives this run's <strong>value head</strong> — the agent's expected-return estimate.
           <strong>Mean |IG|</strong> is the Integrated-Gradients attribution averaged over
-          ${nStates} sampled decision states (policy vs random_legal on the level above).
-          Building/group features are summed across the 32 slots.
+          ${nStates} sampled decision states (self-play mirror match on the level above; both
+          P1 and P2 perspectives collected). Building/group features are summed across the 32 slots.
           <strong>Signed</strong> shows direction (+ raises value, − lowers).
           <strong>wL2</strong> = layer-1 column norm — capacity to use a feature, not actual use; often disagrees with |IG|.
         </div>
