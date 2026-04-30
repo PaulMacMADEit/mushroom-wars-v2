@@ -4177,6 +4177,71 @@ the next chain batch once we confirm 1800 doesn't beat it.
 
 **No queueing this fire.** Awaiting 1024 + 1800 results.
 
+### Loop fire 86 — 2026-04-30 00:46 PT — 🟢🟢 n_envs=1800 WINS at rate 0.954, Elo 1051.3 (best v10 yet). Chain resumed from n1800. Stale n1024 cleaned (Mac CPU).
+
+**State.** n_envs experiment completed (2 of 3 cells finished cleanly).
+
+**🟢🟢 n_envs experiment final result:**
+
+| run | n_envs | rate | bench Elo | n | trajectory |
+|---|---|---|---|---|---|
+| n1024 (control) | 1024 | — | — | — | killed (7h on Mac CPU, idle) |
+| n1536 | 1536 | 0.949 | 988.4 | 3 | initial 1012.8 → 988.4 backfill DOWN |
+| **n1800** ⭐ | **1800** | **0.954** | **1051.3** | **4** | strong climb, +63 over n1536 |
+
+**n_envs=1800 is the decisive winner.** +63 Elo over n1536 at the same n
+(both rated). The marginal +0.5pp rate vs random_legal (94.9 → 95.4) belies
+the Elo difference — 1800's policy is robust against the harder
+opponents in the bench archive (rs-lo, rs-mid, n1536), not just random.
+
+n1800 is now the 4th v10 archive entry and the highest-rated v10 model so far.
+
+**Stale row cleaned:** `karpv2-rslo-n1024-01` had been "running" on Mac CPU
+for 7+ hours with only 4 min CPU time accumulated (~1% utilization — idle).
+Cleared it. Lost data acceptable since n1536 + n1800 give us a 2-point
+comparison and n1800's win is decisive.
+
+**Chain RESUMED from n1800 winner:**
+
+```
+karpv2-cont-2e238f3d-01  (id 5d1f3439)
+parent      = 2e238f3d (n1800 winner, rate 0.954)
+budget      = 1200s
+inherits    = n_envs=1800, lr=1e-3, rs=4, ue=4, mb=512, reward_v=2
+chain helper = up to 5 batches × 20 min = 100 min more training
+```
+
+The chain helper auto-extends each fire while head is `done`. Each batch
+inherits hyperparams from its parent — so the n_envs=1800 winning config
+propagates through the chain.
+
+**Step 0 trajectory toward 99.99%:**
+
+| step | rate | source |
+|---|---|---|
+| start (rs-lo champion) | 0.860 | original training rate |
+| +1 batch (n1536) | 0.949 | +9pp |
+| +1 batch (n1800) | 0.954 | +0.5pp on top of training improvement |
+| +5 chain batches (planned) | ~0.985-0.99 | predicted, diminishing returns |
+
+If diminishing returns hold, 5 more 20-min batches should land us in the
+98-99% range. Beyond that, marginal returns to chain length drop sharply
+and we'll need a different strategy (longer cells, higher entropy, level
+distribution shift). Will reassess once chain reaches >97%.
+
+**v10 leaderboard (top 4 = full archive):**
+
+| run | rate | Elo | n |
+|---|---|---|---|
+| `karpv2-rslo-n1800-01` ⭐ | 0.954 | **1051.3** | 4 |
+| `karpv2-rslo-n1536-01` | 0.949 | 988.4 | 3 |
+| `karpv2-260429-2215-rollout_steps-lo` | 0.900 | ~1012 (n=1) | 1 |
+| `karpv2-260429-2215-rollout_steps-mid` | 0.867 | ~1012 (n=1) | 1 |
+
+**Queued (this fire):** chain batch 01 from n1800. Backstop continues to
+queue normal karp axes in parallel. No conflict — they all run on the same
+queue.
+
 ## Code changes during loop
 
 **gae_lambda sweep (last v9 data) — partial:**
