@@ -148,8 +148,14 @@ def _archive_size() -> int:
 
 
 def _get_archive(exclude_source_run_id: str | None = None) -> list[dict]:
-    """Return all champions ordered by archived_at DESC.  Optionally exclude
-    rows where source_run_id = exclude_source_run_id."""
+    """Return champions FROM THE CURRENT ARCH ERA ordered by archived_at DESC.
+
+    Era filter (added 2026-04-29 fire 79): bench_eval matches load opponent
+    weights into the current model architecture. Cross-era champions have
+    different OBS_DIM and crash with size-mismatch errors. Filter here so
+    archive sweep + promotion logic only ever sees compatible champions.
+    """
+    era = _current_arch_era()
     with connect() as c:
         with c.cursor() as cur:
             if exclude_source_run_id:
@@ -157,19 +163,22 @@ def _get_archive(exclude_source_run_id: str | None = None) -> list[dict]:
                     SELECT id, source_run_id, arch_era, weights_url, obs_norm_url, label
                       FROM champions
                      WHERE source_run_id <> %s
+                       AND arch_era = %s
                      ORDER BY archived_at DESC
-                """, (exclude_source_run_id,))
+                """, (exclude_source_run_id, era))
             else:
                 cur.execute("""
                     SELECT id, source_run_id, arch_era, weights_url, obs_norm_url, label
                       FROM champions
+                     WHERE arch_era = %s
                      ORDER BY archived_at DESC
-                """)
+                """, (era,))
             cols = ("id", "source_run_id", "arch_era", "weights_url", "obs_norm_url", "label")
             return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
 def _most_recent_champion() -> Optional[dict]:
+    """Most-recent champion in the CURRENT era (era-filtered via _get_archive)."""
     champs = _get_archive()
     return champs[0] if champs else None
 
