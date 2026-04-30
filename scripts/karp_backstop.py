@@ -68,6 +68,7 @@ def _clear_clutter() -> None:
                    finished_at=now()
              WHERE project=%s AND status='queued'
                AND label NOT LIKE 'karp-%%'
+               AND simulator_id <> 'admin'
         """, (PROJECT,))
         n_discarded = cur.rowcount
         c.commit()
