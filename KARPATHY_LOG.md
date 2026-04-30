@@ -4287,6 +4287,57 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### Loop fire 91 --- 2026-04-30 12:43 PT --- v10.2.01-LargeMap-Base-01 done. Step 2 transfer: 96.7% (small) -> 72.1% (large, final window). Game length 17 -> 127 ticks. Base-02 queued.
+
+**v10.2.01-LargeMap-Base-01 result:**
+
+| metric | Step 1 base (cont-03) | Step 2 Base-01 | delta |
+|---|---|---|---|
+| training rate vs random_legal (overall) | 0.967 | 0.676 | -29pp |
+| training rate vs random_legal (final window) | 0.967 | 0.721 | -25pp |
+| mean_episode_length (ticks) | 16.8 | 126.8 | 7.5x longer |
+| approx_kl | 0.087 | 0.0041 | small steps |
+| draw_rate | 0.0 | 0.0 | unchanged |
+| loss_rate | 0.0 | 0.0 | unchanged (in final window) |
+| wall_ms | 1220511 | 1837509 | budget extended 1200->1800s |
+
+**Read.** Distribution shift hit hard (29pp drop overall) but the model
+transferred sensibly - the final window already shows 72.1%, meaningfully
+better than the 67.6% mean over the 30 min run. The model is learning
+the bigger maps. approx_kl=0.004 is conservative - the policy is barely
+moving per update; this is fine for batch 01 (small adjustments away
+from a known-good Step 1 init), might want to ramp up later.
+
+**Game length 7.5x.** cont-03 won in ~17 ticks on 4-5 building maps;
+v10.2-Base-01 takes ~127 ticks on the 4-24 building mix. That is the
+"distance" Paul wanted the agent to learn to navigate. Whether the
+agent will compress this back down in later batches (sign of efficient
+play) is the headline metric to watch.
+
+**Base-02 queued:**
+
+    v10.2.01-LargeMap-Base-02  (id ef658d85)
+    parent      = ed108913 (Base-01, rate 0.676 overall / 0.721 final)
+    budget      = 1800s
+    inherits    = lr=1e-3, n_envs=1800, level_mix dict (4 generators @ 1.0 each)
+
+**No game review for Base-01 yet** - bench_eval still pending (run just
+finished, will rate within the next fire window). Most-recent rated run
+in karp_review_games is `karpv2-rslo-n1536-01` (Step 1 root era), which
+showed 64-88% noop rates. That passivity pattern is worth comparing
+against once Base-01 is rated.
+
+**Watch for in next fires:**
+- Will rate climb back toward 90%+ as the chain progresses?
+- Will mean_episode_length come down (efficient play) or stay at ~127?
+- bench_eval for Base-01: how does it stack against the v10 archive?
+- approx_kl: if it stays at 0.004, the model is barely learning - should
+  jump to 0.05-0.15 once the agent starts adapting to large maps
+  meaningfully. Sub-0.01 KL across 6 batches would be a flag.
+
+**Next check:** ~13:12 PT. Base-02 should finish ~13:14 PT (started 12:43,
+budget 1800s).
+
 ### Loop fire 90.5 --- 2026-04-30 12:13 PT --- BUG: level_mix bare-string list crashed trainer at start. Fixed YAML to dict format. Re-queued.
 
 **What broke.** First Step 2 attempt v10.2.01-LargeMap-Base-01 failed within 1.4s of start with:
