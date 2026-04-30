@@ -3609,6 +3609,65 @@ v9 model under random_champion rotation.
 
 **No queueing this fire.** Queue is fine. Will reassess fire 75.
 
+### Loop fire 75 — 2026-04-29 19:05 PT — n_envs-mid wins this round (1024); cont gap stabilized at -10 (lr1e4) / -27 (chain-01); stale lr-lo cleaned; gamma sweep queued
+
+**State.** Worker active. Queue cleared except stale `karpv2-260429-1701-lr-lo`
+which was stuck "running" for 99+ min — marked failed manually this fire (likely
+killed by 17:30 worker restart for self-play attribution code, row not updated).
+Queue depth 0 → 3 after gamma sweep queued.
+
+**Cont/diag tracker (parent 0791c618 = 1094.7, n=37):**
+
+| run | config | Δ vs parent | n | trajectory |
+|---|---|---|---|---|
+| chain-01 | lr=1e-3, rotation ON | -27 | 36 | 1085 → 1076 → 1074 → **1068** (settling down) |
+| **diag-lr1e4** | lr=1e-4, rotation ON | **-10** ⭐ | 24 | 1068 → 1073 → 1078 → 1089 → **1085** (peak then slight drop) |
+| diag-norot | lr=1e-3, rotation OFF | -34 | 15 | 1034 → 1061 (stable n=15) |
+
+Gap stabilized as bench fills: **lr1e4 holds best at -10 vs parent**, chain-01
+settled at -27, norot worst at -34. Earlier n=22 reading of -6 was the peak;
+-10 is the steady-state.
+
+Conclusion still: **lr=1e-4 is the right chain config.** Worth resuming chain
+when Paul approves.
+
+**n_envs sweep complete:**
+
+| label | swept | dur | Elo | n | PFSP |
+|---|---|---|---|---|---|
+| `karpv2-...1803-n_envs-lo` | 512 | 27.0m | 1001.5 | 15 | 0.790 |
+| `karpv2-...1803-n_envs-mid` | 1024 (baseline) | 34.3m | **1024.5** ⭐ | 15 | 0.802 |
+| `karpv2-...1803-n_envs-hi` | 2048 | 41.9m | 973.2 | 15 | 0.753 |
+
+Inverted-U peak at baseline. lo (512) was 23 Elo behind, hi (2048) 51 Elo behind.
+**This contradicts the fire-64 finding** where n_envs-lo (512) was the winner
+at 1057. Different opponent mix this round (3 cron-era + 1 karpv2 vs the older
+sweep's all-cron) likely accounts for the swing. n_envs is sensitive to
+opponent strength — won't draw a strong conclusion.
+
+**Karp leaderboard top karpv2 (post-backfill):**
+
+| run | elo | n | when |
+|---|---|---|---|
+| `karpv2-260429-1448-cont-update_epochs-hi-20min` | 1094.7 | 37 | parent |
+| `karpv2-diag-0791c618-lr1e4-01` | 1084.9 | 24 | lr1e4 diagnostic ⭐ |
+| `karpv2-260429-1600-reward_version-hi` | 1078.3 | 18 | fire 70 |
+| `karpv2-cont-0791c618-01` | 1068.1 | 36 | chain-01 |
+| `karpv2-...1733-rollout_steps-lo` | 1065.2 | 15 | fire 73 |
+
+**Review games (most-recent rated, n_envs-mid 1024.5):**
+
+| game | tag | ticks | decisions | noop% | entropy | value drop | flags |
+|---|---|---|---|---|---|---|---|
+| `ca4e5ff5` | WIN | 82 | 41 | 15% | 3.56 | -6.13 | ok |
+| `6d08a6b9` | LOSS | 20 | 10 | 60% | 3.81 | +4.64 | high noop 60% |
+
+LOSS noop 60% + value-drop +4.64. Critic mis-cal pattern continues. Same
+shape across 6 fires now. Unwavering.
+
+**Queued (this fire):** gamma sweep ({0.95, 0.97, 0.99}) — next round-robin
+axis after n_envs. 3 cells.
+
 ## Code changes during loop
 
 ### 2026-04-29 12:25 PT — bench_eval config extraction + update density bump
