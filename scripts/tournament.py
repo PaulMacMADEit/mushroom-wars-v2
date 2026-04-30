@@ -149,7 +149,11 @@ def _load_policy(path: str | Path, device: torch.device):
 
 def _state_to_obs_dict_for_player(state: State, mask: np.ndarray, player: int) -> dict:
     """Build the obs dict for a single player. For P2 we mirror ownership so
-    a P1-trained policy sees itself as P1."""
+    a P1-trained policy sees itself as P1.
+
+    Must include the v10 decision-interval fields (arrivals_*, prev_*,
+    last_actions_*) so encode_obs doesn't KeyError on a v10 checkpoint.
+    """
     out = {
         "buildings_alive":    state.buildings_alive.copy(),
         "buildings_owner":    state.buildings_owner.copy(),
@@ -168,15 +172,31 @@ def _state_to_obs_dict_for_player(state: State, mask: np.ndarray, player: int) -
         "travel_matrix":      state.travel_matrix.copy(),
         "tick":               np.int32(state.tick),
         "action_mask":        mask,
+        # v10 decision-interval fields. Must mirror sim.envs.mushroom_env._make_obs.
+        "arrivals_p1":          state.arrivals_p1.copy(),
+        "arrivals_p2":          state.arrivals_p2.copy(),
+        "prev_buildings_owner": state.prev_buildings_owner.copy(),
+        "prev_p1_units_total":  np.int32(state.prev_p1_units_total),
+        "prev_p2_units_total":  np.int32(state.prev_p2_units_total),
+        "last_actions_p1":      state.last_actions_p1.copy(),
+        "last_actions_p2":      state.last_actions_p2.copy(),
     }
     if player == C.OWNER_P2:
-        # Mirror P1 <-> P2 in ownership so P2's policy sees itself as P1.
-        for k in ("buildings_owner", "groups_owner"):
+        # Mirror P1 <-> P2 in every owner-keyed field. Same semantics as
+        # sim.envs.opponents._mirror_ownership — keep the two in sync.
+        for k in ("buildings_owner", "groups_owner", "prev_buildings_owner"):
             o = out[k]
             swapped = o.copy()
             swapped = np.where(o == C.OWNER_P1, C.OWNER_P2, swapped)
             swapped = np.where(o == C.OWNER_P2, C.OWNER_P1, swapped)
             out[k] = swapped.astype(o.dtype)
+        # Per-player arrays just swap labels.
+        for key_p1, key_p2 in (
+            ("arrivals_p1",         "arrivals_p2"),
+            ("last_actions_p1",     "last_actions_p2"),
+            ("prev_p1_units_total", "prev_p2_units_total"),
+        ):
+            out[key_p1], out[key_p2] = out[key_p2], out[key_p1]
     return out
 
 
