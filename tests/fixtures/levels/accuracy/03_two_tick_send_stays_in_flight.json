@@ -5,7 +5,7 @@
   "steps": 1,
   "buildings": [
     { "slot": 0, "owner": "p1", "garrison_real": 10, "capacity_real": 100, "x": 0, "y": 0 },
-    { "slot": 1, "owner": "neutral", "garrison_real": 1, "capacity_real": 100, "x": 350, "y": 0 },
+    { "slot": 1, "owner": "neutral", "garrison_real": 1, "capacity_real": 100, "x": 200, "y": 0 },
     { "slot": 2, "owner": "p2", "garrison_real": 0, "capacity_real": 0, "x": 1000, "y": 0 }
   ],
   "actions": [

@@ -16,6 +16,7 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 MAX_BUILDING_SLOTS    = 32    # fixed per ARCHITECTURE §9.1; unused slots masked
 MAX_UNIT_GROUP_SLOTS  = 32
+HISTORY_K             = 5     # v10 encoder: last K actions per side fed as obs
 
 # ---------------------------------------------------------------------------
 # Time
@@ -39,14 +40,21 @@ DEFAULT_CAPACITY      = 30 * SCALE    # 30 real units max garrison
 # ---------------------------------------------------------------------------
 # Movement
 # ---------------------------------------------------------------------------
-TRAVEL_SPEED          = 200           # map-units moved per tick (1 sec)
+TRAVEL_SPEED          = 100           # map-units moved per sim tick (v9.1: halved
+                                      # from 200 so transit time differentiates
+                                      # close vs far sources at action_repeat=2,
+                                      # i.e. close pairs land within 1 AI tick
+                                      # while far pairs cost 2+ AI ticks of
+                                      # defender regen and opponent reaction.)
 MIN_TRAVEL_TICKS      = 1
-MAX_TRAVEL_TICKS      = 8             # map is sized so corner-to-corner ≤ 8
+MAX_TRAVEL_TICKS      = 12            # ceiling raised from 8 to absorb v9.1's 2×
+                                      # slowdown on existing-size maps without
+                                      # clipping any pair to the same value.
 
 # ---------------------------------------------------------------------------
 # Send action
 # ---------------------------------------------------------------------------
-SEND_PERCENTAGES      = (25, 50, 75, 100)   # 4 action types — matches v9.0 arch
+SEND_PERCENTAGES      = (25, 50, 75, 100)   # 4 action types — unchanged since v9.0
 MIN_GARRISON_AFTER_SEND = 0           # keeps path open for "leave 1 behind" rule
 MIN_SEND_INTERNAL     = 1 * SCALE     # must send at least 1 real unit; else invalid
 

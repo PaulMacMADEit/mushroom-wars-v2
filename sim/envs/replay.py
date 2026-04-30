@@ -49,7 +49,7 @@ def phase_to_winner(phase: int) -> Optional[int]:
 @dataclass
 class Recorder:
     game_id: str
-    sim_version: str = "v9.0"
+    sim_version: str = "v9.1"
     level_name: str = ""
     seed: Optional[int] = None
 

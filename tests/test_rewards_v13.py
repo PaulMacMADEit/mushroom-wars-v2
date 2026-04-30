@@ -91,7 +91,7 @@ def _build_capture_state(reward_version: int):
     s.buildings_owner[1] = C.OWNER_NEUTRAL
     s.buildings_garrison[1] = 1 * C.SCALE
     s.buildings_capacity[1] = 100 * C.SCALE
-    s.buildings_x[1] = 200
+    s.buildings_x[1] = 100  # 1-tick transit under v9.1 (TRAVEL_SPEED=100)
     s.buildings_y[1] = 0
 
     # Add p2 building so the game stays "playing" through these ticks.
@@ -152,7 +152,7 @@ def _build_p2_capture_p1_state(reward_version: int):
     s.buildings_owner[1] = C.OWNER_P1
     s.buildings_garrison[1] = 1 * C.SCALE
     s.buildings_capacity[1] = 100 * C.SCALE
-    s.buildings_x[1] = 200
+    s.buildings_x[1] = 100  # 1-tick transit under v9.1 (TRAVEL_SPEED=100)
     s.buildings_y[1] = 0
     # extra p1 building so the game doesn't end on capture
     s.buildings_alive[2] = 1
@@ -191,7 +191,7 @@ def _build_eliminate_p2_state(reward_version: int):
     s.buildings_owner[1] = C.OWNER_P2
     s.buildings_garrison[1] = 1 * C.SCALE
     s.buildings_capacity[1] = 100 * C.SCALE
-    s.buildings_x[1] = 200
+    s.buildings_x[1] = 100  # 1-tick transit under v9.1 (TRAVEL_SPEED=100)
     s.buildings_y[1] = 0
 
     precompute_distances(s)

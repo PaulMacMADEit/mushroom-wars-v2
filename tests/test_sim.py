@@ -545,7 +545,11 @@ def test_send_to_own_building_reinforces_no_combat():
     # No capture reward this time — friendly reinforcement only.
     # (The tick that resolves reinforcement should not emit reward.)
     assert int(state.buildings["owner"][N1_TOP]) == C.OWNER_P1
-    assert int(state.buildings["garrison"][N1_TOP]) == 257
+    # Calibrated to v9.1 sim constants (TRAVEL_SPEED=100). Was 257 under v9.0
+    # (TRAVEL_SPEED=200). The 20-unit delta is two extra travel ticks of
+    # production at both endpoints (P1_BASE→N1_TOP transit went 2→3 ticks,
+    # and the same again on the second leg).
+    assert int(state.buildings["garrison"][N1_TOP]) == 277
 
 
 def test_friendly_reinforce_clamps_at_capacity():
@@ -906,7 +910,10 @@ def test_apply_recomputes_travel_matrix_after_manual_corruption():
     state = reset()
     state.travel_matrix[P1_BASE, N1_TOP] = 99
     apply(state, "crossroads_6")
-    assert int(state.travel_matrix[P1_BASE, N1_TOP]) == 2
+    # Calibrated to v9.1 (TRAVEL_SPEED=100). Was 2 under v9.0. Test verifies
+    # apply() recomputed the matrix (not the corrupted 99); the literal value
+    # is the actual ceil(dist / TRAVEL_SPEED) for this slot pair.
+    assert int(state.travel_matrix[P1_BASE, N1_TOP]) == 3
 
 
 def test_reset_clears_in_flight_groups():
