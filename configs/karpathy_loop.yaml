@@ -66,11 +66,15 @@ training_opponent:
   #   self_play        — trainer's self_play=true (requires fused_rollout=false)
   #   neural           — explicit run_id in kwargs (legacy)
   #   random_legal     — uniform-random legal moves (no archive). Required during
-  #                      v10 bootstrap because the existing archive is OBS_DIM=1002
-  #                      and v10 produces 1008 — incompatible. Flip back to
-  #                      pfsp_champion / random_champion after a few v10 cells
-  #                      have seeded a v10 champion in the archive.
-  name: "random_legal"
+  #                      v10 bootstrap when the archive only held v9.0 (OBS_DIM=1002)
+  #                      checkpoints — incompatible with v10 (1008).
+  #
+  # 2026-04-29 fire 79: BOOTSTRAP COMPLETE — v10 has archive presence.
+  # Two v10 champions admitted (rollout_steps-lo @ 90.0%, rollout_steps-mid
+  # @ 86.7%) once the bench_eval crash on tournament._state_to_obs_dict_for_player
+  # was fixed. Flipping back to PFSP-weighted champion sampling so v10 trains
+  # against itself instead of random legal moves.
+  name: "pfsp_champion"
   kwargs: {}
 
 # ---------------------------------------------------------------------------
