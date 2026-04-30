@@ -3989,6 +3989,50 @@ can advance.
 
 **No new ratings, no new champions. No karp leaderboard updates.**
 
+### Loop fire 82 — 2026-04-29 22:42 PT — Backstop drove rollout_steps sweep under v10. All 3 cells trained fine (rate 0.83-0.86 vs random_legal); all unrated. Bug 4 still unfixed. Stale rerate cleared.
+
+**State.** Worker active. Backstop fired at 22:15 PT after my fire-81
+cleanup, queued rollout_steps sweep. All 3 cells completed training but
+none rated.
+
+**rollout_steps sweep (v10, vs random_legal during training):**
+
+| label | swept | dur | rate | rated? |
+|---|---|---|---|---|
+| `karpv2-...2215-rollout_steps-lo` | rs=4 | 5.4m | **0.860** ⭐ | unrated |
+| `karpv2-...2215-rollout_steps-mid` | rs=8 (baseline) | 10.9m | **0.859** | unrated |
+| `karpv2-...2215-rollout_steps-hi` | rs=16 | 16.3m | 0.832 | unrated |
+
+**Same pattern as v9 fires 73 / 74:** lo (rs=4) wins, hi (rs=16) is weakest.
+**Update density beats horizon depth in v10 too** — small rollout buffers
+collect more updates per cell, agent improves faster. Across both eras now,
+3 axes confirm: rollout_steps, n_envs, minibatch_size all favour the lo
+end of the sweep.
+
+**v10 training-rate leaderboard so far (no bench, just train rates):**
+
+| label | swept | rate | model |
+|---|---|---|---|
+| `karpv2-260429-2215-rollout_steps-lo` | rs=4 | **0.860** ⭐ | v10 |
+| `karpv2-260429-2215-rollout_steps-mid` | rs=8 | 0.859 | v10 |
+| `karpv2-260429-2104-lr-hi` | lr=1e-3 | 0.845 | v10 |
+| `karpv2-260429-2045-n_envs-lo` | n=512 | 0.844 | v10 |
+| `karpv2-260429-2215-rollout_steps-hi` | rs=16 | 0.832 | v10 |
+| `karpv2-260429-2104-lr-mid` | lr=3e-4 | 0.778 | v10 |
+| `karpv2-260429-2045-n_envs-hi` | n=2048 | 0.774 | v10 |
+
+7 v10 runs trained, 0 rated. All sit on 77-86% vs random_legal — that's a
+solid v10 baseline range. Once bug 4 ships, all 7 should bootstrap-archive
+on first bench attempt (≥70% threshold passes for all of them).
+
+**Stale row cleanup:** marked `rerate-full-260430-0400-paullinux-10min-r2`
+failed (had been "running" since 04:02 UTC = 8h+, almost certainly orphaned
+by an earlier worker restart). Doesn't affect karp loop directly but
+unblocks the admin queue.
+
+**Holding pattern continues.** Backstop will fire again at 22:45 PT, queue
+next axis (round-robin: rollout_steps → n_envs).
+
 ## Code changes during loop
 
 **gae_lambda sweep (last v9 data) — partial:**
