@@ -164,6 +164,13 @@ export class ReplayPlayer {
     this.render();
   }
 
+  /** Public projection — used by the building popup to anchor itself. */
+  slotScreenPos(slot) {
+    const b = this.buildingById[slot];
+    if (!b) return null;
+    return this._worldToScreen(b.x, b.y);
+  }
+
   onTick(cb)        { this._onTick = cb; }
   onStateChange(cb) { this._onStateChange = cb; }
   _emit(name) {

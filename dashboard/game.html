@@ -352,6 +352,59 @@
     .mi-selection button:hover { color: var(--fg); border-color: var(--fg-muted); }
     #canvas { cursor: pointer; }
 
+    /* Floating popup over the canvas: per-building feature values for the
+       selected slot. Anchored next to the clicked building. */
+    .bld-popup {
+      position: absolute;
+      display: none;
+      background: rgba(11,13,18,0.96);
+      border: 1px solid rgba(234,179,8,0.5);
+      border-radius: 4px;
+      padding: 6px 8px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--fg);
+      width: 200px;
+      z-index: 10;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+      pointer-events: auto;
+    }
+    .bld-popup.on { display: block; }
+    .bld-popup-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 6px;
+      padding-bottom: 4px;
+      margin-bottom: 4px;
+      border-bottom: 1px solid var(--border);
+      color: #fde68a;
+      font-weight: 600;
+      font-size: 11px;
+    }
+    .bld-popup-head .title { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+    .bld-popup-head .meta  { color: var(--fg-muted); font-weight: 400; font-size: 10px; }
+    .bld-popup-close {
+      background: transparent;
+      border: none;
+      color: var(--fg-muted);
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+      padding: 0 2px;
+    }
+    .bld-popup-close:hover { color: var(--fg); }
+    .bp-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      padding: 1px 0;
+    }
+    .bp-row .k { color: var(--fg-muted); }
+    .bp-row .v { color: var(--fg); text-align: right; }
+    .bp-row .v.zero { color: #4b5366; }
+    .bp-row .v.on   { color: #86efac; font-weight: 600; }
+
     /* KPI panel — per-team reward breakdown, ranked by |contribution|. */
     #reward-breakdown { flex-direction: column; gap: 6px; }
     .kpi-team {
@@ -621,8 +674,20 @@
         <div class="canvas-wrap" id="canvas-wrap">
           <canvas id="canvas"></canvas>
           <div class="dropzone" id="dropzone">
-            <div>Drop an <span class="inline-code">events.json</span> file here</div>
+            <div>Drop an <span class="inline-code">events.json</span> or <span class="inline-code">.log.txt</span> file here</div>
+            <button id="open-file-dz" style="pointer-events:auto; background:transparent; color:var(--accent); border:1px solid var(--border); padding:4px 12px; border-radius:6px; cursor:pointer; font-family:inherit; font-size:12px;">Open file…</button>
             <code>or append ?url=&lt;path-to-events.json&gt; to this URL</code>
+          </div>
+          <input type="file" id="open-file-input" accept=".json,.txt,.log,application/json,text/plain" style="display:none;">
+          <div class="bld-popup" id="bld-popup">
+            <div class="bld-popup-head">
+              <div class="title">
+                <span id="bld-popup-title">Building #—</span>
+                <span class="meta" id="bld-popup-meta">—</span>
+              </div>
+              <button class="bld-popup-close" id="bld-popup-close" title="Close">×</button>
+            </div>
+            <div id="bld-popup-rows"></div>
           </div>
         </div>
         <div class="controls">
@@ -639,6 +704,7 @@
             <option value="4" selected>4×</option>
             <option value="8">8×</option>
           </select>
+          <button id="open-file-ctl" title="Open a .json or .log.txt game file">📁</button>
           <button id="download-log" title="Download a narrated text log">↓</button>
           <button id="next-game" title="Next (newer) game" disabled>»</button>
         </div>
@@ -816,6 +882,11 @@
       _selectedSlot = (slot === _selectedSlot) ? null : slot;
       player.setSelectedSlot(_selectedSlot);
       updateModelInputs(player.t);
+    });
+    document.getElementById("bld-popup-close").addEventListener("click", () => {
+      _selectedSlot = null;
+      if (player) player.setSelectedSlot(null);
+      updateModelInputs(player ? player.t : 0);
     });
 
     // --- Log narration ---------------------------------------------------
@@ -1690,7 +1761,7 @@
       for (const name of BUILDING_NAMES) updateSlotRow(_miRowRefs.building[name], f.building[name], sel);
       for (const name of GROUP_NAMES)    updateSlotRow(_miRowRefs.group[name],    f.group[name],    null);
 
-      // Selection header text
+      // Selection header text + canvas popup
       const $sel = document.getElementById("mi-building-selection");
       if ($sel) {
         if (sel === null) {
@@ -1707,6 +1778,53 @@
             `Building #${sel} · ${owner} · garrison ${garrRaw}`;
         }
       }
+      updateBuildingPopup(f, sel);
+    }
+
+    /** Render + anchor the per-building popup over the canvas. */
+    function updateBuildingPopup(f, slot) {
+      const $popup = document.getElementById("bld-popup");
+      if (!$popup) return;
+      if (slot === null || !player) {
+        $popup.classList.remove("on");
+        return;
+      }
+      const owner = f.building.is_p1[slot] ? "P1"
+                  : f.building.is_p2[slot] ? "P2"
+                  : f.building.is_neutral[slot] ? "Neutral"
+                  : "—";
+      const garrRaw = Math.round(f.building.garrison_norm[slot] * (currentData.scale ?? 10) * 30);
+      const capRaw  = Math.round(f.building.capacity_norm[slot]  * (currentData.scale ?? 10) * 30);
+      document.getElementById("bld-popup-title").textContent = `Building #${slot} · ${owner}`;
+      document.getElementById("bld-popup-meta").textContent  = `garrison ${garrRaw} / cap ${capRaw}`;
+
+      let rows = "";
+      for (const name of BUILDING_NAMES) {
+        const v = f.building[name][slot] || 0;
+        let cls = "", txt;
+        if (v === 0) { cls = "zero"; txt = "0"; }
+        else if (v === 1) { cls = "on"; txt = "1"; }
+        else txt = v.toFixed(3);
+        rows += `<div class="bp-row"><span class="k">${name}</span><span class="v ${cls}">${txt}</span></div>`;
+      }
+      document.getElementById("bld-popup-rows").innerHTML = rows;
+
+      const pos = player.slotScreenPos(slot);
+      if (!pos) { $popup.classList.remove("on"); return; }
+      $popup.classList.add("on");
+      const wrap = document.getElementById("canvas-wrap");
+      const wrapW = wrap.clientWidth;
+      const wrapH = wrap.clientHeight;
+      const popupW = $popup.offsetWidth || 200;
+      const popupH = $popup.offsetHeight || 360;
+      // Right of the building, fall back to left if it would overflow.
+      let left = pos[0] + 36;
+      if (left + popupW + 4 > wrapW) left = pos[0] - popupW - 36;
+      left = Math.max(4, Math.min(wrapW - popupW - 4, left));
+      let top = pos[1] - popupH / 2;
+      top = Math.max(4, Math.min(wrapH - popupH - 4, top));
+      $popup.style.left = `${left}px`;
+      $popup.style.top  = `${top}px`;
     }
 
     function updateSlotRow(ref, values, selectedSlot) {
@@ -1973,15 +2091,68 @@
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     });
 
-    // --- Drag + drop ------------------------------------------------------
+    // --- Open file (drag-drop + click-to-pick) ---------------------------
+    // Accepts:
+    //   • events.json — full replay; loaded directly.
+    //   • .log.txt    — narrated text log (only summary fields). We extract
+    //                   the `game_id:` line from the header and fetch the
+    //                   original JSON from Supabase storage. This is what
+    //                   the ↓ download button produces, so round-tripping
+    //                   "download → re-open" works.
+    async function openLogTxtByGameId(text) {
+      const m = text.match(/^game_id:\s*(\S+)/m);
+      if (!m) {
+        $status.textContent = "error: .log.txt missing `game_id:` header";
+        return;
+      }
+      const gameId = m[1];
+      $status.textContent = `looking up game ${gameId.slice(0, 8)}…`;
+      const { data, error } = await sb.from('games')
+        .select('actions_url, match_id')
+        .eq('id', gameId)
+        .maybeSingle();
+      if (error || !data) {
+        $status.textContent = `error: game ${gameId.slice(0, 8)} not in Supabase (${error?.message ?? "no row"})`;
+        return;
+      }
+      if (!data.actions_url) {
+        $status.textContent = `error: game ${gameId.slice(0, 8)} has no replay JSON in storage`;
+        return;
+      }
+      const url = publicUrl(data.actions_url);
+      try {
+        const json = await fetch(url).then(r => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.json();
+        });
+        loadReplay(json);
+        // Reflect in the URL so refresh keeps you here, and pull in match nav.
+        const params = new URLSearchParams(location.search);
+        params.set('url', url);
+        if (data.match_id) params.set('match', data.match_id);
+        history.replaceState({}, '', `${location.pathname}?${params}`);
+      } catch (err) {
+        $status.textContent = `fetch error: ${err.message}`;
+      }
+    }
+
     function onFile(file) {
       const reader = new FileReader();
       reader.onload = (e) => {
-        try {
-          const data = JSON.parse(e.target.result);
-          loadReplay(data);
-        } catch (err) {
-          $status.textContent = `error: ${err.message}`;
+        const text = e.target.result;
+        // Heuristic: our text logs start with "# Mushroom Wars v2"; JSON
+        // replays start with "{". Fall back to extension if needed.
+        const head = text.slice(0, 64).trimStart();
+        const isLog = head.startsWith("#") || /\.log\.txt$|\.log$|\.txt$/i.test(file.name);
+        const isJson = head.startsWith("{") || /\.json$/i.test(file.name);
+        if (isJson && !isLog) {
+          try {
+            loadReplay(JSON.parse(text));
+          } catch (err) {
+            $status.textContent = `error: ${err.message}`;
+          }
+        } else {
+          openLogTxtByGameId(text);
         }
       };
       reader.readAsText(file);
@@ -1997,6 +2168,22 @@
       e.preventDefault();
       $dropzone.classList.remove("active");
       const f = e.dataTransfer?.files?.[0];
+      if (f) onFile(f);
+    });
+
+    // Click-to-pick: both the dropzone button (visible until first load) and
+    // the controls-bar button (always available) trigger the same input.
+    const $openFileInput = document.getElementById("open-file-input");
+    const $openFileDz    = document.getElementById("open-file-dz");
+    const $openFileCtl   = document.getElementById("open-file-ctl");
+    function pickFile() {
+      $openFileInput.value = ""; // allow re-picking the same file
+      $openFileInput.click();
+    }
+    $openFileDz?.addEventListener("click", pickFile);
+    $openFileCtl?.addEventListener("click", pickFile);
+    $openFileInput?.addEventListener("change", () => {
+      const f = $openFileInput.files?.[0];
       if (f) onFile(f);
     });
 
