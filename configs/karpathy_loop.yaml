@@ -84,12 +84,10 @@ training_opponent:
   #                      v10 bootstrap when the archive only held v9.0 (OBS_DIM=1002)
   #                      checkpoints — incompatible with v10 (1008).
   #
-  # 2026-05-01 v12 BOOTSTRAP: archive empty (clean break from v10). Train vs
-  # random_legal until first v12 champion lands. Per training-discipline §1
-  # ("first run under new infra uses baseline hyperparams of prior infra"),
-  # the very first v12.0.* run establishes the new reference point.
-  # Flip to pfsp_champion once a v12 champion exists.
-  name: "random_legal"
+  # 2026-05-01 v12 SELF-PLAY: bootstrap complete (5a772e4b → 88.1%, 260e1051 →
+  # 94.4%). Switching to pure self-play — every cell trains against a
+  # PFSP-weighted v12 champion. random_legal removed everywhere per Paul.
+  name: "pfsp_champion"
   kwargs: {}
 
 # ---------------------------------------------------------------------------
@@ -158,14 +156,14 @@ baseline_hyperparams:
   # update). Requires worker to download the archive — gated on this AND
   # leaderboard_bias>0 in workers/worker.py.
   #
-  # 2026-05-01 v12 BOOTSTRAP: empty archive — no opponents to rotate. Flip
-  # back to 'rotate_per_update' once v12 champions populate the archive.
-  opponent_pool_mode: ""
+  # 2026-05-01 v12 SELF-PLAY: rotate every PPO update. Trainer pre-loads the
+  # v12 archive into RAM and swaps the opponent each update for variety.
+  opponent_pool_mode: "rotate_per_update"
 
   # ----- Cross-lineage / PFSP archive sampling (training-time) -----
   # Only consulted when self_play=true. Bench-eval-time PFSP is independent.
-  # 2026-05-01 v12 BOOTSTRAP: archive empty — keep at 0 until first v12 champ lands.
-  leaderboard_bias:   0.0           # P(env draws from champion archive per snapshot) — was 0.30
+  # 2026-05-01 v12 SELF-PLAY: pure rotation against the v12 archive.
+  leaderboard_bias:   1.0           # 100% pool-sourced (gate for download; rotate_per_update supersedes per-env mixing)
   leaderboard_source: "pfsp"        # "pfsp" | "elo" (legacy)
   leaderboard_top_k:  10
 
