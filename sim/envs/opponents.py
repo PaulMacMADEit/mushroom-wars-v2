@@ -395,30 +395,88 @@ def _build_opponent_callable(agent, obs_norm, recorder, encode_fn=None):
     def batch_act(states, rng: np.random.Generator) -> np.ndarray:
         """Batched neural opponent forward over N states.
 
-        Encoding is still a Python loop (per-state numpy ops are cheap), but
-        the forward pass + obs_norm are vectorised. On CUDA with n_envs=1800
-        this is ~10-30× faster than calling opponent(state) per env, because
-        kernel-launch overhead dominates the per-call path.
+        Stacks per-state arrays once → applies P1↔P2 mirroring on the
+        stacks → calls encode_obs_batched_numpy + compute_mask_batched
+        once → ONE forward pass. Replaces the per-state Python loop that
+        dominated the self-play hot path.
+
+        On CUDA with n_envs=1800 this is ~10-30× faster than calling
+        opponent(state) per env.
         """
         N = len(states)
         if N == 0:
             return np.zeros(0, dtype=np.int64)
 
-        # Probe first state to size the obs/mask arrays.
-        obs_dict0 = _state_to_obs(states[0], mask_player=C.OWNER_P2)
-        mirrored0 = _mirror_ownership(obs_dict0)
-        mirrored0["action_mask"] = obs_dict0["action_mask"]
-        x0 = encode_fn(mirrored0)
-        obs_arr  = np.empty((N, len(x0)), dtype=np.float32)
-        mask_arr = np.empty((N, len(obs_dict0["action_mask"])), dtype=bool)
-        obs_arr[0]  = x0
-        mask_arr[0] = obs_dict0["action_mask"]
-        for i in range(1, N):
-            obs_dict_i = _state_to_obs(states[i], mask_player=C.OWNER_P2)
-            mirrored_i = _mirror_ownership(obs_dict_i)
-            mirrored_i["action_mask"] = obs_dict_i["action_mask"]
-            obs_arr[i]  = encode_fn(mirrored_i)
-            mask_arr[i] = obs_dict_i["action_mask"]
+        # Lazy imports — used only on the batched path.
+        from sim.actions import compute_mask_batched
+        from training.encoder import encode_obs_batched_numpy
+
+        # Stack per-state fields → (N, MAX_B) / (N, MAX_G) / (N, K, 4).
+        b_alive    = np.stack([s.buildings_alive    for s in states])
+        b_owner    = np.stack([s.buildings_owner    for s in states])
+        b_garrison = np.stack([s.buildings_garrison for s in states])
+        b_capacity = np.stack([s.buildings_capacity for s in states])
+        b_x        = np.stack([s.buildings_x        for s in states])
+        b_y        = np.stack([s.buildings_y        for s in states])
+        g_alive    = np.stack([s.groups_alive       for s in states])
+        g_owner    = np.stack([s.groups_owner       for s in states])
+        g_tgt      = np.stack([s.groups_tgt         for s in states])
+        g_count    = np.stack([s.groups_count       for s in states])
+        g_progress = np.stack([s.groups_progress    for s in states])
+        g_travel   = np.stack([s.groups_travel      for s in states])
+
+        arrivals_p1 = np.stack([s.arrivals_p1            for s in states])
+        arrivals_p2 = np.stack([s.arrivals_p2            for s in states])
+        prev_owner  = np.stack([s.prev_buildings_owner   for s in states])
+        prev_p1     = np.array([s.prev_p1_units_total    for s in states], dtype=np.int32)
+        prev_p2     = np.array([s.prev_p2_units_total    for s in states], dtype=np.int32)
+        last_actions_p1 = np.stack([s.last_actions_p1    for s in states])
+        last_actions_p2 = np.stack([s.last_actions_p2    for s in states])
+        tick = np.array([s.tick for s in states], dtype=np.int32)
+
+        # Mask is computed against the REAL (un-mirrored) state, for player P2.
+        mask_arr = compute_mask_batched(
+            buildings_alive=b_alive,
+            buildings_owner=b_owner,
+            buildings_garrison=b_garrison,
+            groups_alive=g_alive,
+            player=C.OWNER_P2,
+        )
+
+        # Mirror ownership P1↔P2 so the encoder treats P2 as "P1 = us".
+        def _swap(arr):
+            swapped = np.where(arr == C.OWNER_P1, C.OWNER_P2,
+                      np.where(arr == C.OWNER_P2, C.OWNER_P1, arr))
+            return swapped.astype(arr.dtype)
+        b_owner_m    = _swap(b_owner)
+        g_owner_m    = _swap(g_owner)
+        prev_owner_m = _swap(prev_owner)
+
+        batched = {
+            "buildings_alive":      b_alive,
+            "buildings_owner":      b_owner_m,
+            "buildings_garrison":   b_garrison,
+            "buildings_capacity":   b_capacity,
+            "buildings_x":          b_x,
+            "buildings_y":          b_y,
+            "groups_alive":         g_alive,
+            "groups_owner":         g_owner_m,
+            "groups_tgt":           g_tgt,
+            "groups_count":         g_count,
+            "groups_progress":      g_progress,
+            "groups_travel":        g_travel,
+            # Per-player arrays swap: P2's arrivals become "mine" after mirror.
+            "arrivals_p1":          arrivals_p2,
+            "arrivals_p2":          arrivals_p1,
+            "prev_buildings_owner": prev_owner_m,
+            "prev_p1_units_total":  prev_p2,
+            "prev_p2_units_total":  prev_p1,
+            "last_actions_p1":      last_actions_p2,
+            "last_actions_p2":      last_actions_p1,
+            "tick":                 tick,
+        }
+
+        obs_arr = encode_obs_batched_numpy(batched)
         if obs_norm is not None:
             obs_arr = obs_norm.normalize(obs_arr)
 
