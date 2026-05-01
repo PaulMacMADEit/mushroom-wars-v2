@@ -118,18 +118,23 @@ REWARD_VERSION_V15 = 3   # 2026-04-30: v1.4 + asymmetric capture/loss
                          # maps — agent dominates territory but never
                          # finishes games. Adds explicit signal that
                          # enemy buildings are 4x more valuable.
+REWARD_VERSION_V16 = 4   # 2026-05-01: v1.5 + harsher loss + much harsher draw.
+                         # LOSE -5.0 → -7.5 (50% more costly); DRAW -0.5 → -1.25
+                         # (150% more costly). Designed to push the policy past
+                         # "stalemate is fine" equilibria — losing should hurt
+                         # more than half a win, and draws should sting.
 
 # Per-version reward tables. Index with REWARD_VERSION_V*.
-# Tuple positions:                    v1.2,  v1.3,  v1.4,  v1.5
-REWARD_CAPTURE_BY_VERSION     = (0.1,   0.05,  0.05,  0.05)
-REWARD_LOSS_BY_VERSION        = (-0.1,  -0.05, -0.05, -0.05)
-REWARD_WIN_BY_VERSION         = (1.0,   5.0,   5.0,   5.0)
-REWARD_LOSE_BY_VERSION        = (-1.0,  -5.0,  -5.0,  -5.0)
-REWARD_DRAW_BY_VERSION        = (0.0,   -0.5,  -0.5,  -0.5)
+# Tuple positions:                    v1.2,  v1.3,  v1.4,  v1.5,  v1.6
+REWARD_CAPTURE_BY_VERSION     = (0.1,   0.05,  0.05,  0.05,  0.05)
+REWARD_LOSS_BY_VERSION        = (-0.1,  -0.05, -0.05, -0.05, -0.05)
+REWARD_WIN_BY_VERSION         = (1.0,   5.0,   5.0,   5.0,   5.0)
+REWARD_LOSE_BY_VERSION        = (-1.0,  -5.0,  -5.0,  -5.0,  -7.5)   # v1.6: 50% more
+REWARD_DRAW_BY_VERSION        = (0.0,   -0.5,  -0.5,  -0.5,  -1.25)  # v1.6: 150% more
 # Bonus added to the winner that scales linearly with how quickly they won.
 # Final terminal reward (winner) = REWARD_WIN + REWARD_SPEED_BONUS * (1 - tick / GAME_TIMEOUT_TICKS)
 # At tick=0 the bonus is REWARD_SPEED_BONUS; at timeout it is 0.
-REWARD_SPEED_BONUS_BY_VERSION = (0.5,   2.0,   2.0,   2.0)
+REWARD_SPEED_BONUS_BY_VERSION = (0.5,   2.0,   2.0,   2.0,   2.0)
 
 # Per-tick shaping (v1.4+ only — zero for v1.2/v1.3). Symmetric: at end of
 # each tick the engine adds COEF_B*(b_p1−b_p2) + COEF_U*(u_p1_real−u_p2_real)
@@ -138,17 +143,17 @@ REWARD_SPEED_BONUS_BY_VERSION = (0.5,   2.0,   2.0,   2.0)
 # active play without dominating terminal outcomes.
 #   buildings: ±4 typical × 80 ticks × 0.0010 ≈ ±0.32 per game
 #   units:     ±50 real typical × 80 ticks × 0.0002 ≈ ±0.80 per game
-REWARD_TICK_BUILDINGS_COEF_BY_VERSION = (0.0, 0.0, 0.0010, 0.0010)
-REWARD_TICK_UNITS_COEF_BY_VERSION     = (0.0, 0.0, 0.0002, 0.0002)
+REWARD_TICK_BUILDINGS_COEF_BY_VERSION = (0.0, 0.0, 0.0010, 0.0010, 0.0010)
+REWARD_TICK_UNITS_COEF_BY_VERSION     = (0.0, 0.0, 0.0002, 0.0002, 0.0002)
 
-# v1.5 only — asymmetric capture/loss bonus when ownership transitions
+# v1.5+ — asymmetric capture/loss bonus when ownership transitions
 # directly between the two players (not via mutual wipeout to neutral):
 #   - Capture FROM enemy player: r_capture += +0.15  → total +0.20 (4× neutral)
 #   - Lost TO enemy player:      r_loss    += -0.15  → total -0.20 (4× neutral)
 # Mutual-wipeout transitions (owner → NEUTRAL) keep the base loss only.
 # These give explicit signal: enemy buildings matter more than neutrals.
-REWARD_ENEMY_CAPTURE_BONUS_BY_VERSION = (0.0, 0.0, 0.0,  0.15)
-REWARD_ENEMY_LOSS_PENALTY_BY_VERSION  = (0.0, 0.0, 0.0, -0.15)
+REWARD_ENEMY_CAPTURE_BONUS_BY_VERSION = (0.0, 0.0, 0.0,  0.15,  0.15)
+REWARD_ENEMY_LOSS_PENALTY_BY_VERSION  = (0.0, 0.0, 0.0, -0.15, -0.15)
 
 # Module-level scalar constants (= v1.2). Kept for backward-compat reads from
 # any code path that doesn't yet thread `reward_version` through; new code
