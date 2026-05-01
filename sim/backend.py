@@ -186,11 +186,21 @@ class _JaxVecAdapter:
 
         # Build the opponent callable once. Matches the per-env opponent
         # plumbing used by `sim.envs.make_env`.
-        from sim.envs.opponents import noop_opponent, random_legal_opponent, make_neural_opponent
+        from sim.envs.opponents import (
+            greedy_capacity_aware_opponent,
+            make_neural_opponent,
+            noop_opponent,
+            random_legal_opponent,
+        )
         if opponent_name == "random_legal":
             self._opponent = random_legal_opponent
         elif opponent_name == "noop":
             self._opponent = noop_opponent
+        elif opponent_name == "greedy_capacity_aware":
+            # JAX-native opponent (handled fully on-device by
+            # pack_action_batch_jax in the fused-rollout path). The numpy
+            # callable here is only used by the host-side fallback path.
+            self._opponent = greedy_capacity_aware_opponent
         elif opponent_name == "neural":
             # `_label_*` keys are dashboard-side metadata stashed by the worker
             # (see workers/worker.py:_resolve_opponent_kwargs). They aren't
