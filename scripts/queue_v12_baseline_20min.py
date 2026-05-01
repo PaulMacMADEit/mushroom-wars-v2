@@ -31,6 +31,13 @@ def main() -> None:
     base_hp["opponent_name"] = "random_legal"
     base_hp.pop("opponent_kwargs", None)
 
+    # Disable archive_eval on baseline runs. Running it during a 20-min cell
+    # against 3 champs × 10 games every 5 updates burns ~30% of wall time on
+    # eval that the baseline doesn't need (we already get rate vs random_legal
+    # from the training rollout itself, plus a post-run bench_eval).
+    base_hp["archive_eval_every"] = 999_999_999
+    base_hp["archive_eval_min_pool"] = 999_999_999
+
     label = "v12.0.baseline-RandomLegal-Close4_6-20min"
     desc  = "v12.0 baseline: 20 min vs random_legal on random_close_4_6 (small maps). Single run, no sweep."
     budget_ms = 20 * 60 * 1000  # 1200000 ms = 20 min
