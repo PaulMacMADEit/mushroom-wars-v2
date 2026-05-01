@@ -48,6 +48,12 @@ LEVELS: dict[str, list] = {
 
 _RANDOM_RE       = re.compile(r"^random_(\d+)_(\d+)$")
 _RANDOM_CLOSE_RE = re.compile(r"^random_close_(\d+)_(\d+)$")
+# 2026-05-01: shuffled-slot variants. Buildings get random slot indices per
+# episode reset (not always slot 0=P1 base, slot 1=P2 base, slot 2..=neutrals).
+# Forces the encoder to be position-invariant — important when growing N
+# because previously-empty slots (10..31 at small N) get attended to early.
+_RANDOM_CLOSE_SHUFFLE_RE = re.compile(r"^random_close_shuffle_(\d+)_(\d+)$")
+_RANDOM_SHUFFLE_RE       = re.compile(r"^random_shuffle_(\d+)_(\d+)$")
 _ASYM_RE         = re.compile(r"^asym_(\d+)_(\d+)$")
 
 # Placement constraints.
@@ -198,10 +204,44 @@ def generate_asymmetric_level(n_buildings: int, rng: np.random.Generator) -> lis
     return level
 
 
+def _shuffle_level_slots(level: list, rng: np.random.Generator) -> list:
+    """Randomize which slot each building lands in.
+
+    The level generator builds entries in a fixed order: [P1_base, P2_base,
+    neutral_a, neutral_b, ...]. `apply()` places list[i] into slot i. So the
+    NN's encoder always sees slot 0 = P1 base, slot 1 = P2 base, etc. — a
+    positional prior the agent over-relies on.
+
+    This shuffle assigns each building a random slot per episode, forcing
+    the encoder to derive ownership from the `owner` field (which it has)
+    rather than the slot index. Helps generalization across N.
+    """
+    out = list(level)
+    rng.shuffle(out)
+    return out
+
+
 def _resolve_level(level_name: str, seed: int | None) -> list:
     """Look up a static name or generate a random level. Returns the level list."""
     if level_name in LEVELS:
         return LEVELS[level_name]
+    # Match `random_close_shuffle_*` BEFORE `random_close_*` (substring match).
+    m = _RANDOM_CLOSE_SHUFFLE_RE.match(level_name)
+    if m:
+        n_min, n_max = int(m.group(1)), int(m.group(2))
+        if not (2 <= n_min <= n_max <= C.MAX_BUILDING_SLOTS):
+            raise ValueError(f"random_close_shuffle level bounds out of range: {level_name!r}")
+        rng = np.random.default_rng(seed)
+        n = int(rng.integers(n_min, n_max + 1))
+        return _shuffle_level_slots(generate_random_close_level(n, rng), rng)
+    m = _RANDOM_SHUFFLE_RE.match(level_name)
+    if m:
+        n_min, n_max = int(m.group(1)), int(m.group(2))
+        if not (2 <= n_min <= n_max <= C.MAX_BUILDING_SLOTS):
+            raise ValueError(f"random_shuffle level bounds out of range: {level_name!r}")
+        rng = np.random.default_rng(seed)
+        n = int(rng.integers(n_min, n_max + 1))
+        return _shuffle_level_slots(generate_random_level(n, rng), rng)
     # Match `random_close_*` BEFORE `random_*` since the latter would partial-match.
     m = _RANDOM_CLOSE_RE.match(level_name)
     if m:
