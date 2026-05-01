@@ -94,7 +94,10 @@ def collect_rollout_fused(
     # already loaded the opponent if opponent_name == "neural", so we can
     # reach in and grab the callable.
     opponent_fn = None  # set when we need the per-env path
-    if opponent_name not in ("random_legal", "noop"):
+    # On-device opponents (no host callable). Add new JAX-native scripted
+    # opponents here as they're ported to sim/actions_jax.py.
+    JAX_NATIVE_OPPONENTS = ("random_legal", "noop", "greedy_capacity_aware")
+    if opponent_name not in JAX_NATIVE_OPPONENTS:
         # Reach into the adapter to pull the cached neural opponent callable.
         # Caller (PPOTrainer._collect_rollout_fused) already passed
         # vec_env=self.vec._inner (the JaxVecEnv), but the *adapter* (self.vec)
@@ -180,9 +183,19 @@ def collect_rollout_fused(
         # is split per step so each rollout step gets fresh randomness.
         if opponent_fn is None:
             jax_key, sub = jax.random.split(jax_key)
-            a_batch = pack_action_batch_jax(
-                jnp.asarray(actions), p2_mask_dev, sub, opponent_name,
-            )
+            # greedy_capacity_aware needs the building arrays from the JaxVecEnv state.
+            # Pass them only when needed; pack_action_batch_jax has matching defaults.
+            if opponent_name == "greedy_capacity_aware":
+                a_batch = pack_action_batch_jax(
+                    jnp.asarray(actions), p2_mask_dev, sub, opponent_name,
+                    buildings_owner=vec_env.state.buildings_owner,
+                    buildings_garrison=vec_env.state.buildings_garrison,
+                    buildings_alive=vec_env.state.buildings_alive,
+                )
+            else:
+                a_batch = pack_action_batch_jax(
+                    jnp.asarray(actions), p2_mask_dev, sub, opponent_name,
+                )
         else:
             # Neural opponent path stays on host; G4 lifts it on-device.
             a_batch = _pack_action_batch_neural(

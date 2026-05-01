@@ -495,8 +495,12 @@ class PPOTrainer:
                 "last_p2_mask":        None,
                 # Pre-loaded neural opponent callable (from the adapter), used
                 # by the fused-rollout collector when opponent_name=='neural'.
+                # JAX-native opponents (random_legal, noop, greedy_capacity_aware)
+                # don't need a host callable.
                 "opponent_fn":         getattr(self.vec, "_opponent", None)
-                                          if self._initial_opponent_name not in ("random_legal", "noop")
+                                          if self._initial_opponent_name not in (
+                                              "random_legal", "noop", "greedy_capacity_aware",
+                                          )
                                           else None,
             }
         self._fused_bookkeeping["completed_episodes"] = self._completed_episodes
