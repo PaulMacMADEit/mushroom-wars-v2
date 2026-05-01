@@ -66,53 +66,40 @@ class EncoderEntry:
 # the caller actually uses get built (via `get_encoder`).
 # ---------------------------------------------------------------------------
 
-def _build_v9() -> EncoderEntry:
-    from training.encoders import v9 as enc_v9
-    from training.encoders import v9_jax as enc_v9_jax
-    return EncoderEntry(
-        version="v9.0",
-        obs_dim=enc_v9.OBS_DIM,
-        encode=enc_v9.encode_obs,
-        encode_jax=enc_v9_jax.encode_obs_batched_jit,
-        description="Full v9.0 (1002 dims): 10 globals + 32×22 per-bldg "
-                    "(includes type_oh) + 32×9 per-group.",
-    )
-
-
-def _build_v10() -> EncoderEntry:
-    # v10 is the live encoder. Importing the live module also keeps
+def _build_v12() -> EncoderEntry:
+    # v12 is the live encoder. Importing the live module also keeps
     # backward compat — `training.encoder` keeps working as the
     # "current" entry for trainer code that doesn't know about versions.
-    from training import encoder as enc_v10
-    from training import encoder_jax as enc_v10_jax
+    from training import encoder as enc_v12
+    from training import encoder_jax as enc_v12_jax
     return EncoderEntry(
-        version="v10",
-        obs_dim=enc_v10.OBS_DIM,
-        encode=enc_v10.encode_obs,
-        encode_jax=enc_v10_jax.encode_obs_batched_jit,
-        description="v10 (1008 dims): drop type_oh; add prod/wasted/share_live"
-                    "/reward_delta globals; 5-step own+opp action history; "
-                    "per-bldg event-explicit (hostile_landed, friendly_landed, "
-                    "ownership_changed).",
+        version="v12",
+        obs_dim=enc_v12.OBS_DIM,
+        encode=enc_v12.encode_obs,
+        encode_jax=enc_v12_jax.encode_obs_batched_jit,
+        description="v12 (192 dims): slot-token layout for set-transformer body. "
+                    "8 buildings (× 11 features), 4 groups (× 6), 80 globals. "
+                    "Action space cut to 2 send % + noop. Clean break from v10 — "
+                    "old (32-slot) checkpoints incompatible.",
     )
 
 
 _BUILDERS: dict[str, Callable[[], EncoderEntry]] = {
-    "v9.0": _build_v9,
-    "v10":  _build_v10,
+    "v12": _build_v12,
 }
 
 _CACHE: dict[str, EncoderEntry] = {}
 
 
-# Default for state_dicts that lack `__encoder_version__`. v9.0 is the latest
-# version trained before the stamping convention existed, so any unstamped
-# checkpoint in the archive is, by definition, a v9.0 (or v9.x sibling).
-DEFAULT_ENCODER_VERSION = "v9.0"
+# v12 is a clean break — old (v9.0/v10) checkpoints are incompatible with
+# the 8-slot sim and won't load. Default version for unstamped checkpoints
+# is now "v12" so any fresh save without an explicit stamp is interpreted
+# correctly. Loading a pre-v12 archive entry will raise (intentional).
+DEFAULT_ENCODER_VERSION = "v12"
 
 # What new saves should stamp. Bump alongside `_BUILDERS` when shipping
 # a new version so the trainer's saves carry the right version label.
-CURRENT_ENCODER_VERSION = "v10"
+CURRENT_ENCODER_VERSION = "v12"
 
 
 def get_encoder(version: str | None) -> EncoderEntry:

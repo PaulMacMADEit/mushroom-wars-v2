@@ -14,9 +14,9 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 # Capacity (shape-defining — changing these means a Model version bump)
 # ---------------------------------------------------------------------------
-MAX_BUILDING_SLOTS    = 32    # fixed per ARCHITECTURE §9.1; unused slots masked
-MAX_UNIT_GROUP_SLOTS  = 32
-HISTORY_K             = 5     # v10 encoder: last K actions per side fed as obs
+MAX_BUILDING_SLOTS    = 8     # v12: cut from 32. Levels above this fail validation.
+MAX_UNIT_GROUP_SLOTS  = 4     # v12: cut from 32. Typical map has ≤4 in-flight groups.
+HISTORY_K             = 5     # v10+ encoder: last K actions per side fed as obs
 
 # ---------------------------------------------------------------------------
 # Time
@@ -54,7 +54,7 @@ MAX_TRAVEL_TICKS      = 12            # ceiling raised from 8 to absorb v9.1's 2
 # ---------------------------------------------------------------------------
 # Send action
 # ---------------------------------------------------------------------------
-SEND_PERCENTAGES      = (25, 50, 75, 100)   # 4 action types — unchanged since v9.0
+SEND_PERCENTAGES      = (50, 100)           # v12: 2 types (was 4). Net change vs 25/75 is small in practice.
 MIN_GARRISON_AFTER_SEND = 0           # keeps path open for "leave 1 behind" rule
 MIN_SEND_INTERNAL     = 1 * SCALE     # must send at least 1 real unit; else invalid
 

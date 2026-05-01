@@ -54,13 +54,14 @@ queue_policy:
 #   `major_change`    - human-readable descriptor of what changed in this step
 #                       (LargeMap, ChampOpp, ...). Goes into every label.
 model:
-  model_id:       "v10-1024"     # Architecture FK. Step 1+2 share it.
-  simulator_id:   "sim-v1.3"
-  version_prefix: "v10.2"        # Step 2 (started 2026-04-30): graduated
-                                 # to b6 large-map mix random_4_8/6_10/8_16/16_24.
-                                 # Step 1 was v10.1 — random_close_4_5 only,
-                                 # peaked at v10.1.01-SmallMap-Base-03 (96.7%).
-  major_change:   "LargeMap"     # Goes into every label + description
+  model_id:       "v12.0"        # 2026-05-01: clean break from v10/v11.
+                                 # Set-transformer encoder + pointer heads
+                                 # over 8-building / 4-group slot tokens.
+                                 # 2 send pcts (50/100) + noop. ~1.2M params.
+  simulator_id:   "sim-v1.4"     # MAX_BUILDING_SLOTS=8, MAX_UNIT_GROUP_SLOTS=4,
+                                 # SEND_PERCENTAGES=(50,100). v12 sim contract.
+  version_prefix: "v12.0"        # Step 0 (bootstrap). Bump .step on curriculum graduation.
+  major_change:   "Bootstrap"    # Goes into every label + description
 
 # ---------------------------------------------------------------------------
 # Training opponent — who does the agent play against during rollouts?
@@ -83,12 +84,11 @@ training_opponent:
   #                      v10 bootstrap when the archive only held v9.0 (OBS_DIM=1002)
   #                      checkpoints — incompatible with v10 (1008).
   #
-  # 2026-04-29 fire 79: BOOTSTRAP COMPLETE — v10 has archive presence.
-  # 2026-04-30 (Step 2): switched back to random_legal. Paul: "still use the
-  # hardcoded model but make the map bigger". The Step 2 question is whether
-  # the agent can transfer mechanics learned on small maps to large maps with
-  # a fixed-strength opponent — adding a strong opponent at the same time
-  # would confound the experiment. Re-enable pfsp_champion for Step 3+.
+  # 2026-05-01 v12 BOOTSTRAP: archive empty (clean break from v10). Train vs
+  # random_legal until first v12 champion lands. Per training-discipline §1
+  # ("first run under new infra uses baseline hyperparams of prior infra"),
+  # the very first v12.0.* run establishes the new reference point.
+  # Flip to pfsp_champion once a v12 champion exists.
   name: "random_legal"
   kwargs: {}
 
@@ -158,17 +158,13 @@ baseline_hyperparams:
   # update). Requires worker to download the archive — gated on this AND
   # leaderboard_bias>0 in workers/worker.py.
   #
-  # 2026-04-29 fire 78: TEMPORARILY OFF for v10 bootstrap. The archive is full
-  # of v9 weights (OBS_DIM=1002) which can't load into v10 (1008). Even with
-  # training_opponent.name=random_legal, this path still tries to swap in v9
-  # weights mid-training and crashes. Flip back to 'rotate_per_update' once a
-  # v10 champion exists in the archive.
+  # 2026-05-01 v12 BOOTSTRAP: empty archive — no opponents to rotate. Flip
+  # back to 'rotate_per_update' once v12 champions populate the archive.
   opponent_pool_mode: ""
 
   # ----- Cross-lineage / PFSP archive sampling (training-time) -----
   # Only consulted when self_play=true. Bench-eval-time PFSP is independent.
-  # 2026-04-29 fire 78: leaderboard_bias also set to 0 during v10 bootstrap to
-  # prevent the worker downloading v9 archive on `needs_pool` gate.
+  # 2026-05-01 v12 BOOTSTRAP: archive empty — keep at 0 until first v12 champ lands.
   leaderboard_bias:   0.0           # P(env draws from champion archive per snapshot) — was 0.30
   leaderboard_source: "pfsp"        # "pfsp" | "elo" (legacy)
   leaderboard_top_k:  10

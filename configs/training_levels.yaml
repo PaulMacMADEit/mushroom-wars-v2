@@ -18,17 +18,13 @@
 #
 # Reload cost: zero — both schedulers read fresh from disk each fire.
 
-# 2026-04-30 (PT): graduated to Step 2 — Large Map mix.
-#   Step 1 (random_close_4_5, 350×350, 4-5 buildings) peaked at v10.1.01-SmallMap-Base-03
-#   (96.7% rate vs random_legal). Now scaling up to test transfer to larger,
-#   more varied maps. Same hardcoded opponent (random_legal); the variable is
-#   map size + building count, not opponent strength.
-#
-#   Mix: 4 generators sampled per-env on reset, equal weight. Range 4-24 buildings,
-#   full 700x700 map.
-level_name: random_4_8  # label only when level_mix is set
+# 2026-05-01 (PT): v12 launch — full mix of 4-8 building maps under MAX=8.
+#   - random_close_4_8: 350×350 small maps, 4-8 buildings, fast episodes.
+#   - random_4_8: 700×700 standard maps, 4-8 buildings, longer travel.
+#   - 50/50 mix gives practice on both close and ranged combat.
+#   - max is now 8 (slot cap from sim/config.py); v10's 16-24 generators
+#     rejected by validation.
+level_name: phase1_full_mix_4_8
 level_mix:
-  random_4_8: 1.0
-  random_6_10: 1.0
-  random_8_16: 1.0
-  random_16_24: 1.0
+  random_close_4_8: 1.0
+  random_4_8:       1.0
