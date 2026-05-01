@@ -67,7 +67,7 @@ def _resolve_supabase_run(run_id: str, device: torch.device):
     if not w_url:
         raise RuntimeError(f"run {run_id} has no weights_url (status not done?)")
 
-    out_dir = Path(tempfile.mkdtemp(prefix=f"mw2-tour-{run_id[:8]}-"))
+    out_dir = Path(tempfile.mkdtemp(prefix=f"mw2-tour-{str(run_id)[:8]}-"))
     w_path = out_dir / "weights.pt"
     urllib.request.urlretrieve(_public_url(w_url), w_path)
     n_path = None

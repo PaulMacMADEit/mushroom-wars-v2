@@ -119,15 +119,18 @@ class PPOConfig:
     archive_eval_min_pool: int  = 3
     archive_eval_max_ticks: int = 200
 
-    # Replay capture — record one self-play-style game after each PPO update
-    # using the current policy on a fresh numpy env. Output is the JSON
-    # event log defined by sim/envs/replay.py:Recorder. Buffered in memory;
-    # the worker uploads them as artifacts at end of training.
-    # Cost: ~50-200ms per capture on small maps; ~1-5% wall-time overhead.
-    replay_per_update:    bool = False
+    # Replay capture — record N games after each PPO update using the
+    # current policy on a fresh numpy env. Output is the JSON event log
+    # defined by sim/envs/replay.py:Recorder. Buffered in memory; the
+    # worker uploads them as artifacts at end of training.
+    # Cost: ~50-200ms per game on small maps; ~1-5% wall-time overhead per game.
+    replay_per_update:        bool = False
+    # How many games to capture per PPO update. Each game uses a different
+    # seed so map layouts vary. Files saved as upd_NNNN_gN.json.
+    replay_games_per_update:  int  = 1
     # Random seed offset for replay capture so the same training run can
     # produce reproducible but varied replays.
-    replay_seed_offset:   int  = 1_000_003
+    replay_seed_offset:       int  = 1_000_003
 
 
 def _extract_label_from_weights_path(weights_path) -> str:
@@ -704,17 +707,21 @@ class PPOTrainer:
         if eval_metrics is not None:
             metrics.update(eval_metrics)
 
-        # Replay capture: one numpy-env game with the current policy after
-        # each update. ~50-200ms on small maps. Stored in self._replay_buffer
+        # Replay capture: N numpy-env games with the current policy after
+        # each update. Each game gets a different seed so layouts vary.
+        # ~50-200ms per game on small maps. Stored in self._replay_buffer
         # for the worker to upload at end of training.
         if self.cfg.replay_per_update:
             try:
-                rep = self._capture_replay()
-                if rep is not None:
-                    self._replay_buffer.append({
-                        "update": self._update_count,
-                        "replay": rep,
-                    })
+                games_n = max(1, int(self.cfg.replay_games_per_update))
+                for game_idx in range(games_n):
+                    rep = self._capture_replay(game_idx=game_idx)
+                    if rep is not None:
+                        self._replay_buffer.append({
+                            "update": self._update_count,
+                            "game":   game_idx,
+                            "replay": rep,
+                        })
             except Exception as exc:
                 if not getattr(self, "_replay_disabled", False):
                     print(f"[replay] disabled — capture failed: {type(exc).__name__}: {exc}", flush=True)
@@ -727,12 +734,13 @@ class PPOTrainer:
         """Return captured replays. Each entry: {update: int, replay: dict}."""
         return list(self._replay_buffer)
 
-    def _capture_replay(self) -> dict | None:
+    def _capture_replay(self, game_idx: int = 0) -> dict | None:
         """Run one full game on a fresh numpy env using current policy as P1
         and random_legal as P2. Returns the Recorder JSON dict or None if
         disabled mid-run. Uses the trainer's level_name (or first member of
-        level_mix if set). Deterministic per (update_count, replay_seed_offset)
-        so replays are reproducible.
+        level_mix if set). Deterministic per (update_count, game_idx,
+        replay_seed_offset) so replays are reproducible across re-runs but
+        each captured game varies.
         """
         if getattr(self, "_replay_disabled", False):
             return None
@@ -746,6 +754,11 @@ class PPOTrainer:
         from sim.envs.replay import Recorder
         import torch
 
+        # Per-game seed offset so each captured game in an update uses a
+        # different layout. Mix in a large prime so game_idx=1 isn't just
+        # one off from game_idx=0.
+        per_game_off = int(game_idx) * 7919
+
         # Pick a level. With level_mix, sample by weight (deterministic).
         if self.cfg.level_mix:
             mix = self.cfg.level_mix
@@ -755,20 +768,22 @@ class PPOTrainer:
                 pairs = [(str(p[0]), float(p[1])) for p in mix]
             weights = np.array([w for _, w in pairs], dtype=np.float64)
             weights = weights / weights.sum() if weights.sum() > 0 else None
-            rng_pick = np.random.default_rng(self.seed + self._update_count + self.cfg.replay_seed_offset)
+            rng_pick = np.random.default_rng(
+                self.seed + self._update_count + self.cfg.replay_seed_offset + per_game_off
+            )
             idx = int(rng_pick.choice(len(pairs), p=weights))
             level_name = pairs[idx][0]
         else:
             level_name = str(self.cfg.level_name)
 
-        seed = int(self.seed + self._update_count + self.cfg.replay_seed_offset)
+        seed = int(self.seed + self._update_count + self.cfg.replay_seed_offset + per_game_off)
         rv = self.cfg.reward_version if self.cfg.reward_version >= 0 else (1 if self.cfg.reward_v13 else 0)
         state = sim_levels.reset(level_name=level_name, seed=seed, reward_version=rv)
 
         # Recorder uses the engine's per-tick event buffer to produce the
         # public replay schema. capture_map snapshots the initial layout.
         recorder = Recorder(
-            game_id=f"upd{self._update_count:04d}",
+            game_id=f"upd{self._update_count:04d}_g{game_idx}",
             sim_version="v12",
             level_name=level_name,
             seed=seed,

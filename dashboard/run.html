@@ -1736,13 +1736,36 @@
       const $meta    = document.getElementById('replay-meta');
 
       const meta = (run.result && run.result.replays) || null;
-      if (!meta || !meta.updates || !meta.updates.length) {
+      if (!meta) {
         $status.textContent =
           (run.status === 'running' || run.status === 'queued')
             ? 'no replays yet — they appear here as updates complete'
             : 'no replays for this run (replay_per_update was not set)';
-        // Still install a controller stub so refreshReplayList can promote
-        // us once the first replay lands.
+        _replayCtrl = { update: () => mountReplayPlayer(run) };
+        return;
+      }
+
+      // Build the flat list of (update, game) pairs we'll page through.
+      // Two metadata shapes supported:
+      //   - new (multi-game): meta.entries = [[u, g], ...]
+      //   - old (one-per-update): meta.updates = [u, ...] (assume game=0)
+      function buildPairs(m) {
+        if (Array.isArray(m.entries) && m.entries.length) {
+          return m.entries
+            .map(p => [Number(p[0]), Number(p[1] || 0)])
+            .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+        }
+        return (m.updates || [])
+          .map(u => [Number(u), 0])
+          .sort((a, b) => a[0] - b[0]);
+      }
+
+      let pairs = buildPairs(meta);
+      if (!pairs.length) {
+        $status.textContent =
+          (run.status === 'running' || run.status === 'queued')
+            ? 'no replays yet — they appear here as updates complete'
+            : 'no replays for this run';
         _replayCtrl = { update: () => mountReplayPlayer(run) };
         return;
       }
@@ -1750,59 +1773,64 @@
       const { ReplayPlayer } = await import('./lib/game_renderer.js');
       const { signedUrl }    = await import('./lib/supabase.js');
 
-      let updates = meta.updates.slice().sort((a, b) => a - b);
       let prefix  = meta.prefix;
-      let idx     = updates.length - 1;  // start on the most-recent capture
+      let gpu     = Number(meta.games_per_update || 1);
+      let idx     = pairs.length - 1;  // start on the most-recent
       let player  = null;
-      let userPinnedToLatest = true;     // auto-jump to newest unless user navs
+      let userPinnedToLatest = true;
 
-      $count.textContent = `(${updates.length} captures)`;
+      $count.textContent = `(${pairs.length} captures${meta.live ? ' · live' : ''})`;
       $status.style.display = 'none';
       $ctrls.style.display  = 'flex';
       $canvas.style.display = 'block';
 
-      function urlFor(u) {
-        const fname = `upd_${String(u).padStart(4, '0')}.json`;
+      function urlFor(u, g) {
+        const fname = `upd_${String(u).padStart(4, '0')}_g${g}.json`;
         return signedUrl(`${prefix}/${fname}`);
       }
 
       async function loadIndex(i, autoplay) {
-        idx = Math.max(0, Math.min(updates.length - 1, i));
-        const u = updates[idx];
-        $where.textContent = `update ${u} (${idx + 1}/${updates.length})`;
+        idx = Math.max(0, Math.min(pairs.length - 1, i));
+        const [u, g] = pairs[idx];
+        const tag = (gpu > 1) ? `update ${u} game ${g + 1}/${gpu}` : `update ${u}`;
+        $where.textContent = `${tag} (${idx + 1}/${pairs.length})`;
         $meta.textContent = '';
-        userPinnedToLatest = (idx === updates.length - 1);
+        userPinnedToLatest = (idx === pairs.length - 1);
         try {
-          const resp = await fetch(urlFor(u), { cache: 'no-cache' });
-          if (!resp.ok) throw new Error(`http ${resp.status}`);
-          const data = await resp.json();
-          if (player) player.pause();
-          player = new ReplayPlayer(data, $canvas);
-          player.setSpeed(parseFloat($speed.value));
-          $meta.textContent = `${data.duration_ticks} ticks · winner ${data.winner ?? '—'} · ${data.events.length} events · ${data.level_name}`;
-          if (autoplay !== false) player.play();
-          $play.textContent = '⏸';
-          player.onStateChange((p) => { $play.textContent = p.playing ? '⏸' : '▶'; });
+          const resp = await fetch(urlFor(u, g), { cache: 'no-cache' });
+          if (!resp.ok) {
+            // Back-compat: try the old single-game filename if the
+            // _gN file isn't there (live mid-run, or pre-multi-game runs).
+            const fallback = await fetch(signedUrl(`${prefix}/upd_${String(u).padStart(4, '0')}.json`), { cache: 'no-cache' });
+            if (!fallback.ok) throw new Error(`http ${resp.status}`);
+            return await loadDataInto(await fallback.json(), autoplay);
+          }
+          await loadDataInto(await resp.json(), autoplay);
         } catch (e) {
           $meta.textContent = `load failed: ${e.message}`;
         }
       }
 
-      // Manual nav unsticks the auto-jump-to-newest behaviour.
+      async function loadDataInto(data, autoplay) {
+        if (player) player.pause();
+        player = new ReplayPlayer(data, $canvas);
+        player.setSpeed(parseFloat($speed.value));
+        $meta.textContent = `${data.duration_ticks} ticks · winner ${data.winner ?? '—'} · ${data.events.length} events · ${data.level_name}`;
+        if (autoplay !== false) player.play();
+        $play.textContent = '⏸';
+        player.onStateChange((p) => { $play.textContent = p.playing ? '⏸' : '▶'; });
+      }
+
       const nav = (i) => { userPinnedToLatest = false; loadIndex(i, true); };
       $first.addEventListener('click', () => nav(0));
       $prev .addEventListener('click', () => nav(idx - 1));
       $next .addEventListener('click', () => nav(idx + 1));
-      $last .addEventListener('click', () => nav(updates.length - 1));
-      $play .addEventListener('click', () => {
-        if (!player) return;
-        player.toggle();
-      });
+      $last .addEventListener('click', () => nav(pairs.length - 1));
+      $play .addEventListener('click', () => { if (player) player.toggle(); });
       $speed.addEventListener('change', () => {
         if (player) player.setSpeed(parseFloat($speed.value));
       });
 
-      // Keyboard nav: ← → for step, Space for play/pause.
       document.addEventListener('keydown', (e) => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
         if (e.key === 'ArrowLeft')  { e.preventDefault(); nav(idx - 1); }
@@ -1810,29 +1838,27 @@
         if (e.key === ' ')          { e.preventDefault(); if (player) player.toggle(); }
       });
 
-      // Public update method: called by refreshReplayList on poll.
       _replayCtrl = {
         update(newRun) {
           const m = newRun?.result?.replays;
-          if (!m || !m.updates || !m.updates.length) return;
-          const newUpdates = m.updates.slice().sort((a, b) => a - b);
-          const had = updates.length;
-          if (newUpdates.length === had) return;  // no new captures
-          updates = newUpdates;
-          prefix  = m.prefix || prefix;
-          $count.textContent = `(${updates.length} captures${m.live ? ' · live' : ''})`;
+          if (!m) return;
+          const newPairs = buildPairs(m);
+          if (newPairs.length === pairs.length) return;
+          pairs = newPairs;
+          prefix = m.prefix || prefix;
+          gpu    = Number(m.games_per_update || 1);
+          $count.textContent = `(${pairs.length} captures${m.live ? ' · live' : ''})`;
           if (userPinnedToLatest) {
-            // Auto-advance to the newest capture.
-            loadIndex(updates.length - 1, true);
+            loadIndex(pairs.length - 1, true);
           } else {
-            // Just update the "i/N" indicator without navigating.
-            $where.textContent = `update ${updates[idx]} (${idx + 1}/${updates.length})`;
+            const [u, g] = pairs[idx] || [0, 0];
+            const tag = (gpu > 1) ? `update ${u} game ${g + 1}/${gpu}` : `update ${u}`;
+            $where.textContent = `${tag} (${idx + 1}/${pairs.length})`;
           }
         },
       };
 
-      // Load the LAST replay first — most-recent trained policy.
-      await loadIndex(updates.length - 1, true);
+      await loadIndex(pairs.length - 1, true);
     }
 
     // Called by pollForUpdates whenever a fresh run row lands.

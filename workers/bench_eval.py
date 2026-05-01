@@ -205,7 +205,7 @@ def _snapshot_run_into_archive(run_id: str, label: str, notes: str = "") -> str:
             """, (run_id, era, weights_url, obs_norm_url, label, notes))
             new_id = str(cur.fetchone()[0])
         c.commit()
-    print(f"[bench] archived run {run_id[:8]} as champion {new_id[:8]} (era={era})", flush=True)
+    print(f"[bench] archived run {str(run_id)[:8]} as champion {new_id[:8]} (era={era})", flush=True)
     return new_id
 
 

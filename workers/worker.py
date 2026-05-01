@@ -946,10 +946,11 @@ def _set_log_url(run_id, log_url: str) -> None:
 def _upload_live_replays(run_id, trainer, already_uploaded: int) -> int:
     """Upload any replays the trainer has captured since `already_uploaded`.
 
-    Each replay → logs/{rid}/replays/upd_NNNN.json. Updates runs.result with
-    the growing replays metadata so the dashboard player sees new captures
-    on its next poll. Returns the new uploaded count.
+    Each replay → logs/{rid}/replays/upd_NNNN_gN.json (one file per game).
+    Updates runs.result.replays with the growing list so the dashboard
+    player sees new captures on its next poll. Returns the new uploaded count.
 
+    Buffer entries: {update: int, game: int, replay: dict}.
     No-op (returns the same count) when no new replays are buffered.
     """
     if not hasattr(trainer, "get_replays"):
@@ -962,29 +963,33 @@ def _upload_live_replays(run_id, trainer, already_uploaded: int) -> int:
     from workers import storage
 
     run_id_str = str(run_id)
-    new_updates: list[int] = []
     with tempfile.TemporaryDirectory(prefix=f"mw2-replays-{run_id_str}-") as tmp:
         tmp_path = Path(tmp)
         for entry in buf[already_uploaded:]:
             u = int(entry["update"])
-            fname = f"upd_{u:04d}.json"
+            g = int(entry.get("game", 0))
+            fname = f"upd_{u:04d}_g{g}.json"
             fpath = tmp_path / fname
             fpath.write_text(json.dumps(entry["replay"], separators=(",", ":")))
             storage.upload(
                 "logs", f"{run_id_str}/replays/{fname}", fpath,
                 content_type="application/json",
             )
-            new_updates.append(u)
 
-    # Patch runs.result.replays so the dashboard reads the growing list.
-    # Use jsonb_set so we don't overwrite other result fields if any were
-    # written by an earlier path (rare on running runs but cheap to be safe).
-    all_updates = [int(e["update"]) for e in buf]
+    # Build metadata. `entries` is a list of {update, game} pairs ordered
+    # by the buffer. `updates` (sorted unique) and `games_per_update`
+    # (max game index seen + 1) are derivable but pre-computed here so
+    # the dashboard doesn't have to.
+    pairs = [(int(e["update"]), int(e.get("game", 0))) for e in buf]
+    unique_updates = sorted(set(u for u, _ in pairs))
+    max_game_idx = max((g for _, g in pairs), default=0)
     meta = {
-        "count":   len(all_updates),
-        "prefix":  f"logs/{run_id_str}/replays",
-        "updates": all_updates,
-        "live":    True,
+        "count":            len(buf),
+        "prefix":           f"logs/{run_id_str}/replays",
+        "updates":          unique_updates,
+        "games_per_update": max_game_idx + 1,
+        "entries":          pairs,
+        "live":             True,
     }
     with connect() as conn:
         with conn.cursor() as cur:
@@ -1384,29 +1389,35 @@ def save_and_upload(
         urls["log_url"]       = storage.upload("logs",   f"{run_id_str}/metrics.json", log_file,
                                                content_type="application/json")
 
-        # Replays — uploaded one per update under logs/{rid}/replays/upd_NNN.json.
-        # Each replay is a small JSON event log (~5KB on small maps, ~50KB on
-        # larger ones). Buffered in trainer.get_replays() during training.
+        # Replays — uploaded as logs/{rid}/replays/upd_NNNN_gN.json (one file
+        # per game, multiple games per PPO update under replay_games_per_update).
+        # Most replays were already uploaded live during training; this is a
+        # final safety-net pass. Storage uses upsert so it's idempotent.
         replays = trainer.get_replays() if hasattr(trainer, "get_replays") else []
         if replays:
-            replay_updates = []
             for entry in replays:
                 u = int(entry["update"])
-                fname = f"upd_{u:04d}.json"
+                g = int(entry.get("game", 0))
+                fname = f"upd_{u:04d}_g{g}.json"
                 fpath = tmp_path / fname
                 fpath.write_text(json.dumps(entry["replay"], separators=(",", ":")))
                 storage.upload(
                     "logs", f"{run_id_str}/replays/{fname}", fpath,
                     content_type="application/json",
                 )
-                replay_updates.append(u)
-            # Stash replay metadata on the result dict so mark_done writes it.
+            pairs = [(int(e["update"]), int(e.get("game", 0))) for e in replays]
+            unique_updates = sorted(set(u for u, _ in pairs))
+            max_game_idx = max((g for _, g in pairs), default=0)
             result["replays"] = {
-                "count":    len(replay_updates),
-                "prefix":   f"logs/{run_id_str}/replays",
-                "updates":  replay_updates,
+                "count":            len(replays),
+                "prefix":           f"logs/{run_id_str}/replays",
+                "updates":          unique_updates,
+                "games_per_update": max_game_idx + 1,
+                "entries":          pairs,
             }
-            print(f"[worker] uploaded {len(replay_updates)} replays under {result['replays']['prefix']}/")
+            print(f"[worker] uploaded {len(replays)} replays "
+                  f"({len(unique_updates)} updates × ≤{max_game_idx + 1} games) "
+                  f"under {result['replays']['prefix']}/")
 
     return urls
 

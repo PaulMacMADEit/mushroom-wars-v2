@@ -75,7 +75,8 @@ def main() -> None:
 
     base_hp["archive_eval_every"]    = 999_999_999
     base_hp["archive_eval_min_pool"] = 999_999_999
-    base_hp["replay_per_update"]     = True
+    base_hp["replay_per_update"]      = True
+    base_hp["replay_games_per_update"] = 3
 
     label = f"v12.0.selfplay-from-{parent[:8]}-20min"
     desc  = (f"Pure v12 self-play continuation of {parent}: 20 min, "
