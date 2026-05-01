@@ -119,6 +119,16 @@ class PPOConfig:
     archive_eval_min_pool: int  = 3
     archive_eval_max_ticks: int = 200
 
+    # Replay capture — record one self-play-style game after each PPO update
+    # using the current policy on a fresh numpy env. Output is the JSON
+    # event log defined by sim/envs/replay.py:Recorder. Buffered in memory;
+    # the worker uploads them as artifacts at end of training.
+    # Cost: ~50-200ms per capture on small maps; ~1-5% wall-time overhead.
+    replay_per_update:    bool = False
+    # Random seed offset for replay capture so the same training run can
+    # produce reproducible but varied replays.
+    replay_seed_offset:   int  = 1_000_003
+
 
 def _extract_label_from_weights_path(weights_path) -> str:
     """Extract the champion run_id prefix from a PFSP-downloaded weights_path.
@@ -159,6 +169,11 @@ class PPOTrainer:
         self.seed = seed
         self._update_count = 0
         self._rng = np.random.default_rng(seed)
+
+        # Replay buffer — list of {update, replay_json} dicts. Populated by
+        # _capture_replay() after each PPO update when cfg.replay_per_update
+        # is on. Worker drains this at end of run via get_replays().
+        self._replay_buffer: list[dict] = []
 
         # Cumulative wall-time spent in each high-level phase. Surfaced via
         # sim_phase_breakdown() so the run result JSON can record where
@@ -689,8 +704,116 @@ class PPOTrainer:
         if eval_metrics is not None:
             metrics.update(eval_metrics)
 
+        # Replay capture: one numpy-env game with the current policy after
+        # each update. ~50-200ms on small maps. Stored in self._replay_buffer
+        # for the worker to upload at end of training.
+        if self.cfg.replay_per_update:
+            try:
+                rep = self._capture_replay()
+                if rep is not None:
+                    self._replay_buffer.append({
+                        "update": self._update_count,
+                        "replay": rep,
+                    })
+            except Exception as exc:
+                if not getattr(self, "_replay_disabled", False):
+                    print(f"[replay] disabled — capture failed: {type(exc).__name__}: {exc}", flush=True)
+                    self._replay_disabled = True
+
         self._phase_ns["update_total_ns"] += _time.perf_counter_ns() - _t_update
         return metrics
+
+    def get_replays(self) -> list[dict]:
+        """Return captured replays. Each entry: {update: int, replay: dict}."""
+        return list(self._replay_buffer)
+
+    def _capture_replay(self) -> dict | None:
+        """Run one full game on a fresh numpy env using current policy as P1
+        and random_legal as P2. Returns the Recorder JSON dict or None if
+        disabled mid-run. Uses the trainer's level_name (or first member of
+        level_mix if set). Deterministic per (update_count, replay_seed_offset)
+        so replays are reproducible.
+        """
+        if getattr(self, "_replay_disabled", False):
+            return None
+        # Lazy imports — replay capture isn't on the hot path of most runs,
+        # and we don't want to pay these imports during smoke tests.
+        from sim import config as C
+        from sim import levels as sim_levels
+        from sim.actions import compute_mask, decode, NOOP_INDEX
+        from sim.engine import step_tick
+        from sim.envs.opponents import random_legal_opponent
+        from sim.envs.replay import Recorder
+        import torch
+
+        # Pick a level. With level_mix, sample by weight (deterministic).
+        if self.cfg.level_mix:
+            mix = self.cfg.level_mix
+            if isinstance(mix, dict):
+                pairs = [(str(k), float(v)) for k, v in mix.items()]
+            else:
+                pairs = [(str(p[0]), float(p[1])) for p in mix]
+            weights = np.array([w for _, w in pairs], dtype=np.float64)
+            weights = weights / weights.sum() if weights.sum() > 0 else None
+            rng_pick = np.random.default_rng(self.seed + self._update_count + self.cfg.replay_seed_offset)
+            idx = int(rng_pick.choice(len(pairs), p=weights))
+            level_name = pairs[idx][0]
+        else:
+            level_name = str(self.cfg.level_name)
+
+        seed = int(self.seed + self._update_count + self.cfg.replay_seed_offset)
+        rv = self.cfg.reward_version if self.cfg.reward_version >= 0 else (1 if self.cfg.reward_v13 else 0)
+        state = sim_levels.reset(level_name=level_name, seed=seed, reward_version=rv)
+
+        # Recorder uses the engine's per-tick event buffer to produce the
+        # public replay schema. capture_map snapshots the initial layout.
+        recorder = Recorder(
+            game_id=f"upd{self._update_count:04d}",
+            sim_version="v12",
+            level_name=level_name,
+            seed=seed,
+        )
+        recorder.capture_map(state)
+
+        # P2 random rng — separate from level-pick rng so opponent variability
+        # doesn't depend on the level mix.
+        opp_rng = np.random.default_rng(seed ^ 0x5A5A5A5A)
+
+        # _state_to_obs_dict_for_player from tournament.py builds the dict the
+        # encoder expects (with v10+ event fields). Importing here keeps the
+        # cli/tournament import out of the trainer's hot path.
+        from scripts.tournament import _state_to_obs_dict_for_player
+
+        max_ticks = int(C.GAME_TIMEOUT_TICKS)
+        tick = 0
+        done = False
+        while not done and tick < max_ticks:
+            # Decision-interval: env actions only fire on the env's decision boundary.
+            is_decision_tick = (tick % C.DECISION_INTERVAL_TICKS) == 0
+            a1_idx = NOOP_INDEX
+            a2_idx = NOOP_INDEX
+            if is_decision_tick:
+                # P1 — neural agent (deterministic to keep replays clean).
+                mask_p1 = compute_mask(state, C.OWNER_P1)
+                obs_p1  = _state_to_obs_dict_for_player(state, mask_p1, C.OWNER_P1)
+                enc_p1  = encode_obs(obs_p1)
+                if self.obs_norm is not None:
+                    enc_p1 = self.obs_norm.normalize(enc_p1[None, :], clip=self.cfg.obs_clip)[0]
+                action_arr, *_ = self.agent.act_batch(
+                    enc_p1[None, :], mask_p1[None, :], deterministic=True,
+                )
+                a1_idx = int(action_arr[0])
+                # P2 — random legal.
+                a2_idx = random_legal_opponent(state, opp_rng)
+
+            a1 = decode(a1_idx)
+            a2 = decode(a2_idx)
+            buf = recorder.get_tick_events_buffer()
+            _r1, _r2, done = step_tick(state, a1, a2, events=buf)
+            recorder.absorb_tick(state)
+            tick += 1
+
+        return recorder.to_dict()
 
     def _current_training_opp_label(self) -> str:
         """Best-effort label for who the agent is currently training against.

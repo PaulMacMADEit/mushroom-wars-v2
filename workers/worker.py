@@ -1311,6 +1311,30 @@ def save_and_upload(
         urls["log_url"]       = storage.upload("logs",   f"{run_id_str}/metrics.json", log_file,
                                                content_type="application/json")
 
+        # Replays — uploaded one per update under logs/{rid}/replays/upd_NNN.json.
+        # Each replay is a small JSON event log (~5KB on small maps, ~50KB on
+        # larger ones). Buffered in trainer.get_replays() during training.
+        replays = trainer.get_replays() if hasattr(trainer, "get_replays") else []
+        if replays:
+            replay_updates = []
+            for entry in replays:
+                u = int(entry["update"])
+                fname = f"upd_{u:04d}.json"
+                fpath = tmp_path / fname
+                fpath.write_text(json.dumps(entry["replay"], separators=(",", ":")))
+                storage.upload(
+                    "logs", f"{run_id_str}/replays/{fname}", fpath,
+                    content_type="application/json",
+                )
+                replay_updates.append(u)
+            # Stash replay metadata on the result dict so mark_done writes it.
+            result["replays"] = {
+                "count":    len(replay_updates),
+                "prefix":   f"logs/{run_id_str}/replays",
+                "updates":  replay_updates,
+            }
+            print(f"[worker] uploaded {len(replay_updates)} replays under {result['replays']['prefix']}/")
+
     return urls
 
 

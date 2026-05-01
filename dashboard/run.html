@@ -253,6 +253,30 @@
 
         <div id="rerate-full-diff"></div>
 
+        <h2>Replays per update <span class="muted small" id="replay-count"></span></h2>
+        <div class="card" id="replay-card">
+          <div class="muted small" id="replay-status">Loading…</div>
+          <div id="replay-controls" style="display:none; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+            <button id="replay-first" title="first update">⏮</button>
+            <button id="replay-prev"  title="previous update">◀</button>
+            <button id="replay-play"  title="play / pause" style="min-width:42px;">▶</button>
+            <button id="replay-next"  title="next update">▶</button>
+            <button id="replay-last"  title="last update">⏭</button>
+            <span class="mono" id="replay-where" style="margin-left:8px; color:var(--fg);"></span>
+            <span class="muted small" id="replay-meta" style="margin-left:8px;"></span>
+            <label class="muted small" style="margin-left:auto;">speed
+              <select id="replay-speed" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:2px 6px; margin-left:4px;">
+                <option value="1">1×</option>
+                <option value="2">2×</option>
+                <option value="4" selected>4×</option>
+                <option value="8">8×</option>
+                <option value="16">16×</option>
+              </select>
+            </label>
+          </div>
+          <canvas id="replay-canvas" style="display:none; width:100%; aspect-ratio:1/1; max-height:400px; background:var(--bg-card); border-radius:6px;"></canvas>
+        </div>
+
         <h2>Training curves</h2>
         <div class="card">
           <div class="stat-label">win rate vs leaderboard (sparse — every N updates) + vs training opponent (every update)</div>
@@ -409,6 +433,12 @@
       }
 
       await refreshCharts(logUrl, chartIds, failAllCharts, run);
+
+      // Per-update replays — wired up async; failure is non-fatal.
+      mountReplayPlayer(run).catch(e => {
+        const $s = document.getElementById('replay-status');
+        if ($s) $s.textContent = `replay player failed: ${e.message}`;
+      });
 
       // While the run is still in flight, poll for new metrics + status every
       // 8s. The worker uploads metrics.json every few updates to the same
@@ -1623,6 +1653,98 @@
       if (s < 60)   return `${s}s`;
       if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
       return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+    }
+
+    // ---------------------------------------------------------------------
+    // Replay player — one game per PPO update, captured by the trainer.
+    // Default speed 4×; prev/next buttons step through update numbers.
+    // ---------------------------------------------------------------------
+    async function mountReplayPlayer(run) {
+      const $card    = document.getElementById('replay-card');
+      const $status  = document.getElementById('replay-status');
+      const $count   = document.getElementById('replay-count');
+      const $ctrls   = document.getElementById('replay-controls');
+      const $canvas  = document.getElementById('replay-canvas');
+      const $first   = document.getElementById('replay-first');
+      const $prev    = document.getElementById('replay-prev');
+      const $play    = document.getElementById('replay-play');
+      const $next    = document.getElementById('replay-next');
+      const $last    = document.getElementById('replay-last');
+      const $speed   = document.getElementById('replay-speed');
+      const $where   = document.getElementById('replay-where');
+      const $meta    = document.getElementById('replay-meta');
+
+      const meta = (run.result && run.result.replays) || null;
+      if (!meta || !meta.updates || !meta.updates.length) {
+        $status.textContent =
+          (run.status === 'running' || run.status === 'queued')
+            ? 'no replays yet — uploaded at end of training (replay_per_update=true)'
+            : 'no replays for this run (replay_per_update was not set)';
+        return;
+      }
+
+      const updates = meta.updates.slice().sort((a, b) => a - b);
+      const prefix  = meta.prefix;
+      $count.textContent = `(${updates.length} captures)`;
+      $status.style.display = 'none';
+      $ctrls.style.display  = 'flex';
+      $canvas.style.display = 'block';
+
+      const { ReplayPlayer } = await import('./lib/game_renderer.js');
+      const { signedUrl }    = await import('./lib/supabase.js');
+
+      let idx = 0;
+      let player = null;
+
+      function urlFor(u) {
+        const fname = `upd_${String(u).padStart(4, '0')}.json`;
+        return signedUrl(`${prefix}/${fname}`);
+      }
+
+      async function loadIndex(i, autoplay) {
+        idx = Math.max(0, Math.min(updates.length - 1, i));
+        const u = updates[idx];
+        $where.textContent = `update ${u} (${idx + 1}/${updates.length})`;
+        $meta.textContent = '';
+        try {
+          const resp = await fetch(urlFor(u), { cache: 'no-cache' });
+          if (!resp.ok) throw new Error(`http ${resp.status}`);
+          const data = await resp.json();
+          if (player) player.pause();
+          player = new ReplayPlayer(data, $canvas);
+          player.setSpeed(parseFloat($speed.value));
+          $meta.textContent = `${data.duration_ticks} ticks · winner ${data.winner ?? '—'} · ${data.events.length} events · ${data.level_name}`;
+          if (autoplay !== false) player.play();
+          $play.textContent = '⏸';
+          player.onStateChange((p) => { $play.textContent = p.playing ? '⏸' : '▶'; });
+        } catch (e) {
+          $meta.textContent = `load failed: ${e.message}`;
+        }
+      }
+
+      $first.addEventListener('click', () => loadIndex(0, true));
+      $prev .addEventListener('click', () => loadIndex(idx - 1, true));
+      $next .addEventListener('click', () => loadIndex(idx + 1, true));
+      $last .addEventListener('click', () => loadIndex(updates.length - 1, true));
+      $play .addEventListener('click', () => {
+        if (!player) return;
+        player.toggle();
+      });
+      $speed.addEventListener('change', () => {
+        if (player) player.setSpeed(parseFloat($speed.value));
+      });
+
+      // Keyboard nav: ← → for step, Space for play/pause.
+      document.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+        if (e.key === 'ArrowLeft')  { e.preventDefault(); loadIndex(idx - 1, true); }
+        if (e.key === 'ArrowRight') { e.preventDefault(); loadIndex(idx + 1, true); }
+        if (e.key === ' ')          { e.preventDefault(); if (player) player.toggle(); }
+      });
+
+      // Load the LAST replay first — most-recent trained policy is the more
+      // interesting starting state.
+      await loadIndex(updates.length - 1, true);
     }
   </script>
 </body>

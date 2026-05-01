@@ -38,6 +38,10 @@ def main() -> None:
     base_hp["archive_eval_every"] = 999_999_999
     base_hp["archive_eval_min_pool"] = 999_999_999
 
+    # Replay capture: one game per PPO update, current policy vs random_legal.
+    # ~50ms each on small maps; rendered on the per-run dashboard page.
+    base_hp["replay_per_update"] = True
+
     label = "v12.0.baseline-RandomLegal-Close4_6-20min"
     desc  = "v12.0 baseline: 20 min vs random_legal on random_close_4_6 (small maps). Single run, no sweep."
     budget_ms = 20 * 60 * 1000  # 1200000 ms = 20 min
