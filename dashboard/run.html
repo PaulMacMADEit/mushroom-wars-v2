@@ -471,65 +471,55 @@
       // localStorage so it survives full refresh too. Key: chart id +
       // dataset label.
       const visKey = (id, label) => `chart-vis.${id}.${label}`;
-      const captureVisibility = (chart) => {
-        const map = {};
-        const ds = chart?.data?.datasets || [];
-        ds.forEach((d, i) => {
-          const meta = chart.getDatasetMeta(i);
-          if (meta && d.label) map[d.label] = meta.hidden !== true;
-        });
-        return map;
+      const persistVisibility = (id, chart) => {
+        try {
+          const ds = chart?.data?.datasets || [];
+          ds.forEach((d, i) => {
+            if (typeof d.label !== 'string') return;
+            const visible = chart.isDatasetVisible(i);
+            localStorage.setItem(visKey(id, d.label), visible ? '1' : '0');
+          });
+        } catch (_) { /* never break a render over persistence */ }
       };
       const applyVisibility = (id, chart) => {
-        const ds = chart?.data?.datasets || [];
-        let changed = false;
-        ds.forEach((d, i) => {
-          if (!d.label) return;
-          const stored = localStorage.getItem(visKey(id, d.label));
-          if (stored === null) return;
-          const want = stored === '1';
-          const meta = chart.getDatasetMeta(i);
-          if (meta && (meta.hidden === true) === want) {
-            meta.hidden = !want;
-            changed = true;
-          }
-        });
-        if (changed) chart.update('none');
-      };
-      const persistVisibility = (id, chart) => {
-        const map = captureVisibility(chart);
-        Object.entries(map).forEach(([label, visible]) => {
-          localStorage.setItem(visKey(id, label), visible ? '1' : '0');
-        });
+        try {
+          const ds = chart?.data?.datasets || [];
+          ds.forEach((d, i) => {
+            if (typeof d.label !== 'string') return;
+            const stored = localStorage.getItem(visKey(id, d.label));
+            if (stored === null) return;
+            const want = stored === '1';
+            if (chart.isDatasetVisible(i) !== want) {
+              if (want) chart.show(i); else chart.hide(i);
+            }
+          });
+        } catch (_) { /* never break a render over persistence */ }
       };
       const wireLegendPersist = (id, chart) => {
-        chart.options.plugins = chart.options.plugins || {};
-        chart.options.plugins.legend = chart.options.plugins.legend || {};
-        // Inline Chart.js default legend toggle (avoids needing the Chart
-        // global directly in run.html). After toggling, snapshot the new
-        // state to localStorage so polls preserve user filters.
-        chart.options.plugins.legend.onClick = function (e, legendItem, legend) {
-          const index = legendItem.datasetIndex;
-          const ci = legend.chart;
-          if (ci.isDatasetVisible(index)) {
-            ci.hide(index);
-            legendItem.hidden = true;
-          } else {
-            ci.show(index);
-            legendItem.hidden = false;
-          }
-          persistVisibility(id, chart);
-        };
-        chart.update('none');
+        try {
+          chart.options.plugins = chart.options.plugins || {};
+          chart.options.plugins.legend = chart.options.plugins.legend || {};
+          // Inline Chart.js default legend toggle (avoids needing the Chart
+          // global imported here). After toggling, snapshot to localStorage.
+          chart.options.plugins.legend.onClick = function (e, legendItem, legend) {
+            const index = legendItem.datasetIndex;
+            const ci = legend.chart;
+            if (ci.isDatasetVisible(index)) {
+              ci.hide(index);
+              legendItem.hidden = true;
+            } else {
+              ci.show(index);
+              legendItem.hidden = false;
+            }
+            persistVisibility(id, chart);
+          };
+        } catch (_) { /* never break a render over persistence */ }
       };
 
       const renderOne = (id, keys, opts) => {
         try {
           const canvas = document.getElementById(id);
           if (!canvas) { console.warn('missing canvas', id); return; }
-          // Capture current visibility BEFORE destroying so we can re-apply
-          // it (covers the case where localStorage hasn't been written yet
-          // because the user just toggled and a poll fires right after).
           const prev = charts.get(id);
           if (prev) {
             persistVisibility(id, prev);
