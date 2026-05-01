@@ -101,6 +101,11 @@ def build_net_for_model(model_id: str, obs_size: int, num_actions: int) -> Actor
         # uninformative. Run labels under this model_id are formatted
         # `v10.1.<exp>-<desc>` where <exp> is the per-fire experiment number.
         "v10.1":         (OBS_DIM, ACTION_SPACE_SIZE, _mk(1024)),
+        # v12.0: clean break from v10. Set-transformer encoder (8 building
+        # tokens × 11 features + 4 group tokens × 6 + 1 GLOBAL token)
+        # with d_model=192. Pointer-style source/target heads. Action space
+        # 129 (2 send pcts × 8 src × 8 tgt + noop). ~1.2M params.
+        "v12.0":         (OBS_DIM, ACTION_SPACE_SIZE, _mk(192)),
     }
     entry = KNOWN.get(model_id)
     if entry is None:
