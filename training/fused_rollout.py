@@ -372,18 +372,26 @@ def _pack_action_batch_neural(
     rng: np.random.Generator,
     n_envs: int,
 ) -> np.ndarray:
-    """Slow per-env path: snapshot states, call opponent on each. Used when
-    the opponent is a neural callable that can't be batch-vectorised cheaply.
+    """Per-env or batched neural-opponent path.
 
-    Cost: one device->host state snapshot + N opponent forward calls per
-    chunk. At n_envs=1024 with K=4 this is ~30-100ms/chunk depending on
-    whether the opponent's net runs on CPU or GPU. Net wins because chunks
-    span K env ticks.
+    If `opponent_fn.batch_act` exists, runs ONE batched forward pass over all
+    N env states (~10× faster on CUDA at n_envs≥256 because kernel-launch
+    overhead dominates batch=1). Otherwise falls back to the per-env loop.
+
+    Cost (batched path): one device->host state snapshot + 1 GPU forward
+    for the opponent + numpy decode. Cost (per-env loop): N opponent calls,
+    each with its own batch=1 forward (was the 5× regression source).
     """
     a_batch = np.zeros((n_envs, 2, ACTION_DIM), dtype=np.int32)
     _decode_into_slot(p1_actions_flat, a_batch[:, 0, :])
 
     states = vec_env.snapshot_numpy_states()
+    if hasattr(opponent_fn, "batch_act"):
+        idxs = opponent_fn.batch_act(states, rng)  # (N,) int64
+        _decode_into_slot(idxs.astype(np.int64), a_batch[:, 1, :])
+        return a_batch
+
+    # Per-env fallback (legacy / non-neural callables).
     for i, s in enumerate(states):
         idx = int(opponent_fn(s, rng))
         if idx == NOOP_INDEX:
