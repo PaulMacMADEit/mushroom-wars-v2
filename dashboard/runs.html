@@ -62,6 +62,45 @@
     const $label = document.getElementById('filter-label');
     const $refresh = document.getElementById('refresh');
 
+    // Persist filters in URL hash + scroll position in sessionStorage so a
+    // refresh / back-nav lands the user exactly where they were.
+    const SCROLL_KEY = 'runs.scrollY';
+    function readHashState() {
+      const hash = window.location.hash.replace(/^#/, '');
+      const params = new URLSearchParams(hash);
+      return {
+        status:  params.get('status')  ?? '',
+        machine: params.get('machine') ?? '',
+        label:   params.get('label')   ?? '',
+      };
+    }
+    function writeHashState() {
+      const params = new URLSearchParams();
+      if ($status.value)        params.set('status',  $status.value);
+      if ($machine.value.trim()) params.set('machine', $machine.value.trim());
+      if ($label.value.trim())   params.set('label',   $label.value.trim());
+      const next = params.toString();
+      const url = next ? `#${next}` : window.location.pathname + window.location.search;
+      history.replaceState(null, '', url);
+    }
+    // Restore filters from hash before first load() so the query reflects them.
+    {
+      const s = readHashState();
+      $status.value  = s.status;
+      $machine.value = s.machine;
+      $label.value   = s.label;
+    }
+    // Save scroll on every scroll (cheap; sessionStorage is in-memory backed).
+    let saveScrollPending = false;
+    window.addEventListener('scroll', () => {
+      if (saveScrollPending) return;
+      saveScrollPending = true;
+      requestAnimationFrame(() => {
+        sessionStorage.setItem(SCROLL_KEY, String(window.scrollY));
+        saveScrollPending = false;
+      });
+    }, { passive: true });
+
     async function load() {
       $runs.innerHTML = `<div class="muted">loading…</div>`;
       let q = sb.from('runs')
@@ -109,11 +148,24 @@
         <div class="muted small" style="margin-top:10px;">${data.length} row${data.length === 1 ? '' : 's'}</div>`;
     }
 
-    $refresh.addEventListener('click', load);
-    $status.addEventListener('change', load);
-    [$machine, $label].forEach(el => el.addEventListener('keydown', e => { if (e.key === 'Enter') load(); }));
+    function loadAndPersist() {
+      writeHashState();
+      return load();
+    }
+    $refresh.addEventListener('click', loadAndPersist);
+    $status.addEventListener('change', loadAndPersist);
+    [$machine, $label].forEach(el => el.addEventListener('keydown', e => { if (e.key === 'Enter') loadAndPersist(); }));
 
-    load().catch(e => $runs.innerHTML = `<div class="error">${esc(e.message)}</div>`);
+    // Initial load — render then restore scroll position. The two-frame
+    // delay covers async paint after the table HTML is set.
+    load()
+      .then(() => {
+        const y = parseInt(sessionStorage.getItem(SCROLL_KEY) || '0', 10);
+        if (y > 0) {
+          requestAnimationFrame(() => requestAnimationFrame(() => window.scrollTo(0, y)));
+        }
+      })
+      .catch(e => $runs.innerHTML = `<div class="error">${esc(e.message)}</div>`);
   </script>
 </body>
 </html>
