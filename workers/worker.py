@@ -943,6 +943,64 @@ def _set_log_url(run_id, log_url: str) -> None:
         conn.commit()
 
 
+def _upload_live_replays(run_id, trainer, already_uploaded: int) -> int:
+    """Upload any replays the trainer has captured since `already_uploaded`.
+
+    Each replay → logs/{rid}/replays/upd_NNNN.json. Updates runs.result with
+    the growing replays metadata so the dashboard player sees new captures
+    on its next poll. Returns the new uploaded count.
+
+    No-op (returns the same count) when no new replays are buffered.
+    """
+    if not hasattr(trainer, "get_replays"):
+        return already_uploaded
+    buf = trainer.get_replays()
+    if len(buf) <= already_uploaded:
+        return already_uploaded
+
+    import tempfile
+    from workers import storage
+
+    run_id_str = str(run_id)
+    new_updates: list[int] = []
+    with tempfile.TemporaryDirectory(prefix=f"mw2-replays-{run_id_str}-") as tmp:
+        tmp_path = Path(tmp)
+        for entry in buf[already_uploaded:]:
+            u = int(entry["update"])
+            fname = f"upd_{u:04d}.json"
+            fpath = tmp_path / fname
+            fpath.write_text(json.dumps(entry["replay"], separators=(",", ":")))
+            storage.upload(
+                "logs", f"{run_id_str}/replays/{fname}", fpath,
+                content_type="application/json",
+            )
+            new_updates.append(u)
+
+    # Patch runs.result.replays so the dashboard reads the growing list.
+    # Use jsonb_set so we don't overwrite other result fields if any were
+    # written by an earlier path (rare on running runs but cheap to be safe).
+    all_updates = [int(e["update"]) for e in buf]
+    meta = {
+        "count":   len(all_updates),
+        "prefix":  f"logs/{run_id_str}/replays",
+        "updates": all_updates,
+        "live":    True,
+    }
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE runs
+                   SET result = COALESCE(result, '{}'::jsonb)
+                                 || jsonb_build_object('replays', %s::jsonb)
+                 WHERE id = %s
+                """,
+                (json.dumps(meta), run_id),
+            )
+        conn.commit()
+    return len(buf)
+
+
 def run_training(
     job: dict,
     model_meta: dict,
@@ -1069,6 +1127,10 @@ def run_training(
     live_log_url: str | None = None
     last_snapshot_at = training_started_at
     snap_count = 0
+    # Live-replay tracking. Drained periodically from trainer.get_replays();
+    # uploaded immediately + result.replays patched so the dashboard's player
+    # sees them mid-run.
+    replays_uploaded = 0
 
     # Per-run telemetry: CPU%, GPU%, VRAM, RAM. Summarised into result JSON.
     from workers.telemetry import ResourceSampler
@@ -1116,6 +1178,17 @@ def run_training(
                 snap_count += 1
                 _upload_snapshot(job["id"], snap_count, trainer)
                 last_snapshot_at = now
+
+            # Live replay upload — drains trainer.get_replays() and uploads
+            # any captures since the last drain. Updates result.replays so the
+            # dashboard player picks up new captures on its next poll. Cheap
+            # no-op when buffer is unchanged. Failure is non-fatal.
+            try:
+                replays_uploaded = _upload_live_replays(
+                    job["id"], trainer, replays_uploaded,
+                )
+            except Exception as rep_exc:
+                print(f"[worker] live-replay upload failed: {rep_exc}", flush=True)
     finally:
         # AsyncVectorEnv subprocesses need explicit cleanup; don't leak them
         # across claimed runs in the polling worker.

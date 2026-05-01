@@ -466,14 +466,79 @@
         return;
       }
 
+      // Persist per-series visibility across re-renders. Without this, a
+      // user-toggled "hide loss_rate" gets reset on every poll. Stored in
+      // localStorage so it survives full refresh too. Key: chart id +
+      // dataset label.
+      const visKey = (id, label) => `chart-vis.${id}.${label}`;
+      const captureVisibility = (chart) => {
+        const map = {};
+        const ds = chart?.data?.datasets || [];
+        ds.forEach((d, i) => {
+          const meta = chart.getDatasetMeta(i);
+          if (meta && d.label) map[d.label] = meta.hidden !== true;
+        });
+        return map;
+      };
+      const applyVisibility = (id, chart) => {
+        const ds = chart?.data?.datasets || [];
+        let changed = false;
+        ds.forEach((d, i) => {
+          if (!d.label) return;
+          const stored = localStorage.getItem(visKey(id, d.label));
+          if (stored === null) return;
+          const want = stored === '1';
+          const meta = chart.getDatasetMeta(i);
+          if (meta && (meta.hidden === true) === want) {
+            meta.hidden = !want;
+            changed = true;
+          }
+        });
+        if (changed) chart.update('none');
+      };
+      const persistVisibility = (id, chart) => {
+        const map = captureVisibility(chart);
+        Object.entries(map).forEach(([label, visible]) => {
+          localStorage.setItem(visKey(id, label), visible ? '1' : '0');
+        });
+      };
+      const wireLegendPersist = (id, chart) => {
+        chart.options.plugins = chart.options.plugins || {};
+        chart.options.plugins.legend = chart.options.plugins.legend || {};
+        // Inline Chart.js default legend toggle (avoids needing the Chart
+        // global directly in run.html). After toggling, snapshot the new
+        // state to localStorage so polls preserve user filters.
+        chart.options.plugins.legend.onClick = function (e, legendItem, legend) {
+          const index = legendItem.datasetIndex;
+          const ci = legend.chart;
+          if (ci.isDatasetVisible(index)) {
+            ci.hide(index);
+            legendItem.hidden = true;
+          } else {
+            ci.show(index);
+            legendItem.hidden = false;
+          }
+          persistVisibility(id, chart);
+        };
+        chart.update('none');
+      };
+
       const renderOne = (id, keys, opts) => {
         try {
           const canvas = document.getElementById(id);
           if (!canvas) { console.warn('missing canvas', id); return; }
-          // Destroy previous chart on this canvas so data updates cleanly.
+          // Capture current visibility BEFORE destroying so we can re-apply
+          // it (covers the case where localStorage hasn't been written yet
+          // because the user just toggled and a poll fires right after).
           const prev = charts.get(id);
-          if (prev) prev.destroy();
-          charts.set(id, lineChart(canvas, points, keys, opts));
+          if (prev) {
+            persistVisibility(id, prev);
+            prev.destroy();
+          }
+          const chart = lineChart(canvas, points, keys, opts);
+          charts.set(id, chart);
+          applyVisibility(id, chart);
+          wireLegendPersist(id, chart);
         } catch (e) {
           console.error(`[${id}] chart render failed:`, e);
           replaceCanvasWith(id, `${id}: ${e.message}`, true);
@@ -1641,6 +1706,8 @@
         }
         // Refresh charts with the latest live log.
         await refreshCharts(signedUrl(run.log_url), chartIds, failAllCharts, run);
+        // Pick up newly-uploaded replays (captured live by the trainer).
+        refreshReplayList(run);
         // Stop polling once terminal.
         if (run.status === 'done' || run.status === 'failed') {
           clearInterval(timer);
@@ -1658,9 +1725,13 @@
     // ---------------------------------------------------------------------
     // Replay player — one game per PPO update, captured by the trainer.
     // Default speed 4×; prev/next buttons step through update numbers.
+    //
+    // Live-update aware: pollForUpdates() calls refreshReplayList() with the
+    // latest run row, which appends any new captures uploaded mid-run.
     // ---------------------------------------------------------------------
+    let _replayCtrl = null;  // singleton controller; set by mountReplayPlayer
+
     async function mountReplayPlayer(run) {
-      const $card    = document.getElementById('replay-card');
       const $status  = document.getElementById('replay-status');
       const $count   = document.getElementById('replay-count');
       const $ctrls   = document.getElementById('replay-controls');
@@ -1678,23 +1749,27 @@
       if (!meta || !meta.updates || !meta.updates.length) {
         $status.textContent =
           (run.status === 'running' || run.status === 'queued')
-            ? 'no replays yet — uploaded at end of training (replay_per_update=true)'
+            ? 'no replays yet — they appear here as updates complete'
             : 'no replays for this run (replay_per_update was not set)';
+        // Still install a controller stub so refreshReplayList can promote
+        // us once the first replay lands.
+        _replayCtrl = { update: () => mountReplayPlayer(run) };
         return;
       }
-
-      const updates = meta.updates.slice().sort((a, b) => a - b);
-      const prefix  = meta.prefix;
-      $count.textContent = `(${updates.length} captures)`;
-      $status.style.display = 'none';
-      $ctrls.style.display  = 'flex';
-      $canvas.style.display = 'block';
 
       const { ReplayPlayer } = await import('./lib/game_renderer.js');
       const { signedUrl }    = await import('./lib/supabase.js');
 
-      let idx = 0;
-      let player = null;
+      let updates = meta.updates.slice().sort((a, b) => a - b);
+      let prefix  = meta.prefix;
+      let idx     = updates.length - 1;  // start on the most-recent capture
+      let player  = null;
+      let userPinnedToLatest = true;     // auto-jump to newest unless user navs
+
+      $count.textContent = `(${updates.length} captures)`;
+      $status.style.display = 'none';
+      $ctrls.style.display  = 'flex';
+      $canvas.style.display = 'block';
 
       function urlFor(u) {
         const fname = `upd_${String(u).padStart(4, '0')}.json`;
@@ -1706,6 +1781,7 @@
         const u = updates[idx];
         $where.textContent = `update ${u} (${idx + 1}/${updates.length})`;
         $meta.textContent = '';
+        userPinnedToLatest = (idx === updates.length - 1);
         try {
           const resp = await fetch(urlFor(u), { cache: 'no-cache' });
           if (!resp.ok) throw new Error(`http ${resp.status}`);
@@ -1722,10 +1798,12 @@
         }
       }
 
-      $first.addEventListener('click', () => loadIndex(0, true));
-      $prev .addEventListener('click', () => loadIndex(idx - 1, true));
-      $next .addEventListener('click', () => loadIndex(idx + 1, true));
-      $last .addEventListener('click', () => loadIndex(updates.length - 1, true));
+      // Manual nav unsticks the auto-jump-to-newest behaviour.
+      const nav = (i) => { userPinnedToLatest = false; loadIndex(i, true); };
+      $first.addEventListener('click', () => nav(0));
+      $prev .addEventListener('click', () => nav(idx - 1));
+      $next .addEventListener('click', () => nav(idx + 1));
+      $last .addEventListener('click', () => nav(updates.length - 1));
       $play .addEventListener('click', () => {
         if (!player) return;
         player.toggle();
@@ -1737,14 +1815,39 @@
       // Keyboard nav: ← → for step, Space for play/pause.
       document.addEventListener('keydown', (e) => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-        if (e.key === 'ArrowLeft')  { e.preventDefault(); loadIndex(idx - 1, true); }
-        if (e.key === 'ArrowRight') { e.preventDefault(); loadIndex(idx + 1, true); }
+        if (e.key === 'ArrowLeft')  { e.preventDefault(); nav(idx - 1); }
+        if (e.key === 'ArrowRight') { e.preventDefault(); nav(idx + 1); }
         if (e.key === ' ')          { e.preventDefault(); if (player) player.toggle(); }
       });
 
-      // Load the LAST replay first — most-recent trained policy is the more
-      // interesting starting state.
+      // Public update method: called by refreshReplayList on poll.
+      _replayCtrl = {
+        update(newRun) {
+          const m = newRun?.result?.replays;
+          if (!m || !m.updates || !m.updates.length) return;
+          const newUpdates = m.updates.slice().sort((a, b) => a - b);
+          const had = updates.length;
+          if (newUpdates.length === had) return;  // no new captures
+          updates = newUpdates;
+          prefix  = m.prefix || prefix;
+          $count.textContent = `(${updates.length} captures${m.live ? ' · live' : ''})`;
+          if (userPinnedToLatest) {
+            // Auto-advance to the newest capture.
+            loadIndex(updates.length - 1, true);
+          } else {
+            // Just update the "i/N" indicator without navigating.
+            $where.textContent = `update ${updates[idx]} (${idx + 1}/${updates.length})`;
+          }
+        },
+      };
+
+      // Load the LAST replay first — most-recent trained policy.
       await loadIndex(updates.length - 1, true);
+    }
+
+    // Called by pollForUpdates whenever a fresh run row lands.
+    function refreshReplayList(run) {
+      if (_replayCtrl && _replayCtrl.update) _replayCtrl.update(run);
     }
   </script>
 </body>
