@@ -4287,6 +4287,35 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### 2026-05-02 11:14 PT — Wake 1 of 10h karp loop: replays validated, rotation_rematch fix confirmed, b9 backlog noted.
+
+Worker restarted at 10:40:58 PT picking up commits `278cbde` (rematch fix), `cc9a298` (replay defaults on), `39602b7` (level_mix + action_repeat axes wired). Backstop fired 10:45 → queued `rollout_steps` axis as next round-robin step.
+
+**Replay capture working.** First two cells finished:
+
+| run | rs | wall | win_rate | timeout | replays uploaded |
+|---|---|---|---|---|---|
+| f342c557 — rollout_steps-lo | 4 | 667s | 83.6% | 16.4% | 92 (46 updates × 2 games) |
+| 61968dfa — rollout_steps-mid | 8 | 662s | 82.2% | 17.8% | 76 (38 updates × 2 games) |
+
+Replays land at `logs/{rid}/replays/upd_NNNN_gN.json` in Supabase storage. Sampled 3 replays from each run (early/mid/late update):
+
+- **rs=4 early** (upd_0001): P2 wins, 56 sends, 7 captures — agent loses, sending inefficiently
+- **rs=4 mid** (upd_0024): P1 wins, 27 sends, 6 captures — efficient
+- **rs=4 late** (upd_0046): P1 wins, 44 sends, 12 captures — more captures, aggressive
+- **rs=8 mid** (upd_0019): P1 wins, 12 sends, 4 captures — very efficient short game
+- **rs=8 late** (upd_0038): P1 wins, 39 sends, 6 captures
+
+Agent shows normal learning progression (P2 wins early, P1 wins mid+late). No noop-spam, stalls, or weird unit clumping. Send/capture ratios sensible. ✅
+
+**Rotation rematch fix confirmed.** Worker log now shows `[worker] rotation rematch: N opponents replayed` instead of the per-opponent `Unknown level: phase1_full_mix_4_8` errors. Fix from commit `278cbde` working as intended.
+
+**B9 backlog noted, accepted.** 5 long-running benchmarks queued at 11:02 (b9-260502-1802-default60-s{5,6,8,99}, b9-260502-1802-ceiling90-s13) — 4×60min + 1×90min = 5.5h compute. They run on `sim-v1.3` (not karp's `sim-v1.4`) and are FIFO'd ahead of the next karp axes. Effect: karp throughput reduced from ~3 cycles to ~1 cycle in 10h. Not discarding without explicit instruction; they look intentional (queued AFTER Paul's 10:42 PT instruction, possibly via a separate script).
+
+**Next:** rollout_steps-hi running (rs=16 — was the catastrophic cell overnight; watching for re-confirmation). After it finishes, b9 backlog runs ~5.5h. Karp will continue queueing in the background; throughput just slow. Wake 2 in ~45 min.
+
+---
+
 ### 2026-05-02 10:01 PT — Overnight result: 45 runs, 5 axes × 3 cycles. v1.7 wins reward A/B; gamma=0.99 fine; rollout_steps=16 broken; KL-adaptive validated; rematch bug found + fixed.
 
 Backstop ran every 15 min on PaulLinux through the night without supervision (Claude got paused mid wake-1 around 23:32 PT). 45 done runs, 1 still in flight (`v12.0.19-Bootstrap-gamma-lo`).
