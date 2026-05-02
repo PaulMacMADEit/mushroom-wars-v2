@@ -4287,6 +4287,51 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### 2026-05-02 10:01 PT — Overnight result: 45 runs, 5 axes × 3 cycles. v1.7 wins reward A/B; gamma=0.99 fine; rollout_steps=16 broken; KL-adaptive validated; rematch bug found + fixed.
+
+Backstop ran every 15 min on PaulLinux through the night without supervision (Claude got paused mid wake-1 around 23:32 PT). 45 done runs, 1 still in flight (`v12.0.19-Bootstrap-gamma-lo`).
+
+**Headline findings — by axis**
+
+| axis | cycles | winner | strength | status |
+|---|---|---|---|---|
+| `reward_version` (#2) | 2 (v12.0.03, v12.0.08) | **v1.7 (PURE TERMINAL)** | 94.1% vs 79.9% (cyc 1); 81.6% vs 74.0% (cyc 2) | ✅ replicated — Paul's "v1.7 starves the gradient" worry **refuted** |
+| `gamma` (#3) | 2+ (v12.0.04, v12.0.09, v12.0.19) | **0.99 (current baseline)** | lo wins both cycles (96.2% / 78.9%); hi=0.999 was 72–73% | ✅ — "low γ starves terminal signal" hypothesis **refuted** |
+| `rollout_steps` (#5a) | 1 (v12.0.05) | **mid=8 (current)** | mid=94.5%, lo=4=83.2%, **hi=16 catastrophic at 44.4%** | ⚠ hi=16 gives <2 PPO updates per 10-min cell → agent fails to learn |
+| `minibatch_size` (#5b) | 1 (v12.0.06) | mid=512 (current) | flat 80–84% across lo=256 / mid=512 / hi=1024 | no signal |
+| `entropy_coef` (#6) | 1 (v12.0.07) | flat | 71–77% across all cells | no signal — agent already exploits enough |
+| **KL-adaptive sanity (#1)** | continuous | ✅ controller works | `approx_kl` settled 0.008–0.015 (target 0.01); `final_lr` consistently 4–8e-5 from initial 1e-3 / 3e-3 / 1e-2 | ✅ |
+
+**The chaos chart that started the session.** Paul flagged the per-update value chart as chaotic relative to its smooth siblings. Initial diagnosis (mine) was opponent-rotation × small-sample variance — Paul correctly called this out as lazy because other rotation-affected charts were smooth. Working hypothesis pivoted to LR-too-high → KL-adaptive controller → reward A/B → gamma. **All four hypotheses are now negative:**
+- LR was self-tuning fine via the new KL-adaptive controller (target 0.01, settled 0.008–0.015).
+- Reward v1.7 is **better** than v1.6, not worse.
+- Gamma=0.99 is fine — bracketing UP makes things slightly worse.
+- rollout_steps=8 is the right setting; hi=16 is the only knob with signal, in the bad direction.
+
+The chaos was almost certainly opponent-rotation × small-sample variance after all — but the value-loss spec compounds it (the v1.7 PURE TERMINAL reward concentrates all signal at episode boundaries, so per-update value-target variance is structurally higher than under shaped rewards even though final win rate is better). My initial read was right in mechanism, wrong in confidence.
+
+**Bug found + fixed (this entry):** `_run_rotation_rematch` in [workers/worker.py:1280](workers/worker.py#L1280) was passing `cfg.level_name` ("phase1_full_mix_4_8" — a label-only mix name) to `tournament.run_match`, which forwarded it to the static level loader, which raised `Unknown level: phase1_full_mix_4_8` for every champion comparison. Every overnight run logs this error in `result.rotation_rematch`; pfsp_weight stayed at 0; champion archive can't grow.
+
+Fix: thread `cfg.level_mix` through both `_run_rotation_rematch` and `tournament.run_match`. `JaxVecEnv` already supports `level_mix` natively (per-env sample on reset); when it's set, `level_name` is correctly ignored. Match runner also normalises dict-or-list mix format the same way `trainer.py:326-334` does.
+
+Files changed:
+- `scripts/tournament.py:run_match()` — adds `level_mix` param, normalises, passes to `JaxVecEnv`.
+- `workers/worker.py:_run_rotation_rematch()` — adds `level_mix` param, threads from caller.
+- `workers/worker.py` caller of `_run_rotation_rematch()` — passes `getattr(cfg, "level_mix", None)`.
+
+**What's still up in the air:**
+- The `v12.0.04-Bootstrap-gamma-lo` cell @ 96.2% win rate looked like a real signal but didn't replicate (78.9% on cycle 2). 18pp swing across cycles is large — possibly opponent-pool mix luck, possibly real instability. More cycles needed.
+- Same-level stability (#4) and action_repeat (#7) were never wired into sweep_axes — no signal on those tonight. Worth wiring next.
+- The 96% gamma-lo cycle 1 didn't promote to the champion archive because the rematch bug above silently broke pfsp_weight. With the fix in place, future winning cells should now promote correctly.
+
+**Recommended next steps for Paul:**
+1. Push the bug fix; the karp loop is still running and will pick it up on next pull.
+2. Wire `level_mix` and `action_repeat` as sweep axes — they're the remaining priorities Paul flagged but I never reached overnight.
+3. Decide whether to re-run gamma-lo for a tie-breaker (96% vs 78% across cycles is too wide to call).
+4. Long-term: the chaos chart's actual mechanism is value-loss variance under terminal-only rewards — could test a hybrid reward (terminal + small per-tick) if smoother training is preferred over absolute win rate.
+
+---
+
 ### 2026-05-01 22:48 PT — Overnight plan + sentinel: KL-adaptive shipped, run #1 on stale code, sweep refocus
 
 Context: per-update value-chart looked chaotic on recent v1.7 runs. Paul flagged the chaos and we dialled in the overnight plan around it.
