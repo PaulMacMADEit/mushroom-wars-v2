@@ -283,12 +283,18 @@ def run_match(
     seed: int = 0,
     device: torch.device | None = None,
     verbose: bool = False,
+    level_mix: list | dict | None = None,
 ) -> dict:
     """Run one head-to-head match and return {p1_wins, p2_wins, draws, total, settled, wall_s}.
 
     Reusable from cron-agent / Elo-update path. `p1`/`p2` accept the same
     forms as the CLI: experiment dir path, Supabase run id, or
     'random_legal'/'noop'.
+
+    `level_mix`: optional dict {name: weight} or list of (name, weight). When
+    provided, each env samples a level on reset; `level` becomes a label only.
+    Required when `level` is a label like "phase1_full_mix_4_8" that the
+    static level loader doesn't recognise.
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -296,7 +302,15 @@ def run_match(
     p1_kind, p1_agent, p1_norm, p1_encode = _load_policy(p1, device)
     p2_kind, p2_agent, p2_norm, p2_encode = _load_policy(p2, device)
 
-    vec = JaxVecEnv(n_envs=games, level_name=level, base_seed=seed)
+    # Normalise level_mix to list-of-tuples (matches trainer.py:326-334).
+    mix = None
+    if level_mix:
+        if isinstance(level_mix, dict):
+            mix = [(str(k), float(v)) for k, v in level_mix.items()]
+        else:
+            mix = [(str(item[0]), float(item[1])) for item in level_mix]
+
+    vec = JaxVecEnv(n_envs=games, level_name=level, base_seed=seed, level_mix=mix)
     rng = np.random.default_rng(seed)
 
     p1_wins = p2_wins = draws = settled = 0

@@ -1234,6 +1234,7 @@ def run_training(
                 run_id=job["id"],
                 metrics_history=metrics_history,
                 level=cfg.level_name,
+                level_mix=getattr(cfg, "level_mix", None),
                 n_games=25,
             )
             print(f"[worker] rotation rematch: {len(rotation_rematch)} opponents replayed", flush=True)
@@ -1278,7 +1279,8 @@ def run_training(
 
 
 def _run_rotation_rematch(trainer, run_id: str, metrics_history: list[dict],
-                            level: str, n_games: int = 25) -> dict:
+                            level: str, level_mix: list | dict | None = None,
+                            n_games: int = 25) -> dict:
     """Replay each unique opponent the agent rotated through, measure final
     win rate. Returns {opp_label: {games, p1_wins, rate, initial_rate}}.
 
@@ -1289,6 +1291,13 @@ def _run_rotation_rematch(trainer, run_id: str, metrics_history: list[dict],
 
     `initial_rate` is the agent's training-rollout win rate the FIRST time
     it faced this opponent — useful for showing improvement over the run.
+
+    `level_mix` mirrors training: when set, each rematch env samples a real
+    level from the distribution and `level` is a label only. Without this
+    threading, label-only level_names (e.g. "phase1_full_mix_4_8") fail with
+    "Unknown level" inside sim.levels.apply (caught 2026-05-02 — every
+    overnight rematch silently errored, blocking pfsp_weight + champion
+    promotion).
     """
     import importlib
     import tempfile
@@ -1324,7 +1333,7 @@ def _run_rotation_rematch(trainer, run_id: str, metrics_history: list[dict],
         try:
             res = tournament.run_match(
                 p1=str(p1_path), p2=str(weights_path),
-                games=n_games, level=level, max_ticks=200,
+                games=n_games, level=level, level_mix=level_mix, max_ticks=200,
                 seed=10000 + idx, verbose=False,
             )
             total = res.get("total", 0)
