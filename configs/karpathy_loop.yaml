@@ -22,8 +22,9 @@
 # ---------------------------------------------------------------------------
 schedule:
   fire_interval_seconds: 1800     # 30min between Claude-side wakeups
-  cell_budget_seconds:   300      # 2026-04-29 fire 61: 5-min cells. Tight iteration loop.
-                                  # Smaller maps, fewer params per game = should learn fast.
+  cell_budget_seconds:   600      # 2026-05-01 (PT) overnight plan: 10-min cells per Paul.
+                                  # Signal pops up quickly with shorter games on close_4_8 / 4_8 mix;
+                                  # 10 min lets KL-adaptive controller actually settle within a cell.
                                   # Adjust update count via rollout_steps, NOT cell length.
   max_karp_queue_depth:  6        # skip queueing if >= this many karp-* are pending
   idle_fires_before_stop: 0       # 0 = never stop on idleness
@@ -199,40 +200,74 @@ baseline_hyperparams:
 # ---------------------------------------------------------------------------
 # Each axis name MUST be a key under baseline_hyperparams above (or a
 # nested path the loader handles). Cell values overlay the baseline.
+#
+# 2026-05-01 (PT) overnight focus — Paul's reordered priority:
+#   #1 KL-adaptive sanity (analysis only, no axis)
+#   #2 Reward A/B v1.6 vs v1.7      → reward_version
+#   #3 Gamma sweep (bracket UP)     → gamma
+#   #4 Same-level stability (NOT WIRED — to add mid-night if first 5 finish)
+#   #5 rollout_steps × minibatch    → rollout_steps + minibatch_size
+#   #6 entropy_coef under v1.7      → entropy_coef
+#   #7 action_repeat (NOT WIRED)
+#   #8 opponent diversity (NOT WIRED, low priority)
+#
+# Active axes are in `sweep_axes:` below in priority order. Round-robin
+# follows YAML ordering, so reward_version runs first, then gamma, etc.
+# Other axes parked under `sweep_axes_parked:` for reference (queue script
+# only reads `sweep_axes`).
 sweep_axes:
+  # 2-cell A/B. v1.6 (full per-tick + asymmetric capture shaping) vs v1.7
+  # (PURE TERMINAL only). Hypothesis: v1.7 starves the gradient → chaotic
+  # value-chart on long games. Test whether reverting to v1.6 restores
+  # smooth learning curves.
+  - axis: "reward_version"
+    cells:
+      - { label: "lo",  value: 4 }     # v1.6 control (full shaping)
+      - { label: "hi",  value: 5 }     # v1.7 treatment (PURE TERMINAL — current baseline)
+
+  # Bracket UP from 0.99 baseline. Hypothesis: under v1.7 PURE TERMINAL
+  # rewards, terminal win signal is the ENTIRE gradient. On 80-tick games at
+  # γ=0.99 discounted to 36%; bumping γ compensates. 0.999^80 = 92% →
+  # near-undiscounted terminal signal.
+  - axis: "gamma"
+    cells:
+      - { label: "lo",  value: 0.99  }
+      - { label: "mid", value: 0.995 }
+      - { label: "hi",  value: 0.999 }
+
+  - axis: "rollout_steps"
+    cells:
+      - { label: "lo",  value: 4   }
+      - { label: "mid", value: 8   }   # baseline
+      - { label: "hi",  value: 16  }   # bigger values give <2 updates per 10-min cell.
+
+  - axis: "minibatch_size"
+    cells:
+      - { label: "lo",  value: 256  }
+      - { label: "mid", value: 512  }
+      - { label: "hi",  value: 1024 }
+
   - axis: "entropy_coef"
     cells:
       - { label: "lo",  value: 0.003 }
       - { label: "mid", value: 0.01  }
       - { label: "hi",  value: 0.03  }
 
+# Parked axes — definitions preserved but excluded from round-robin tonight.
+# `lr` is parked because KL-adaptive controller now self-tunes within each
+# cell; sweeping a flat lr would fight the controller.
+sweep_axes_parked:
   - axis: "lr"
     cells:
       - { label: "lo",  value: 1.0e-3 }
       - { label: "mid", value: 3.0e-3 }
       - { label: "hi",  value: 1.0e-2 }
 
-  - axis: "rollout_steps"
-    cells:
-      - { label: "lo",  value: 4   }
-      - { label: "mid", value: 8   }   # 2026-04-29 fire 61: matches v2 baseline. Was 32/64/128.
-      - { label: "hi",  value: 16  }   # Bigger values would give <2 updates per 5-min cell.
-
   - axis: "n_envs"
     cells:
       - { label: "lo",  value: 512  }
       - { label: "mid", value: 1024 }
-      - { label: "hi",  value: 1536 }   # 2026-04-29: capped from 2048 — that
-                                        # OOMs on the 8 GiB GPU. Worker process
-                                        # already takes ~7 GiB resident; the
-                                        # extra rollout buffer at 2048 envs
-                                        # (2x more than 1024) tips it over.
-
-  - axis: "gamma"
-    cells:
-      - { label: "lo",  value: 0.95 }
-      - { label: "mid", value: 0.97 }
-      - { label: "hi",  value: 0.99 }
+      - { label: "hi",  value: 1536 }
 
   - axis: "gae_lambda"
     cells:
@@ -240,7 +275,7 @@ sweep_axes:
       - { label: "mid", value: 0.95 }
       - { label: "hi",  value: 0.98 }
 
-  - axis: "clip_range"               # was wrongly named clip_coef; PPOConfig uses clip_range
+  - axis: "clip_range"
     cells:
       - { label: "lo",  value: 0.10 }
       - { label: "mid", value: 0.20 }
@@ -251,12 +286,6 @@ sweep_axes:
       - { label: "lo",  value: 2 }
       - { label: "mid", value: 4 }
       - { label: "hi",  value: 8 }
-
-  - axis: "minibatch_size"
-    cells:
-      - { label: "lo",  value: 256  }
-      - { label: "mid", value: 512  }
-      - { label: "hi",  value: 1024 }
 
   - axis: "value_coef"
     cells:
@@ -269,13 +298,3 @@ sweep_axes:
       - { label: "lo",  value: 0.25 }
       - { label: "mid", value: 0.50 }
       - { label: "hi",  value: 1.00 }
-
-  # 2-cell A/B (control vs treatment). v1.3 = current baseline (terminal-only
-  # rewards + speed bonus). v1.4 = + per-tick shaping for buildings/units
-  # deltas, designed to break mutual-noop equilibrium under random_legal
-  # (KARPATHY_LOG fire 19-20). Override `reward_version` directly; baseline
-  # `reward_v13: true` is overridden by reward_version when ≥0.
-  - axis: "reward_version"
-    cells:
-      - { label: "lo",  value: 1 }     # v1.3 control
-      - { label: "hi",  value: 2 }     # v1.4 treatment

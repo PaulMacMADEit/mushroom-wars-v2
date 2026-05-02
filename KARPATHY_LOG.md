@@ -4287,6 +4287,40 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### 2026-05-01 22:48 PT — Overnight plan + sentinel: KL-adaptive shipped, run #1 on stale code, sweep refocus
+
+Context: per-update value-chart looked chaotic on recent v1.7 runs. Paul flagged the chaos and we dialled in the overnight plan around it.
+
+**Sentinel — run #1 (64a94188) data caveat:**
+- Queued BEFORE the KL-adaptive lr controller code shipped to the worker.
+- Executed at flat lr=3e-4 (legacy path) — NOT the KL-adaptive trainer, despite hyperparams advertising otherwise.
+- Treat it as a "flat 3e-4 baseline" data point, not a KL-adaptive data point.
+- Run #2 (random_close_8_8) queued; will use KL-adaptive after worker restart.
+
+**Configuration changes:**
+- `cell_budget_seconds`: 300 → 600 (10-min cells; signal pops up quickly per Paul).
+- `reward_version` axis cells: `{1, 2}` (legacy v1.3/v1.4) → `{4, 5}` (v1.6 control vs v1.7 PURE TERMINAL treatment).
+- `gamma` axis cells: `{0.95, 0.97, 0.99}` (bracket DOWN) → `{0.99, 0.995, 0.999}` (bracket UP — terminal-only signal needs less discounting).
+- `sweep_axes` stripped to ordered priority: `[reward_version, gamma, rollout_steps, minibatch_size, entropy_coef]`.
+- Other axes parked under `sweep_axes_parked` (`lr`, `n_envs`, `gae_lambda`, `clip_range`, `update_epochs`, `value_coef`, `max_grad_norm`).
+- `lr` parked because KL-adaptive controller now self-tunes within each cell; flat-lr sweep would fight the controller.
+
+**Overnight priority order (Paul's reorder):**
+1. KL-adaptive sanity (analysis-only, no axis — done after run #2 lands).
+2. Reward A/B v1.6 vs v1.7 (`reward_version`).
+3. Gamma bracket UP (`gamma`).
+4. Same-level stability (NOT YET WIRED — to add mid-night if first 5 finish cleanly).
+5. rollout_steps × minibatch (`rollout_steps`, `minibatch_size`).
+6. entropy_coef under v1.7 (`entropy_coef`).
+7. action_repeat (NOT WIRED — bottom).
+8. opponent diversity (NOT WIRED — bottom; weakest prior).
+
+**Cadence:** karp loop fires every 30 min, queues 3 cells × 10 min per fire. ~16 fires through 8h = ~3 cycles through the 5 active axes. Per-fire sub-agent samples 3 games and appends a finding to this log.
+
+**Next karp fire:** round-robin picks `reward_version` (last_used=`entropy_coef`). Will queue `v12.0.02-Bootstrap-reward_version-{lo,hi}` — lo=v1.6 (4), hi=v1.7 (5).
+
+---
+
 ### Loop fire 99 --- 2026-04-30 15:57 PT --- Stage 1 SHIPPED. reward v1.5 (asymmetric capture/loss) + n_envs=1800. Worker restarted. v10.2.05-LargeMap-Base-01 running.
 
 **Why this fire is the point.** Base-04's 37% timeout_rate exposed that v1.4 reward shaping rewards "holding territory" but not "killing enemy buildings". Agent learned to dominate map without finishing. v1.5 fixes that with explicit asymmetry: enemy capture = 4× neutral capture; loss to enemy = 4× loss to neutral.
