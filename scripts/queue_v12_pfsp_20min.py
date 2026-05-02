@@ -1,18 +1,18 @@
-"""Queue a 20-min v12 self-play run that rotates through the v12 champion
-archive each PPO update. Warm-starts from a parent run.
+"""Queue a v12 self-play run that rotates through the v12 champion archive
+each PPO update. Warm-starts from a parent run.
 
 PURE self-play: no random_legal. Initial opponent = most-recent v12 champion;
-trainer rotates each update to a different PFSP-weighted archive member.
-With fused_rollout=true, ALL envs use the rotating opponent on every update.
+trainer rotates each update to a different recency-biased PFSP archive
+member (newest dominates per cfg.leaderboard_recency_decay).
 
 Usage:
-    .venv/bin/python scripts/queue_v12_selfplay_20min.py <parent_run_id>
-        # back-compat alias also accepted:
-    .venv/bin/python scripts/queue_v12_pfsp_20min.py <parent_run_id>
+    .venv/bin/python scripts/queue_v12_pfsp_20min.py <parent_run_id> [--minutes N]
+        --minutes N    training budget in minutes (default 20)
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import time
@@ -47,10 +47,13 @@ def _resolve_initial_opponent(cur) -> tuple[str, dict] | None:
 
 
 def main() -> None:
-    if len(sys.argv) < 2:
-        print("usage: queue_v12_selfplay_20min.py <parent_run_id>")
-        sys.exit(1)
-    parent = sys.argv[1].strip()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("parent_run_id")
+    ap.add_argument("--minutes", type=int, default=20,
+                    help="training budget in minutes (default 20)")
+    args = ap.parse_args()
+    parent = args.parent_run_id.strip()
+    minutes = max(1, int(args.minutes))
 
     cfg = load()
     base_hp = dict(cfg.baseline_hyperparams)
@@ -78,11 +81,11 @@ def main() -> None:
     base_hp["replay_per_update"]      = True
     base_hp["replay_games_per_update"] = 3
 
-    label = f"v12.0.selfplay-from-{parent[:8]}-20min"
-    desc  = (f"Pure v12 self-play continuation of {parent}: 20 min, "
-             f"rotate-per-update against v12 champion archive, no random_legal, "
-             f"random_close_4_6, replays on. v1.6 rewards.")
-    budget_ms = 20 * 60 * 1000
+    label = f"v12.0.selfplay-from-{parent[:8]}-{minutes}min"
+    desc  = (f"Pure v12 self-play continuation of {parent}: {minutes} min, "
+             f"rotate-per-update against v12 champion archive (recency-biased), "
+             f"no random_legal, random_close_4_6, replays on. v1.6 rewards.")
+    budget_ms = minutes * 60 * 1000
     launch_at = int(time.time() * 1000)
 
     with connect() as conn, conn.cursor() as cur:
@@ -111,7 +114,7 @@ def main() -> None:
 
     print(f"queued self-play run {rid[:8]}  {label}")
     print(f"  parent:        {parent}")
-    print(f"  budget:        {budget_ms // 60000} min")
+    print(f"  budget:        {minutes} min")
     print(f"  level:         random_close_4_6")
     print(f"  pool mode:     rotate_per_update")
     print(f"  pool source:   pfsp")
