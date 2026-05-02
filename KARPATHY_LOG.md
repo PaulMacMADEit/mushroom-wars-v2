@@ -4287,6 +4287,38 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### 2026-05-02 14:51 PT — BATCH 2 wrap (action_repeat) + BATCH 3 hypothesis (reward A/B/C warm).
+
+**Batch 2 results** (warm from `8bf21abf` warm-mid 85.0%):
+
+| K | wall | wr | to | ep_len | verdict |
+|---|---|---|---|---|---|
+| 1 (lo) | 665s | 83.9% | 16% | 22.5 | mid-range, no signal |
+| **2 (mid, baseline)** | **657s** | **89.2%** | **11%** | 23.9 | beats parent (+4pp) — new strongest |
+| 4 (hi) | 682s | 84.5% | 15% | 26.7 | flat |
+
+❌ **Priority #7 (action_repeat) DEAD.** Falsifier was wr ≥ 90%; K=2 missed at 89.2%. K=1 and K=4 both at ~84% — flat. K=2 stays default. K=2's 4pp lift over parent is most likely warm-start gain (parent was K=2 trained, no action-space mismatch on warm-load).
+
+### BATCH 3 — reward A/B/C (warm from K=2 89.2%)
+
+Question: **does reward shaping help when warm-starting from a strong v1.7-trained agent? Or does the gradient distribution shift hurt?**
+
+Reasoning: overnight FRESH-init showed v1.7 (PURE TERMINAL) > v1.6 — but parent was random. Now parent already has the strategy; per-tick shaping might REFINE policy (helps) or destabilize the value head (hurts).
+
+Warm parent: `c09627a5` (action_repeat-mid, 89.2% wr, v1.7 reward, current strongest).
+
+| cell | reward | hypothesis | expected | falsifier |
+|---|---|---|---|---|
+| `reward_version-lo` (41b14989) | v1.5 (asymmetric capture, no per-tick) | mild shaping refines without destabilizing | 87–91% | wr ≥ 92% → shaping useful for warm-tuning |
+| `reward_version-mid` (d886c14b) | v1.6 (full per-tick + asymmetric capture) | full shaping; could refine OR confuse value head trained on terminal-only | 85–90% (high variance) | wr ≥ 92% → full shaping helps; ≤ 84% → gradient shift hurts |
+| `reward_version-hi` (c004c720) | v1.7 (PURE TERMINAL, control) | parity with parent | 87–91% | benchmark (replicate of warm-mid result) |
+
+Decision: any shaped variant ≥ 92% → switch baseline (Paul's earlier worry that v1.7 was wrong was directionally right under warm-start). All within 2pp of v1.7 → reward variants neutral, v1.7 is fine.
+
+Queued.
+
+---
+
 ### 2026-05-02 14:14 PT — BATCH 1+1B wrap-up: level_mix done. Specialist hypothesis dead. Ranged is strongest (surprise). Warm-start premium real.
 
 | variable | fresh-init | warm from f342c557 (83.6%) | premium |

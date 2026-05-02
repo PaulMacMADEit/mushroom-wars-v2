@@ -231,8 +231,9 @@ sweep_axes:
   # smooth learning curves.
   - axis: "reward_version"
     cells:
-      - { label: "lo",  value: 4 }     # v1.6 control (full shaping)
-      - { label: "hi",  value: 5 }     # v1.7 treatment (PURE TERMINAL — current baseline)
+      - { label: "lo",  value: 3 }     # v1.5 (asymmetric capture/loss, no per-tick shaping)
+      - { label: "mid", value: 4 }     # v1.6 (full shaping + asymmetric capture)
+      - { label: "hi",  value: 5 }     # v1.7 PURE TERMINAL (current baseline)
 
   # Bracket UP from 0.99 baseline. Hypothesis: under v1.7 PURE TERMINAL
   # rewards, terminal win signal is the ENTIRE gradient. On 80-tick games at
