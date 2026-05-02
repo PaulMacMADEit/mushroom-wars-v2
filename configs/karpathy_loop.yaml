@@ -183,9 +183,11 @@ baseline_hyperparams:
   # 0.05), lose to enemy = -0.20 (4× neutral's -0.05). Should attack the
   # "dominate-don't-finish" equilibrium directly.
   reward_v13: true
-  reward_version: 4   # 2026-05-01: v1.6 — LOSE -5.0→-7.5 (+50% cost),
-                      # DRAW -0.5→-1.25 (+150% cost). v1.5 base + harsher
-                      # loss/draw to push past stalemate equilibria.
+  reward_version: 5   # 2026-05-01: v1.7 — PURE TERMINAL rewards. Strips
+                      # all per-event capture/loss + per-tick shaping +
+                      # asymmetric capture from v1.4–v1.6. Keeps WIN +5.0,
+                      # LOSE -7.5, DRAW -1.25, speed bonus +up to 2.0.
+                      # Agent has learned the basics → optimise outcomes only.
 
   # ----- Level distribution -----
   # NOTE: level_name and level_mix are NOT set here. They are read from
