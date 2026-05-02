@@ -4287,6 +4287,45 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### 2026-05-02 15:34 PT — BATCH 3 wrap (reward A/B/C warm) + plateau finding + BATCH 4 (entropy_coef warm).
+
+**Batch 3 results** (warm from `c09627a5` K=2 89.2%):
+
+| cell | reward | wr | to | drop from parent |
+|---|---|---|---|---|
+| v1.5 (lo) | mild shaping | 81.2% | 19% | -8pp |
+| v1.6 (mid) | full shaping | 86.1% | 14% | -3pp |
+| **v1.7 (hi, control)** | pure terminal | **86.3%** | 14% | **-3pp** |
+
+🚨 **PLATEAU REALITY CHECK.** v1.7 control (same reward as parent, warm-started from parent) ALSO dropped 3pp. **The parent's 89.2% was an outlier, not the steady-state.** True warm-start plateau is ~85–86% with ±5pp variance.
+
+Re-reading Batches 1B/2/3 with this in mind:
+- 1B (warm from f342c557): 81.8% / 85.0% / 86.9% — mean 84.6%
+- 2 (warm from 8bf21abf): 83.9% / 89.2% (outlier) / 84.5% — median 84.5%
+- 3 (warm from c09627a5): 81.2% / 86.1% / 86.3% — median 86.1%
+
+**Plateau confirmed ~85–86%.** Variance-driven cells occasionally peak at 87–89%, but it's not a repeatable signal. Implies: 10-min cells with current settings can't break past this ceiling with parameter tweaks alone. Need a bigger lever (architecture, longer training, or qualitatively different curriculum).
+
+**Reward verdict consistent:** v1.7 (pure terminal) ≥ v1.6 ≥ v1.5 in this batch. v1.5 -8pp drop is the only outlier (mild shaping somehow disturbs more than full shaping — likely just variance).
+
+### BATCH 4 — entropy_coef warm
+
+Sharpest untested-with-warm variable. Question: **can lowering entropy break the ~86% plateau by letting the agent exploit instead of explore?**
+
+Warm from `c09627a5` (89.2% peak, despite variance — best inheritable starting point).
+
+| cell | entropy_coef | hypothesis | falsifier |
+|---|---|---|---|
+| `entropy_coef-lo` (385357e8) | 0.003 | exploit-mode breaks plateau | wr ≥ 92% → switch baseline |
+| `entropy_coef-mid` (7e80db76) | 0.01 (current) | replicate steady-state | ~85–86% |
+| `entropy_coef-hi` (6b21f7ee) | 0.03 | over-explores away from strategy | wr ≤ 82% |
+
+Decision: any cell ≥ 92% → entropy moves the plateau. Otherwise the plateau is structural (architecture / training time / curriculum).
+
+Queued.
+
+---
+
 ### 2026-05-02 14:51 PT — BATCH 2 wrap (action_repeat) + BATCH 3 hypothesis (reward A/B/C warm).
 
 **Batch 2 results** (warm from `8bf21abf` warm-mid 85.0%):
