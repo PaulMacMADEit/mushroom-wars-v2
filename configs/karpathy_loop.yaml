@@ -164,6 +164,9 @@ baseline_hyperparams:
   # Only consulted when self_play=true. Bench-eval-time PFSP is independent.
   # 2026-05-01 v12 SELF-PLAY: pure rotation against the v12 archive.
   leaderboard_bias:   1.0           # 100% pool-sourced (gate for download; rotate_per_update supersedes per-env mixing)
+  leaderboard_recency_decay: 0.5    # newest = 1.0, next = 0.5, then 0.25, … so the policy
+                                    # spends most of its time vs the latest (presumed-strongest)
+                                    # champions. Older lineages still appear (variety) but rarely.
   leaderboard_source: "pfsp"        # "pfsp" | "elo" (legacy)
   leaderboard_top_k:  10
 

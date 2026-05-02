@@ -735,16 +735,24 @@ def _download_leaderboard_opponents(run_id, top_k: int) -> list[tuple]:
     return results
 
 
-def _download_pfsp_champions(run_id) -> list[tuple]:
-    """Download every champion in the archive with PFSP sampling weights.
+def _download_pfsp_champions(
+    run_id,
+    top_k: int = 10,
+    recency_decay: float = 1.0,
+) -> list[tuple]:
+    """Download recent champions with PFSP × recency-weighted sampling weights.
 
-    Returns [(weights_path, obs_norm_path|None, weight)]. `weight` is an
-    unnormalised PFSP score in [0, 1]: how informative is this opponent
-    based on the most-recent run that bench-eval'd it.
+    Returns [(weights_path, obs_norm_path|None, weight)]. `weight` =
+    PFSP_weight × (recency_decay ** position_from_newest), unnormalised.
 
-    Heuristic: for each champion, pull the most-recent rated run that has a
-    bench_vector entry for it. weight = 1 - |wr - 0.5|. Defaults to 0.5
-    (mid-info) if no prior bench data exists yet.
+    Args:
+      run_id: this run's id (excluded from selection).
+      top_k:  cap on archive download. Newest `top_k` by archived_at.
+      recency_decay: in [0, 1]. 1.0 = pure PFSP, 0.5 = newest dominates.
+
+    Heuristic for PFSP_weight: for each champion, pull the most-recent rated
+    run that has a bench_vector entry for it. weight = 1 - |wr - 0.5|.
+    Defaults to 0.5 (mid-info) if no prior bench data exists yet.
 
     Returns [] if the champions table is empty — caller falls back to pure
     self-play.
@@ -758,7 +766,8 @@ def _download_pfsp_champions(run_id) -> list[tuple]:
                   FROM champions
                  WHERE source_run_id <> %s
                  ORDER BY archived_at DESC
-            """, (str(run_id),))
+                 LIMIT %s
+            """, (str(run_id), int(top_k)))
             rows = cur.fetchall()
 
     if not rows:
@@ -786,7 +795,9 @@ def _download_pfsp_champions(run_id) -> list[tuple]:
 
     out_dir = Path(tempfile.mkdtemp(prefix="mw2-pfsp-"))
     results: list[tuple] = []
-    for champ_id, source_rid, w_url, n_url, label in rows:
+    # rows is ordered archived_at DESC, so position=0 is the newest.
+    decay = float(max(0.0, min(1.0, recency_decay)))
+    for position, (champ_id, source_rid, w_url, n_url, label) in enumerate(rows):
         if not w_url:
             continue
         w_path = out_dir / f"{str(champ_id)[:8]}-weights.pt"
@@ -799,9 +810,12 @@ def _download_pfsp_champions(run_id) -> list[tuple]:
         except Exception as exc:
             print(f"[worker] pfsp: skip champion {label} — download failed: {exc}")
             continue
-        weight = weights_by_champ[str(champ_id)]
+        pfsp_w   = weights_by_champ[str(champ_id)]
+        recency  = decay ** position  # newest = 1.0, next = decay, etc.
+        weight   = max(pfsp_w * recency, 1e-6)
         results.append((w_path, n_path, weight))
-        print(f"[worker] pfsp opp '{label[:40]}' weight={weight:.3f}")
+        print(f"[worker] pfsp opp '{label[:40]}' "
+              f"weight={weight:.3f}  pfsp={pfsp_w:.3f}  recency={recency:.3f}  pos={position}")
     return results
 
 
@@ -1099,9 +1113,15 @@ def run_training(
                 print(f"[worker] downloaded {len(leaderboard_paths)} top-Elo opponents "
                       f"(source=elo, bias={cfg.leaderboard_bias:.2f})")
             else:
-                leaderboard_paths = _download_pfsp_champions(run_id=job["id"])
+                leaderboard_paths = _download_pfsp_champions(
+                    run_id=job["id"],
+                    top_k=int(cfg.leaderboard_top_k),
+                    recency_decay=float(getattr(cfg, "leaderboard_recency_decay", 1.0)),
+                )
                 print(f"[worker] downloaded {len(leaderboard_paths)} PFSP-weighted "
-                      f"champions (source=pfsp, bias={cfg.leaderboard_bias:.2f})")
+                      f"champions (source=pfsp, bias={cfg.leaderboard_bias:.2f}, "
+                      f"top_k={cfg.leaderboard_top_k}, "
+                      f"recency_decay={getattr(cfg, 'leaderboard_recency_decay', 1.0):.2f})")
         except Exception as exc:
             print(f"[worker] opponent download failed ({source}); pure self-play: {exc}")
 

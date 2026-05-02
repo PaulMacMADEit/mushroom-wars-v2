@@ -611,7 +611,7 @@
       renderTrainingOpp(points);
       renderWinRateProgression(points, run ?? {}).catch(e => console.warn('[wrp]', e));
       renderLevelMix(points);
-      renderRotationRematch(run ?? {});
+      renderRotationRematch(run ?? {}).catch(e => console.warn('[rotation]', e));
     }
 
     /** rerate_full before/after diff: pulls top_before + top_after from
@@ -703,7 +703,7 @@
     /** End-of-run rematch panel: shows the final policy's win rate vs each
      * opponent it rotated through during training. result.rotation_rematch
      * is populated by workers/worker.py after the training loop finishes. */
-    function renderRotationRematch(run) {
+    async function renderRotationRematch(run) {
       const $card = document.getElementById('rotation-rematch');
       if (!$card) return;
       const data = run?.result?.rotation_rematch;
@@ -711,16 +711,30 @@
         $card.innerHTML = '<div class="muted">no rematch data — only populated for completed runs with opponent_pool_mode=rotate_per_update.</div>';
         return;
       }
-      // Sort by final win rate descending so strongest matchups float to top.
+      const champMap = await loadChampLookup();
+      const labelFor = (raw) => {
+        if (typeof raw !== 'string' || !raw.startsWith('champion:')) return raw;
+        const idShort = raw.slice('champion:'.length, 'champion:'.length + 8);
+        return champMap[idShort]?.label || raw;
+      };
+      const tsFor = (raw) => {
+        if (typeof raw !== 'string' || !raw.startsWith('champion:')) return -1;
+        const idShort = raw.slice('champion:'.length, 'champion:'.length + 8);
+        return champMap[idShort]?.archived_at ?? 0;
+      };
+      // Sort by archived_at DESC (newest opponent first). Lets you read top→
+      // bottom and see if the agent beats progressively older lineages.
       const rows = Object.entries(data).map(([opp, d]) => ({
         opp,
-        rate: d?.rate,
+        display: labelFor(opp),
+        ts:      tsFor(opp),
+        rate:    d?.rate,
         initial: d?.initial_rate,
-        games: d?.games,
+        games:   d?.games,
         p1_wins: d?.p1_wins,
-        delta: (d?.rate != null && d?.initial_rate != null) ? d.rate - d.initial_rate : null,
-        error: d?.error,
-      })).sort((a, b) => (b.rate ?? -1) - (a.rate ?? -1));
+        delta:   (d?.rate != null && d?.initial_rate != null) ? d.rate - d.initial_rate : null,
+        error:   d?.error,
+      })).sort((a, b) => b.ts - a.ts);
 
       const cellColor = (wr) => {
         if (wr == null) return 'transparent';
@@ -751,7 +765,7 @@
           <tbody>
             ${rows.map(r => {
               if (r.error) {
-                return `<tr><td><span class="mono">${esc(r.opp)}</span></td><td colspan="5"><span class="error">${esc(r.error)}</span></td></tr>`;
+                return `<tr><td><span class="mono">${esc(r.display)}</span></td><td colspan="5"><span class="error">${esc(r.error)}</span></td></tr>`;
               }
               const initialCell = r.initial != null
                 ? `<td style="text-align:center;background:${cellColor(r.initial)};"><span class="mono">${(r.initial*100).toFixed(0)}%</span></td>`
@@ -759,8 +773,9 @@
               const finalCell = r.rate != null
                 ? `<td style="text-align:center;background:${cellColor(r.rate)};"><span class="mono">${(r.rate*100).toFixed(0)}%</span></td>`
                 : `<td><span class="muted">—</span></td>`;
+              const titleAttr = (r.display !== r.opp) ? ` title="${esc(r.opp)}"` : '';
               return `<tr>
-                <td><span class="mono">${esc(r.opp)}</span></td>
+                <td${titleAttr}><span class="mono">${esc(r.display)}</span></td>
                 ${initialCell}
                 ${finalCell}
                 <td>${fmtDelta(r.delta)}</td>
@@ -1174,24 +1189,34 @@
       `;
     }
 
-    // Champion id-shortprefix → human-readable label. Loaded once per page;
-    // used to translate `champion:XXXXXXXX` opponent labels in the
-    // training-rollout table into something readable like
-    // `v12.0.01-Bootstrap-entropy_coef-lo`.
+    // Champion id-shortprefix → { label, archived_at_ms }. Loaded once per
+    // page. Used both to translate `champion:XXXXXXXX` opponent labels into
+    // readable names AND to order opponent rows by recency (newest first =
+    // most likely to be the strongest = the row you want to track most).
     let _champLookup = null;
     async function loadChampLookup() {
       if (_champLookup) return _champLookup;
       const map = {};
       try {
-        const { data, error } = await sb.from('champions').select('id, label');
+        const { data, error } = await sb.from('champions').select('id, label, archived_at');
         if (error || !data) return (_champLookup = map);
         for (const c of data) {
           const idShort = String(c.id).slice(0, 8);
-          if (idShort && c.label) map[idShort] = c.label;
+          if (idShort) {
+            map[idShort] = {
+              label: c.label,
+              archived_at: c.archived_at ? Date.parse(c.archived_at) : 0,
+            };
+          }
         }
       } catch (_) { /* lookup is best-effort */ }
       _champLookup = map;
       return map;
+    }
+    // Convenience: extract the 8-char id from a "champion:XXXXXXXX" label.
+    function champShortFromLabel(rawLabel) {
+      if (typeof rawLabel !== 'string' || !rawLabel.startsWith('champion:')) return null;
+      return rawLabel.slice('champion:'.length, 'champion:'.length + 8) || null;
     }
 
     /** Win rate progression in 10% buckets across the run.
@@ -1213,18 +1238,30 @@
         return;
       }
 
-      // Champion id → label, cached. Used to render readable opponent rows
-      // ("v12.0.01-Bootstrap-entropy_coef-lo") instead of raw 8-char IDs.
+      // Champion id → {label, archived_at_ms}, cached. Used to render
+      // readable opponent rows AND order them by recency (newest first).
       const champMap = await loadChampLookup();
       const labelForOpp = (rawLabel) => {
-        // rawLabel is "champion:XXXXXXXX" or a non-champion fallback like
-        // "random_legal" / "self_play:pool_3" / "neural:?".
         if (typeof rawLabel !== 'string') return String(rawLabel);
         if (rawLabel.startsWith('champion:')) {
           const idShort = rawLabel.slice('champion:'.length, 'champion:'.length + 8);
-          return champMap[idShort] || rawLabel;  // fallback to id when unknown
+          const entry = champMap[idShort];
+          return (entry && entry.label) || rawLabel;
         }
         return rawLabel;
+      };
+      // Newest-first ordering. Champion rows sort by archived_at desc;
+      // non-champion labels (random_legal / self_play:* / neural:?) go to
+      // the bottom in alphabetical order.
+      const sortByRecency = (rawLabels) => {
+        return Array.from(rawLabels).sort((a, b) => {
+          const aShort = champShortFromLabel(a);
+          const bShort = champShortFromLabel(b);
+          const aTs = aShort ? (champMap[aShort]?.archived_at ?? 0) : -1;
+          const bTs = bShort ? (champMap[bShort]?.archived_at ?? 0) : -1;
+          if (aTs !== bTs) return bTs - aTs;          // newest first
+          return String(a).localeCompare(String(b));
+        });
       };
 
       const N_BUCKETS = 10;
@@ -1306,7 +1343,7 @@
       // ---- (B) Training-rollout table HTML --------------------------------
       let trainHtml = '';
       if (anyTrain) {
-        const opps = Array.from(trainOpps);
+        const opps = sortByRecency(trainOpps);
         trainHtml = `
           <div class="stat-label" style="margin-bottom:8px;">
             Win rate vs the opponent the agent played each PPO update. One column per update, left → right. <span class="mono">n=</span> is episodes completed in that update.

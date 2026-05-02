@@ -70,6 +70,13 @@ class PPOConfig:
     # champion archive weighted by PFSP score (peak at 50% win-rate);
     # 'elo' is the legacy top-K-Elo path kept for compatibility.
     leaderboard_source:   str   = "pfsp"
+    # Recency bias on top of PFSP weights. After ordering champions by
+    # archived_at DESC, multiply each champion's weight by
+    # (recency_decay ** position). 1.0 = no recency bias (uniform PFSP),
+    # 0.5 = newest dominates with older still sampled, 0.0 = newest only.
+    # Rationale: in a self-play loop, newer champions are usually stronger;
+    # facing them most often gives the highest training signal.
+    leaderboard_recency_decay: float = 0.5
     # Level
     # Static name (e.g. "crossroads_6") or dynamic "random_<min>_<max>".
     # Dynamic levels regenerate per reset so training sees varied geometry.
