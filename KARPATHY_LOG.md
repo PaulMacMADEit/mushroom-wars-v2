@@ -4287,6 +4287,33 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### 2026-05-02 11:58 PT — MODE CHANGE: hypothesis-driven batches of 3, mid-run peeks, early abort on signal.
+
+Paul switched from auto-cycling sweep_axes to explicit batches with stated hypothesis + decision rule per cell + mid-run peek at 25% (~2.5 min). `mushroom-karp.timer` stopped on PaulLinux. Queue cleared. Single GPU constraint = sequential cells, but each one is peek-and-decide.
+
+#### BATCH 1 — level_mix (priority #4, never tested)
+
+Sharp question: **is the current 50/50 mix of `random_close_4_8` and `random_4_8` starving learning by forcing the agent to learn two distributions at once, or is it producing a more general agent?**
+
+Three cells (each 10-min, lr-adaptive on, replay capture on, opponent = pfsp_champion):
+
+| cell | level_mix | hypothesis | expected | decision rule (at end) |
+|---|---|---|---|---|
+| `level_mix-lo` (566bd637) | `random_close_4_8: 1.0` (close-only specialist) | Specialist learns its niche fast → highest peak win_rate of the 3 | wr ≥ 88%, timeout < 12% | wr > 90% → "specialist effect real, mix is hurting"; wr ≤ 82% → close-only is no easier than current mix |
+| `level_mix-mid` (b5c2349b) | `random_close_4_8: 1.0, random_4_8: 1.0` (current control) | Generalist baseline | wr ≈ 82–84% (matches recent reward A/B at this mix), timeout 16–18% | benchmark — same as recent runs |
+| `level_mix-hi` (b44da2b5) | `random_4_8: 1.0` (ranged-only specialist, longer travel times) | Hardest distribution; agent might struggle with longer games + more strategic choice. Expect lower wr or higher timeout | wr 70–80%, timeout 20–30% | timeout > 35% → ranged-only too hard for current capacity; wr > 85% → ranged is ALSO easier than mixed (would refute "mix is fine") |
+
+**Mid-run peek protocol (at ~2.5 min into each cell):**
+1. Pull `metrics_history` from running run (via `runs.result->'updates'` partial, or trainer's live state)
+2. Sample 2 latest replays from supabase storage
+3. Decision: `keep running` (default) / `abort + reason` (if signal is unambiguous and agrees with hypothesis early)
+
+**What would falsify the priority #4 hypothesis ("mixed curriculum starves learning"):** if mid (control) win_rate ≥ within 2pp of the better specialist. Then mixing is fine and we shouldn't worry about curriculum jitter.
+
+**Queue:** minibatch_size-hi (5a4bd781) finishing ~12:07 PT (let it run since we use the 10 min to plan). Then level_mix-lo → mid → hi. First peek ~2.5 min into level_mix-lo, expected ~12:09:30 PT.
+
+---
+
 ### 2026-05-02 11:52 PT — Wake 2: b9 self-destructed, rs=16 actually fine post-restart, minibatch sweep running.
 
 Two notable plot twists since wake 1:
