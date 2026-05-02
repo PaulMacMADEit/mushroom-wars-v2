@@ -55,6 +55,7 @@ _RANDOM_CLOSE_RE = re.compile(r"^random_close_(\d+)_(\d+)$")
 _RANDOM_CLOSE_SHUFFLE_RE = re.compile(r"^random_close_shuffle_(\d+)_(\d+)$")
 _RANDOM_SHUFFLE_RE       = re.compile(r"^random_shuffle_(\d+)_(\d+)$")
 _ASYM_RE         = re.compile(r"^asym_(\d+)_(\d+)$")
+_ASYM_CLOSE_RE   = re.compile(r"^asym_close_(\d+)_(\d+)$")
 
 # Placement constraints.
 _MAP_SIZE       = 700
@@ -161,14 +162,15 @@ def generate_random_close_level(
     )
 
 
-def generate_asymmetric_level(n_buildings: int, rng: np.random.Generator) -> list:
-    """Build an asymmetric random level — no mirroring.
-
-    Bases are placed in opposite halves of the map (left/right) so both
-    players have *some* starting region, but distances, counts of nearby
-    neutrals, and geometry are independent. May produce unfair starts —
-    that's the point (use for variety / stress-testing, not fair eval).
-    """
+def _generate_asymmetric_level_param(
+    n_buildings: int,
+    rng: np.random.Generator,
+    *,
+    map_size: int,
+    border: int,
+    min_sep: int,
+) -> list:
+    """Internal: asymmetric (no-mirror) layout, parameterised on map size."""
     if n_buildings < 2:
         raise ValueError("need at least 2 buildings (one base per player)")
     if n_buildings > C.MAX_BUILDING_SLOTS:
@@ -178,11 +180,12 @@ def generate_asymmetric_level(n_buildings: int, rng: np.random.Generator) -> lis
     placed: list[tuple[int, int]] = []
 
     # Bases in opposite halves. P1 gets the left half, P2 the right.
-    mid = _MAP_SIZE // 2
-    p1x = int(rng.integers(_BORDER, mid - 40))
-    p1y = int(rng.integers(_BORDER, _MAP_SIZE - _BORDER))
-    p2x = int(rng.integers(mid + 40, _MAP_SIZE - _BORDER))
-    p2y = int(rng.integers(_BORDER, _MAP_SIZE - _BORDER))
+    mid = map_size // 2
+    base_gap = max(20, min_sep // 2)
+    p1x = int(rng.integers(border, mid - base_gap))
+    p1y = int(rng.integers(border, map_size - border))
+    p2x = int(rng.integers(mid + base_gap, map_size - border))
+    p2y = int(rng.integers(border, map_size - border))
     level.append((C.OWNER_P1, p1x, p1y, 10, C.TYPE_BASIC))
     level.append((C.OWNER_P2, p2x, p2y, 10, C.TYPE_BASIC))
     placed.extend([(p1x, p1y), (p2x, p2y)])
@@ -191,17 +194,33 @@ def generate_asymmetric_level(n_buildings: int, rng: np.random.Generator) -> lis
     n_neutrals = n_buildings - 2
     for _ in range(n_neutrals):
         for _attempt in range(80):
-            cx = int(rng.integers(_BORDER, _MAP_SIZE - _BORDER))
-            cy = int(rng.integers(_BORDER, _MAP_SIZE - _BORDER))
-            if all((cx - px) ** 2 + (cy - py) ** 2 >= _MIN_SEP ** 2 for px, py in placed):
+            cx = int(rng.integers(border, map_size - border))
+            cy = int(rng.integers(border, map_size - border))
+            if all((cx - px) ** 2 + (cy - py) ** 2 >= min_sep ** 2 for px, py in placed):
                 garrison = int(rng.integers(1, 6))
                 level.append((C.OWNER_NEUTRAL, cx, cy, garrison, C.TYPE_BASIC))
                 placed.append((cx, cy))
                 break
-        # If we fail to place this neutral, skip it — caller gets a level
-        # with fewer buildings than requested, which is still valid.
-
     return level
+
+
+def generate_asymmetric_level(n_buildings: int, rng: np.random.Generator) -> list:
+    """Asymmetric random level on the standard 700-unit map. P1 left, P2 right.
+    Distances, counts of nearby neutrals, and geometry are independent."""
+    return _generate_asymmetric_level_param(
+        n_buildings, rng,
+        map_size=_MAP_SIZE, border=_BORDER, min_sep=_MIN_SEP,
+    )
+
+
+def generate_asymmetric_close_level(n_buildings: int, rng: np.random.Generator) -> list:
+    """Asymmetric (no-mirror) random level on the 350-unit close map.
+    Same packing rules as random_close — tighter borders + min_sep — but
+    bases are not mirror-paired and neutrals scatter freely."""
+    return _generate_asymmetric_level_param(
+        n_buildings, rng,
+        map_size=_CLOSE_MAP_SIZE, border=_CLOSE_BORDER, min_sep=_CLOSE_MIN_SEP,
+    )
 
 
 def _shuffle_level_slots(level: list, rng: np.random.Generator) -> list:
@@ -259,6 +278,15 @@ def _resolve_level(level_name: str, seed: int | None) -> list:
         rng = np.random.default_rng(seed)
         n = int(rng.integers(n_min, n_max + 1))
         return generate_random_level(n, rng)
+    # Match `asym_close_*` BEFORE `asym_*` (substring overlap).
+    m = _ASYM_CLOSE_RE.match(level_name)
+    if m:
+        n_min, n_max = int(m.group(1)), int(m.group(2))
+        if not (2 <= n_min <= n_max <= C.MAX_BUILDING_SLOTS):
+            raise ValueError(f"asym_close level bounds out of range: {level_name!r}")
+        rng = np.random.default_rng(seed)
+        n = int(rng.integers(n_min, n_max + 1))
+        return generate_asymmetric_close_level(n, rng)
     m = _ASYM_RE.match(level_name)
     if m:
         n_min, n_max = int(m.group(1)), int(m.group(2))
