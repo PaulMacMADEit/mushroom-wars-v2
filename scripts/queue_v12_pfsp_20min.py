@@ -51,14 +51,18 @@ def main() -> None:
     ap.add_argument("parent_run_id")
     ap.add_argument("--minutes", type=int, default=20,
                     help="training budget in minutes (default 20)")
+    ap.add_argument("--level",   type=str, default="random_close_4_6",
+                    help="level name (e.g. random_close_4_6, random_6_8, random_4_8). "
+                         "Sim cap is MAX_BUILDING_SLOTS=8.")
     args = ap.parse_args()
     parent = args.parent_run_id.strip()
     minutes = max(1, int(args.minutes))
+    level   = args.level.strip()
 
     cfg = load()
     base_hp = dict(cfg.baseline_hyperparams)
 
-    base_hp["level_name"] = "random_close_4_6"
+    base_hp["level_name"] = level
     base_hp["level_mix"]  = None
 
     with connect() as conn, conn.cursor() as cur:
@@ -81,10 +85,10 @@ def main() -> None:
     base_hp["replay_per_update"]      = True
     base_hp["replay_games_per_update"] = 3
 
-    label = f"v12.0.selfplay-from-{parent[:8]}-{minutes}min"
-    desc  = (f"Pure v12 self-play continuation of {parent}: {minutes} min, "
+    label = f"v12.0.selfplay-from-{parent[:8]}-{level}-{minutes}min"
+    desc  = (f"Pure v12 self-play continuation of {parent}: {minutes} min on {level}, "
              f"rotate-per-update against v12 champion archive (recency-biased), "
-             f"no random_legal, random_close_4_6, replays on. v1.6 rewards.")
+             f"no random_legal, replays on. v1.6 rewards.")
     budget_ms = minutes * 60 * 1000
     launch_at = int(time.time() * 1000)
 
@@ -115,7 +119,7 @@ def main() -> None:
     print(f"queued self-play run {rid[:8]}  {label}")
     print(f"  parent:        {parent}")
     print(f"  budget:        {minutes} min")
-    print(f"  level:         random_close_4_6")
+    print(f"  level:         {level}")
     print(f"  pool mode:     rotate_per_update")
     print(f"  pool source:   pfsp")
     print(f"  initial opp:   {opp_kwargs.get('opponent_run_id', '')[:8]}")
