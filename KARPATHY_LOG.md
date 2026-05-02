@@ -4287,6 +4287,44 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### 2026-05-02 16:16 PT — BATCH 4 wrap (entropy_coef warm — HYPOTHESIS INVERTED) + BATCH 5 (gamma warm).
+
+**Batch 4 results** (warm from `c09627a5` 89.2% peak):
+
+| cell | entropy_coef | wr | to | ep_len |
+|---|---|---|---|---|
+| lo | 0.003 (less exploration) | 83.8% | 16% | 27.1 |
+| mid | 0.01 (current control) | **76.6%** | 23% | 28.7 |
+| **hi** | **0.03 (more exploration)** | **88.6%** | 11% | 38.6 |
+
+🎯 **Hypothesis INVERTED.** Predicted: more exploration over-randomizes a strong policy → drop. Actual: more exploration WINS at 88.6%, the highest result across all warm-start chains so far. Decision rule wanted ≥92% to switch baseline; 88.6% misses that, but the directional signal is sharp.
+
+**Why might high entropy help warm-start:** the warm-start policy is "narrow" — it has a learned strategy but might be stuck in a local optimum. Higher entropy noise lets PPO explore around that local optimum and find slightly better trajectories. Lower entropy doubles down on existing strategy → no improvement.
+
+The `mid` control cell at 76.6% is alarmingly low (same hyperparams as parent, dropped 13pp). Confirms the high inter-cell variance. Two cells at ostensibly the same setting (this mid + Batch 3 v1.7-hi) gave 76.6% and 86.3% respectively. Variance is ±5pp typical, ±13pp possible.
+
+**New strongest agent:** `6b21f7ee` (entropy_coef-hi, 88.6%, ec=0.03).
+
+### BATCH 5 — gamma warm (last untested-with-warm priority axis)
+
+Closing out the parameter sweep priorities. Tests overnight's "low γ starves terminal signal" hypothesis under warm-start (overnight fresh-init disproved BRACKET UP from 0.99).
+
+Warm from `6b21f7ee` (entropy-hi, 88.6%, ec=0.03 ✅ keeps winning entropy).
+
+| cell | gamma | hypothesis | falsifier |
+|---|---|---|---|
+| `gamma-lo` (1f0cb141) | 0.99 (current) | parity baseline | benchmark ~88% |
+| `gamma-mid` (350cbb0e) | 0.995 | very mild bump up — barely affects 80-tick discount | within ±2pp of lo |
+| `gamma-hi` (d5fe15f1) | 0.999 | terminal-only + near-undiscounted = strongest "outcome" pressure | wr ≥ 92% → high γ helps |
+
+Decision: any cell ≥ 92% → switch γ baseline. Otherwise γ confirmed dead (matches overnight fresh-init result). All within 2pp → priority #3 closed out.
+
+After Batch 5 runs, all 5 wired sweep axes (priority #2/#3/#4/#5/#6/#7) will have been tested with warm-start. Time to consider bigger levers (architecture, longer training, or replicate-the-best-cell to confirm signal).
+
+Queued.
+
+---
+
 ### 2026-05-02 15:34 PT — BATCH 3 wrap (reward A/B/C warm) + plateau finding + BATCH 4 (entropy_coef warm).
 
 **Batch 3 results** (warm from `c09627a5` K=2 89.2%):
