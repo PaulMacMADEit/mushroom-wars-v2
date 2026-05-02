@@ -609,7 +609,7 @@
       // so old runs (pre-2026-04-29) render the empty-state cleanly.
       renderEvalMatches(points);
       renderTrainingOpp(points);
-      renderWinRateProgression(points, run ?? {});
+      renderWinRateProgression(points, run ?? {}).catch(e => console.warn('[wrp]', e));
       renderLevelMix(points);
       renderRotationRematch(run ?? {});
     }
@@ -1174,6 +1174,26 @@
       `;
     }
 
+    // Champion id-shortprefix → human-readable label. Loaded once per page;
+    // used to translate `champion:XXXXXXXX` opponent labels in the
+    // training-rollout table into something readable like
+    // `v12.0.01-Bootstrap-entropy_coef-lo`.
+    let _champLookup = null;
+    async function loadChampLookup() {
+      if (_champLookup) return _champLookup;
+      const map = {};
+      try {
+        const { data, error } = await sb.from('champions').select('id, label');
+        if (error || !data) return (_champLookup = map);
+        for (const c of data) {
+          const idShort = String(c.id).slice(0, 8);
+          if (idShort && c.label) map[idShort] = c.label;
+        }
+      } catch (_) { /* lookup is best-effort */ }
+      _champLookup = map;
+      return map;
+    }
+
     /** Win rate progression in 10% buckets across the run.
      * Buckets are pinned to budget wall-clock, NOT to the current point count —
      * so the first bucket is always "first 10% of the budgeted run", and old
@@ -1185,13 +1205,27 @@
      *      training_opp_label so opponent swaps mid-run are visible.
      *   2. Eval-matches (A): per-opponent eval win rate per bucket, sorted by
      *      Elo. Sparse — only the buckets that contained eval updates light up. */
-    function renderWinRateProgression(points, run) {
+    async function renderWinRateProgression(points, run) {
       const $card = document.getElementById('win-rate-progression');
       if (!$card) return;
       if (!points || !points.length) {
         $card.innerHTML = '<div class="muted">no metrics yet.</div>';
         return;
       }
+
+      // Champion id → label, cached. Used to render readable opponent rows
+      // ("v12.0.01-Bootstrap-entropy_coef-lo") instead of raw 8-char IDs.
+      const champMap = await loadChampLookup();
+      const labelForOpp = (rawLabel) => {
+        // rawLabel is "champion:XXXXXXXX" or a non-champion fallback like
+        // "random_legal" / "self_play:pool_3" / "neural:?".
+        if (typeof rawLabel !== 'string') return String(rawLabel);
+        if (rawLabel.startsWith('champion:')) {
+          const idShort = rawLabel.slice('champion:'.length, 'champion:'.length + 8);
+          return champMap[idShort] || rawLabel;  // fallback to id when unknown
+        }
+        return rawLabel;
+      };
 
       const N_BUCKETS = 10;
       const total = points.length;
@@ -1291,7 +1325,9 @@
                   const wr = s.wins / s.n;
                   return `<td style="text-align:center; background:${cellColor(wr)};">${fmtRate(wr, Math.round(s.n))}</td>`;
                 }).join('');
-                return `<tr><td><span class="mono">${esc(opp)}</span></td>${cells}</tr>`;
+                const display = labelForOpp(opp);
+                const titleAttr = (display !== opp) ? ` title="${esc(opp)}"` : '';
+                return `<tr><td${titleAttr}><span class="mono">${esc(display)}</span></td>${cells}</tr>`;
               }).join('')}
             </tbody>
           </table>
@@ -1818,7 +1854,22 @@
         $meta.textContent = `${data.duration_ticks} ticks · winner ${data.winner ?? '—'} · ${data.events.length} events · ${data.level_name}`;
         if (autoplay !== false) player.play();
         $play.textContent = '⏸';
-        player.onStateChange((p) => { $play.textContent = p.playing ? '⏸' : '▶'; });
+        player.onStateChange((p) => {
+          $play.textContent = p.playing ? '⏸' : '▶';
+          // Auto-advance to the next replay when this one finishes naturally
+          // (game ended, t == duration). 400ms pause gives the user a moment
+          // to see the final state before flipping. Doesn't fire on manual
+          // pause (because then t < duration).
+          if (!p.playing && p.t >= p.duration && idx < pairs.length - 1) {
+            setTimeout(() => {
+              // Re-check we still want to advance — user might have clicked
+              // somewhere or paused in the interim.
+              if (player && !player.playing && player.t >= player.duration) {
+                loadIndex(idx + 1, true);
+              }
+            }, 400);
+          }
+        });
       }
 
       const nav = (i) => { userPinnedToLatest = false; loadIndex(i, true); };
