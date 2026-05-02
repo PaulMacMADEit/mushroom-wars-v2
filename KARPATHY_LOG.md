@@ -4287,6 +4287,20 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### 2026-05-02 12:36 PT — MODE CHANGE 2: warm-start every cell. No more fresh-init random nets per Paul's request.
+
+**Why:** every fresh-init cell wastes ~10 min relearning what the latest champion already knows. Warm-starting from a strong recent run lets each cell START at ~80% win rate and TEST the variable's effect on top of that, not the variable's effect on a noisy random init.
+
+**Picked warm-start parent:** `f342c557` (`v12.0.20-Bootstrap-rollout_steps-lo`, **83.6% wr**, the strongest recent finished run). Champion-archive id `1b82fc52`. Worker loads its `weights.pt` at run start (the chain helper path that was already used by `scripts/chain_*.sh`).
+
+**Going forward:** every batch's 3 cells warm-start from the SAME parent so the comparison stays apples-to-apples. After each batch wrap-up, we pick the best cell's run_id as the parent for the next batch.
+
+**Immediate action:** cancelled queued (fresh) `level_mix-hi`. Queued 3 warm-started cells `v12.0.23-Bootstrap-level_mix-{lo,mid,hi}` from `f342c557`. They run after the still-running fresh-init `v12.0.22-Bootstrap-level_mix-mid` (let it finish for fresh-vs-warm comparison).
+
+**Lo from Batch 1 (fresh-init, 76.7%) becomes a useful baseline:** if the warm-started Batch 1B `level_mix-lo'` lands at ~80%+ on the same close-only distribution, that's quantitative evidence for the warm-start premium (= roughly 4–6pp lift per 10-min cell).
+
+---
+
 ### 2026-05-02 11:58 PT — MODE CHANGE: hypothesis-driven batches of 3, mid-run peeks, early abort on signal.
 
 Paul switched from auto-cycling sweep_axes to explicit batches with stated hypothesis + decision rule per cell + mid-run peek at 25% (~2.5 min). `mushroom-karp.timer` stopped on PaulLinux. Queue cleared. Single GPU constraint = sequential cells, but each one is peek-and-decide.
