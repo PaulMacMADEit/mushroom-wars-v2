@@ -13,6 +13,8 @@ const PALETTE = {
   value_loss:         '#60a5fa',  // blue
   entropy_loss:       '#34d399',  // green
   approx_kl:          '#fbbf24',  // amber
+  kl_ema:             '#f59e0b',  // amber-darker (smoothed KL)
+  lr:                 '#22d3ee',  // cyan (right axis)
   mean_reward:        '#c084fc',  // purple
   win_rate:                '#10b981',  // green (W of WDL — secondary, vs training opponent)
   draw_rate:               '#9ca3af',  // gray  (D of WDL — turtling / mutual stall)

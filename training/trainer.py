@@ -77,6 +77,26 @@ class PPOConfig:
     # Rationale: in a self-play loop, newer champions are usually stronger;
     # facing them most often gives the highest training signal.
     leaderboard_recency_decay: float = 0.5
+
+    # ---- KL early-stopping + KL-adaptive lr (PPO stability) ---------------
+    # Without these, an unlucky update can blow up the policy in a regime
+    # where the clip alone isn't enough — see 843d5a0a's collapse around
+    # update 100 (win rate held 90%+ for 95 updates → dropped to 4-20%).
+    # target_kl: typical PPO default; how far we expect the policy to move per update.
+    target_kl:           float = 0.01
+    # kl_early_stop: bail on the inner-loop epochs early if the running mean
+    # KL exceeds target_kl × kl_early_stop_mult. Saves compute on bad updates.
+    kl_early_stop:       bool  = True
+    kl_early_stop_mult:  float = 1.5
+    # kl_adaptive_lr: track an EMA of approx_kl across updates and rescale
+    # the optimizer's lr each update — high KL trend → cool down, low KL
+    # trend → warm up (capped at kl_lr_max_mult × base lr).
+    kl_adaptive_lr:      bool  = True
+    kl_ema_alpha:        float = 0.1     # EMA: ema = (1-α)·ema + α·kl
+    kl_lr_decay:         float = 0.7     # mul on lr when KL too high
+    kl_lr_warmup:        float = 1.05    # mul on lr when KL too low
+    kl_lr_min:           float = 3e-5    # absolute floor
+    kl_lr_max_mult:      float = 3.0     # cap relative to base lr
     # Level
     # Static name (e.g. "crossroads_6") or dynamic "random_<min>_<max>".
     # Dynamic levels regenerate per reset so training sees varied geometry.
@@ -184,6 +204,12 @@ class PPOTrainer:
         # _capture_replay() after each PPO update when cfg.replay_per_update
         # is on. Worker drains this at end of run via get_replays().
         self._replay_buffer: list[dict] = []
+
+        # KL-adaptive lr state. Tracks an EMA of approx_kl across updates and
+        # rescales the optimizer's lr each step. Initialised to the target so
+        # the first update's adaptation is neutral.
+        self._base_lr = float(self.cfg.lr)
+        self._kl_ema  = float(self.cfg.target_kl)
 
         # Cumulative wall-time spent in each high-level phase. Surfaced via
         # sim_phase_breakdown() so the run result JSON can record where
@@ -600,7 +626,11 @@ class PPOTrainer:
         pol_losses, val_losses, ent_losses, approx_kls, clip_fracs, grad_norms = [], [], [], [], [], []
         idx = np.arange(B)
         mb_size = min(self.cfg.minibatch_size, B)
+        early_stop_kl = self.cfg.target_kl * self.cfg.kl_early_stop_mult
+        kl_early_stopped = False
         for _ in range(self.cfg.update_epochs):
+            if kl_early_stopped:
+                break
             np.random.shuffle(idx)
             for start in range(0, B, mb_size):
                 mb = idx[start : start + mb_size]
@@ -638,6 +668,14 @@ class PPOTrainer:
                 clip_fracs.append(clip_frac)
                 grad_norms.append(float(gn))
 
+                # KL early-stop: if running mean kl across this update so
+                # far exceeds target × early_stop_mult, bail on remaining
+                # minibatches + epochs. Saves compute on bad updates.
+                if self.cfg.kl_early_stop:
+                    if float(np.mean(approx_kls)) > early_stop_kl:
+                        kl_early_stopped = True
+                        break
+
         # Critic honesty: 1 - Var[returns - values] / Var[returns].
         # Computed once per update from the rollout's pre-update predictions
         # vs the GAE returns. ~1.0 = perfect critic; ~0 = no better than mean;
@@ -647,11 +685,31 @@ class PPOTrainer:
         ret_var = float(ret_arr.var())
         ev = float(1.0 - ((ret_arr - val_arr).var() / ret_var)) if ret_var > 1e-12 else 0.0
 
+        # KL-adaptive lr: update an EMA of approx_kl, scale the optimizer's
+        # lr based on whether the trend is too high (cool down) or too low
+        # (warm up). Logged so the dashboard chart can show the lr curve.
+        kl_mean = float(np.mean(approx_kls)) if approx_kls else float(self.cfg.target_kl)
+        self._kl_ema = (1.0 - self.cfg.kl_ema_alpha) * self._kl_ema + self.cfg.kl_ema_alpha * kl_mean
+        if self.cfg.kl_adaptive_lr:
+            cur_lr = float(self.optimizer.param_groups[0]["lr"])
+            target = float(self.cfg.target_kl)
+            if self._kl_ema > target * 1.5:
+                cur_lr *= float(self.cfg.kl_lr_decay)
+            elif self._kl_ema < target * 0.5:
+                cur_lr *= float(self.cfg.kl_lr_warmup)
+            cur_lr = max(float(self.cfg.kl_lr_min),
+                         min(self._base_lr * float(self.cfg.kl_lr_max_mult), cur_lr))
+            for g in self.optimizer.param_groups:
+                g["lr"] = cur_lr
+
         metrics = {
             "policy_loss":        float(np.mean(pol_losses)),
             "value_loss":         float(np.mean(val_losses)),
             "entropy_loss":       float(np.mean(ent_losses)),
             "approx_kl":          float(np.mean(approx_kls)),
+            "kl_ema":             float(self._kl_ema),
+            "kl_early_stopped":   bool(kl_early_stopped),
+            "lr":                 float(self.optimizer.param_groups[0]["lr"]),
             "clip_fraction":      float(np.mean(clip_fracs)),
             "grad_norm":          float(np.mean(grad_norms)),
             "explained_variance": ev,

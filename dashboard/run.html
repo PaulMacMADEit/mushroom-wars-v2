@@ -304,6 +304,9 @@
           <div class="stat-label">PPO stability (clip fraction high = step too large; grad norm spikes = instability)</div>
           <div style="position:relative; height:220px;"><canvas id="chart-stability"></canvas></div>
           <div style="height:12px;"></div>
+          <div class="stat-label">KL-adaptive lr — kl_ema vs target (left axis), live lr (right axis). Adaptive cuts lr when KL trends high → stops collapse.</div>
+          <div style="position:relative; height:200px;"><canvas id="chart-kl-lr"></canvas></div>
+          <div style="height:12px;"></div>
           <div class="stat-label">explained variance (1 = perfect critic; 0 = no better than mean; &lt;0 = worse than mean)</div>
           <div style="position:relative; height:200px;"><canvas id="chart-ev"></canvas></div>
         </div>
@@ -425,7 +428,7 @@
       // Fetch metrics.json + render charts. Any failure is surfaced
       // visibly — a silently-blank canvas is the worst UX.
       const chartIds = ['chart-win', 'chart-loss', 'chart-signal',
-                        'chart-stability', 'chart-ev', 'chart-bands',
+                        'chart-stability', 'chart-kl-lr', 'chart-ev', 'chart-bands',
                         'chart-eps', 'chart-pool'];
 
       function failAllCharts(text) {
@@ -558,6 +561,14 @@
                   { yLabel: 'value' });
       } else {
         replaceCanvasWith('chart-stability', 'no clip/grad data — older run', false);
+      }
+      const hasKlLr = points.some(p => p.kl_ema != null || p.lr != null);
+      if (hasKlLr) {
+        renderOne('chart-kl-lr', ['kl_ema', 'approx_kl'],
+                  { yLabel: 'KL', secondaryKeys: ['lr'],
+                    secondaryYLabel: 'lr', secondaryYMin: 0 });
+      } else {
+        replaceCanvasWith('chart-kl-lr', 'no KL/lr data — pre-2026-05-01 run', false);
       }
       const hasEv = points.some(p => p.explained_variance != null);
       if (hasEv) {
