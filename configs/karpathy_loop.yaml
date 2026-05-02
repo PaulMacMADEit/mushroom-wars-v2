@@ -262,6 +262,25 @@ sweep_axes:
       - { label: "mid", value: 0.01  }
       - { label: "hi",  value: 0.03  }
 
+  # 2026-05-02 (PT): same-level stability (Paul's priority #4). Tests whether
+  # curriculum jitter (mixed maps) is starving learning. lo = close-only,
+  # mid = current mix (control), hi = ranged-only. PPOConfig.level_mix accepts
+  # dict {name: weight}; trainer.py:326-334 normalises to list-of-tuples.
+  - axis: "level_mix"
+    cells:
+      - { label: "lo",  value: { random_close_4_8: 1.0 } }
+      - { label: "mid", value: { random_close_4_8: 1.0, random_4_8: 1.0 } }
+      - { label: "hi",  value: { random_4_8: 1.0 } }
+
+  # 2026-05-02 (PT): action_repeat (Paul's priority #7). K=ticks-per-decision
+  # under fused rollout. lo=1 finer control, mid=2 (current baseline), hi=4
+  # faster sims but coarser action timing.
+  - axis: "action_repeat"
+    cells:
+      - { label: "lo",  value: 1 }
+      - { label: "mid", value: 2 }
+      - { label: "hi",  value: 4 }
+
 # Parked axes — definitions preserved but excluded from round-robin tonight.
 # `lr` is parked because KL-adaptive controller now self-tunes within each
 # cell; sweeping a flat lr would fight the controller.
