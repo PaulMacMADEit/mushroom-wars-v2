@@ -4287,6 +4287,27 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### 2026-05-02 11:52 PT — Wake 2: b9 self-destructed, rs=16 actually fine post-restart, minibatch sweep running.
+
+Two notable plot twists since wake 1:
+
+**1. B9 backlog self-destructed in 5 seconds.** All 5 b9 runs failed at startup with `ValueError: model row 'v10.1' specifies obs=1008, actions=4097; code expects obs=192, actions=129. Did the encoder/action space change without a new model id?` — they were targeting the legacy `v10.1` model, incompatible with v12 sim. Dead runs from a stale script (presumably forgotten). Karp throughput is no longer throttled — back to original ~3 cycles in 10h plan.
+
+**2. `rollout_steps-hi` (rs=16) is fine.** Overnight cycle showed it crashing to 44.4% (catastrophic). Post-restart cycle: 72.6% wr / 27.4% timeout — solid. Sampled replays show clean learning progression (early P2 wins → late P1 wins in 7 sends). The overnight disaster was almost certainly the long-running daemon's memory pressure (18.3 GB resident at restart), NOT a real rs=16 signal.
+
+| run | rs | wall | wr | timeout | replays |
+|---|---|---|---|---|---|
+| v12.0.20-Bootstrap-rollout_steps-hi (post-restart) | 16 | 671s | 72.6% | 27.4% | 56 |
+| (overnight v12.0.05-Bootstrap-rollout_steps-hi for comparison) | 16 | — | 44.4% | 55.6% | 0 |
+
+**Implication: don't trust the overnight rs=16 finding.** The "rollout_steps=16 catastrophic" entry in the 10:01 PT summary is now SUSPECT. The real lesson is "long-running worker daemons may degrade after 12+ hours of training; restart periodically." Worker is now fresh.
+
+**Backstop status:** queued `minibatch_size` axis at 11:30 (round-robin from rollout_steps). minibatch_size-lo done (80.6%), -mid running, -hi queued.
+
+Wake 3 in ~30 min — catches minibatch_size full sweep + verifies entropy_coef queues next.
+
+---
+
 ### 2026-05-02 11:14 PT — Wake 1 of 10h karp loop: replays validated, rotation_rematch fix confirmed, b9 backlog noted.
 
 Worker restarted at 10:40:58 PT picking up commits `278cbde` (rematch fix), `cc9a298` (replay defaults on), `39602b7` (level_mix + action_repeat axes wired). Backstop fired 10:45 → queued `rollout_steps` axis as next round-robin step.
