@@ -4287,6 +4287,36 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### 2026-05-02 14:14 PT — BATCH 1+1B wrap-up: level_mix done. Specialist hypothesis dead. Ranged is strongest (surprise). Warm-start premium real.
+
+| variable | fresh-init | warm from f342c557 (83.6%) | premium |
+|---|---|---|---|
+| close-only | 76.7% | 81.8% | +5.1pp |
+| **mixed (current)** | 72.6% | **85.0%** | **+12.4pp** |
+| ranged-only | 85.8% | **86.9%** | +1.1pp |
+
+Hypothesis verdicts:
+- ❌ Specialist effect: close-only NOT > mixed in either regime. Falsified.
+- ❌ **Priority #4 ("mixed curriculum starves learning") DEAD.** Warm `mid` (85.0%) within 2pp of best (warm hi 86.9%) → falsifier hit. Mixing is fine.
+- ⭐ **Surprise:** ranged-only is the STRONGEST in both regimes — counter to my prior. Possible reasons: (a) ranged genuinely easier (more time between threats / fewer simultaneous decisions), (b) PFSP opponents specifically weak on ranged maps (trained mostly on mix). Worth a follow-up batch.
+- ✅ Warm-start premium real, +1 to +12pp range. Default warm-start is correct.
+
+### BATCH 2 — action_repeat (priority #7, untested)
+
+Warm parent: `8bf21abf` (warm `level_mix-mid`, 85.0% wr, mixed distribution — strongest general agent).
+
+| cell | K | hypothesis | expected | falsifier |
+|---|---|---|---|---|
+| `action_repeat-lo` (b5a4d452) | 1 (finer) | finer control wins tactical edges; slower rollout | 84–87% | wr ≥ 90% → finer K beats baseline |
+| `action_repeat-mid` (c09627a5) | 2 (current) | parity with parent | 84–86% | benchmark |
+| `action_repeat-hi` (4877a599) | 4 (coarser) | faster sims = more PPO updates per cell, but agent reacts slower | 80–88% | wr ≥ 90% → more updates beats reaction loss |
+
+Decision: any cell ≥ 90% → switch baseline to that K. All within 3pp of 85% → kill priority #7.
+
+Queued. Worker picks up `action_repeat-lo` next.
+
+---
+
 ### 2026-05-02 12:36 PT — MODE CHANGE 2: warm-start every cell. No more fresh-init random nets per Paul's request.
 
 **Why:** every fresh-init cell wastes ~10 min relearning what the latest champion already knows. Warm-starting from a strong recent run lets each cell START at ~80% win rate and TEST the variable's effect on top of that, not the variable's effect on a noisy random init.
