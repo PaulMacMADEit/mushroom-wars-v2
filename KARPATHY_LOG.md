@@ -4287,6 +4287,45 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### 2026-05-02 16:58 PT — BATCH 5 wrap (gamma warm — γ=0.995 NEW BEST) + BATCH 6 (stack winners).
+
+**Batch 5 results** (warm from `6b21f7ee` entropy-hi 88.6%, ec=0.03):
+
+| cell | gamma | wr | to | ep_len |
+|---|---|---|---|---|
+| lo | 0.99 (current) | 83.7% | 16% | 30.8 |
+| **mid** | **0.995** | **90.8%** | **9%** | 28.3 |
+| hi | 0.999 | 86.2% | 14% | 30.3 |
+
+🚀 **γ=0.995 = new best at 90.8%.** Surprise — overnight FRESH-init disproved bracket UP from 0.99 (0.999 was worse), but warm-start REVERSES the verdict at the +0.005 step. Sweet spot. γ=0.999 still too high (similar to overnight finding).
+
+**Two breakthrough knobs now identified:**
+- Batch 4: entropy_coef 0.01 → 0.03 broke plateau at 88.6%
+- Batch 5: gamma 0.99 → 0.995 broke plateau at 90.8%
+
+Both are warm-start-specific findings. Both knobs make moves slightly less greedy and value functions slightly less short-sighted — directionally consistent (less greedy on action AND on horizon).
+
+### BATCH 6 — STACK WINNERS (entropy varied @ γ=0.995)
+
+Question: **do both knobs help independently, or does gamma dominate?**
+
+Warm parent: `350cbb0e` (gamma-mid 90.8%; already has γ=0.995 + ec=0.03 weights).
+
+| cell | ec | γ | hypothesis |
+|---|---|---|---|
+| lo (997eabda) | 0.003 | 0.995 | low-entropy + good γ — entropy effect should drop here |
+| mid (35871ef3) | 0.01 | 0.995 | gamma alone (no entropy boost) |
+| **hi (b7722263)** | **0.03** | **0.995** | **STACKED: both winners** |
+
+Falsifier:
+- hi ≥ 92% → both signals real, additive → new baseline = ec=0.03, γ=0.995
+- hi ≈ 88% (matches Batch 4 hi) → gamma dominates, entropy was variance
+- hi ≤ 86% → both were variance, plateau is real (and we should pivot to bigger levers)
+
+Queued.
+
+---
+
 ### 2026-05-02 16:16 PT — BATCH 4 wrap (entropy_coef warm — HYPOTHESIS INVERTED) + BATCH 5 (gamma warm).
 
 **Batch 4 results** (warm from `c09627a5` 89.2% peak):
