@@ -54,10 +54,13 @@ def main() -> None:
     ap.add_argument("--level",   type=str, default="random_close_4_6",
                     help="level name (e.g. random_close_4_6, random_6_8, random_4_8). "
                          "Sim cap is MAX_BUILDING_SLOTS=8.")
+    ap.add_argument("--lr",      type=float, default=None,
+                    help="override learning rate (default: karp config baseline, currently 3e-3)")
     args = ap.parse_args()
     parent = args.parent_run_id.strip()
     minutes = max(1, int(args.minutes))
     level   = args.level.strip()
+    lr      = args.lr
 
     cfg = load()
     base_hp = dict(cfg.baseline_hyperparams)
@@ -84,6 +87,9 @@ def main() -> None:
     base_hp["archive_eval_min_pool"] = 999_999_999
     base_hp["replay_per_update"]      = True
     base_hp["replay_games_per_update"] = 3
+
+    if lr is not None:
+        base_hp["lr"] = float(lr)
 
     label = f"v12.0.selfplay-from-{parent[:8]}-{level}-{minutes}min"
     desc  = (f"Pure v12 self-play continuation of {parent}: {minutes} min on {level}, "
@@ -124,6 +130,7 @@ def main() -> None:
     print(f"  pool source:   pfsp")
     print(f"  initial opp:   {opp_kwargs.get('opponent_run_id', '')[:8]}")
     print(f"  reward:        v1.6 (LOSE -7.5, DRAW -1.25)")
+    print(f"  lr:            {base_hp.get('lr')}")
     print(f"  replays:       ON")
 
 
