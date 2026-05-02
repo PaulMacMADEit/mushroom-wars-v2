@@ -141,6 +141,15 @@ baseline_hyperparams:
   normalize_obs:  true             # Welford running mean/std on obs
   obs_clip:       10.0             # clip normalized obs at ±this; null disables
 
+  # ----- Replay capture (training-time game recordings) -----
+  # 2026-05-02 (PT): on by default per Paul. Each PPO update captures N
+  # full games with the current policy on a numpy env (P1=current, P2=
+  # random_legal). Stored in trainer._replay_buffer; worker uploads as
+  # logs/{rid}/replays/upd_NNNN_gN.json. Cost: ~1.5 MB raw / ~400 KB gz
+  # per 30-min run @ 2 games/update. ~50–200ms per game wall overhead.
+  replay_per_update:        true
+  replay_games_per_update:  2
+
   # ----- Self-play (mutually exclusive with sim_backend=jax + fused) -----
   self_play:        false
   snapshot_every:   10             # update count between pool snapshots

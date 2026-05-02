@@ -86,7 +86,7 @@ def main() -> None:
     base_hp["archive_eval_every"]    = 999_999_999
     base_hp["archive_eval_min_pool"] = 999_999_999
     base_hp["replay_per_update"]      = True
-    base_hp["replay_games_per_update"] = 3
+    base_hp["replay_games_per_update"] = 2
 
     if lr is not None:
         base_hp["lr"] = float(lr)

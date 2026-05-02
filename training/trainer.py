@@ -151,10 +151,12 @@ class PPOConfig:
     # defined by sim/envs/replay.py:Recorder. Buffered in memory; the
     # worker uploads them as artifacts at end of training.
     # Cost: ~50-200ms per game on small maps; ~1-5% wall-time overhead per game.
-    replay_per_update:        bool = False
+    replay_per_update:        bool = True
     # How many games to capture per PPO update. Each game uses a different
     # seed so map layouts vary. Files saved as upd_NNNN_gN.json.
-    replay_games_per_update:  int  = 1
+    # 2026-05-02: bumped default 1→2 per Paul; size cost ~1.5 MB raw /
+    # ~400 KB gzipped per 30-min run (130 updates × 2 games × ~6 KB).
+    replay_games_per_update:  int  = 2
     # Random seed offset for replay capture so the same training run can
     # produce reproducible but varied replays.
     replay_seed_offset:       int  = 1_000_003
