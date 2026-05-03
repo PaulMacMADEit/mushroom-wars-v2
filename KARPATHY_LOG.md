@@ -35,6 +35,57 @@
 
 **Next fire:** 2026-05-03 00:41 PT (cell lo expected ~70% complete by then).
 
+### Fire 2 — 2026-05-03 10:08 PT — post-mortem fire 1, level_mix sweep
+
+**🔴 Loop instability:** fire 1 → fire 2 was 9h53m, not 30 min. ScheduleWakeup chain dropped. Resumed manually via Paul's prompt at 10:05 PT. Backstop systemd timer still **inactive** — re-arming after fire 3 if continuation-correctness holds.
+
+**Fire 1 post-mortem — predicted vs actual:**
+
+| cell | gamma | predicted final_wr | actual training rate | actual final_wr (last upd) | predicted Elo Δ | actual Elo Δ | match? | why diverged |
+|---|---|---|---|---|---|---|---|---|
+| lo | 0.99 | 50–58% | **87.0%** | **90.7%** | +20 to +60 | **−98 (1038)** | training_rate ❌ way over, Elo ❌ way under | wr prediction anchored on "vs strong PFSP archive" but training opponents drawn from broader-and-weaker rotation than predicted; bench archive grew 15+ champions Apr 30→May 3 → Elo deflated (same skill scores lower vs richer field) |
+| mid | 0.995 | 50–58% | TBC (need pull) | TBC | +0 to +50 | **−27 (1109)** | partial | same archive-drift cause; gamma=0.995 added small horizon credit but bench drift dominated |
+| hi | 0.999 | 45–58% | TBC | TBC | −30 to +60 | **−54 (1082)** | partial | gamma=0.999 may have broken value targets briefly but training stabilized; bench drift again |
+
+**Root cause (high-confidence):** **Bench-eval Elo is not comparable across time** because the champion archive grows. Same agent skill against a stronger field scores lower. Need fixed-anchor metric (e.g. fixed bench-set of 5 specific champion ids) or directly use `result.rate` / `result.final_metrics.win_rate` for trend analysis.
+
+**3-game gut check on `v12.1.01-Continue-gamma-lo` (replay sample from logs Storage):**
+
+| upd | game | winner | duration | events | sends | captures | note |
+|---|---|---|---|---|---|---|---|
+| 0001 | g0 | P1 ✅ | ~30 ticks | 54 | 24 | 6 | high-volume opening; healthy aggression |
+| 0040 | g0 | P1 ✅ | ~15 ticks | 24 | 10 | 3 | very fast win — easy matchup or strong play |
+| 0082 | g0 | P1 ✅ | ~120 ticks | 144 | 67 | 10 | long decisive game; no stuck loops |
+
+Anomaly: all 3 sampled were P1 wins. Couldn't isolate a loss replay (didn't filter by `winner=2`). Fire 3 will sample 3 with explicit win/loss/mid filter. No noop spam visible in any sample. send=100 + send=50 split present.
+
+### Fire 2 queue — level_mix sweep, warm-start v12.0.23
+
+**Parent:** unchanged — `v12.0.23-Bootstrap-level_mix-mid` (Elo 1136, but training-rate baseline ~85–88% for control comparison). Warm-start mechanism confirmed working (gamma-lo had identical hp to parent, training rate 87% — agent IS learning, regression was archive-drift).
+
+**Pivot:** from hyperparam (gamma) to curriculum (level_mix) per fire 1's falsification rule. Tests whether different map distributions move the needle more than discount-factor tuning.
+
+**Cells queued:**
+- `v12.1.02-Continue-level_mix-lo` (`{random_close_4_8: 1.0}`) — id `4db92998` — close-only
+- `v12.1.02-Continue-level_mix-mid` (`{random_close_4_8: 1.0, random_4_8: 1.0}`) — id `491f3e8e` — control (matches parent)
+- `v12.1.02-Continue-level_mix-hi` (`{random_4_8: 1.0}`) — id `9e11181a` — full-only
+
+**Hypothesis + prediction (per cell, BEFORE results):**
+
+| cell | level_mix | hypothesis | predicted training rate | predicted KL | predicted Elo Δ vs 1136 |
+|---|---|---|---|---|---|
+| lo | close-only | narrower distribution → faster convergence → higher in-distribution rate; bench cross-map will hurt | 90–95% | 0.005–0.020 | −50 to +30 (Elo 1086–1166) |
+| mid | mix (control) | matches parent; control for "does continuation alone help?" | 85–92% | 0.010–0.030 | −30 to +30 (Elo 1106–1166) |
+| hi | full-only | broader 700×700 maps, harder to dominate end-to-end → lower in-dist rate, stronger generalization | 75–85% | 0.020–0.050 | −60 to +30 (Elo 1076–1166) |
+
+**Switching primary metric:** prediction's "training rate" beats Elo for actionability now that archive-drift is confirmed. Will bench Elo as secondary signal but not primary.
+
+**Falsification:** if mid (control, identical to parent's distribution) lands training rate <85% — weight-load/optimizer/obs_norm regression after all, not just archive drift. Will dump worker logs and inspect.
+
+**Worker state:** active. karp.timer still inactive (fire 3 will re-arm if level_mix sweep completes cleanly).
+
+**Next fire:** 2026-05-03 10:35 PT — read mid cell training rate (will be ~50% complete), 3-game replay with explicit win/loss filter, queue next axis (rollout_steps round-robin).
+
 ---
 
 **Evaluation system change 2026-04-27.** Replaced random_legal-anchored auto-rate
