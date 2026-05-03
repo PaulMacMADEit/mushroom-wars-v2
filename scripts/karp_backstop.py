@@ -96,6 +96,40 @@ def _clear_clutter() -> None:
         print(f"[backstop] cleared {n_failed} stale running, {n_discarded} non-karp queued")
 
 
+def _pick_continuation_parent() -> tuple[str, str, float] | None:
+    """Pick the strongest recent sim-v1.4 done run as continuation parent.
+
+    Strategy (Paul confirmed 2026-05-02 23:40 PT — never queue Bootstrap):
+      1. Among the last 12 sim-v1.4 done runs that have `result.rate`,
+         pick the highest training rate (rate >= 0.70 floor).
+      2. If none qualify, return None — caller MUST refuse to queue
+         (exit non-zero) rather than fall back to Bootstrap. The Claude-
+         side fire chain is responsible for bootstrap experiments.
+
+    Returns (run_id, label, rate) or None.
+    """
+    with connect() as c, c.cursor() as cur:
+        cur.execute("""
+            SELECT id, label,
+                   (result->>'rate')::numeric AS rate
+              FROM runs
+             WHERE project=%s
+               AND simulator_id='sim-v1.4'
+               AND status='done'
+               AND result IS NOT NULL
+               AND result->>'rate' IS NOT NULL
+               AND (result->>'rate')::numeric >= 0.70
+             ORDER BY finished_at DESC
+             LIMIT 12
+        """, (PROJECT,))
+        rows = cur.fetchall()
+    if not rows:
+        return None
+    # Best of last 12 by training rate
+    best = max(rows, key=lambda r: float(r[2]))
+    return (str(best[0]), best[1], float(best[2]))
+
+
 def main() -> None:
     t0 = time.strftime("%Y-%m-%d %H:%M:%S %Z")
     print(f"\n=== karp-backstop fire {t0} ===")
@@ -108,15 +142,27 @@ def main() -> None:
     print(f"[backstop] {reason} — taking over")
     _clear_clutter()
 
-    # Defer to the Claude-facing queue script; same source of truth.
-    print("[backstop] calling queue_karp_sweep.py")
+    # Continuation rule (2026-05-02): never Bootstrap. If we can't find
+    # a compatible sim-v1.4 parent with rate>=0.70, exit non-zero so the
+    # timer retries next fire rather than starting from random.
+    parent = _pick_continuation_parent()
+    if parent is None:
+        print("[backstop] no sim-v1.4 done run with rate>=0.70 — refusing to "
+              "queue Bootstrap; will retry next fire")
+        sys.exit(2)
+    parent_id, parent_label, parent_rate = parent
+    print(f"[backstop] continuation parent: {parent_label} "
+          f"({parent_id[:8]}, rate={parent_rate:.3f})")
+
+    print("[backstop] calling queue_karp_sweep.py --from-run-id ...")
     py = sys.executable
     rc = subprocess.call(
-        [py, str(ROOT / "scripts" / "queue_karp_sweep.py")],
+        [py, str(ROOT / "scripts" / "queue_karp_sweep.py"),
+         "--from-run-id", parent_id],
         cwd=str(ROOT),
     )
     if rc == 0:
-        print("[backstop] queued one sweep")
+        print("[backstop] queued one continuation sweep")
     else:
         print(f"[backstop] queue script exited {rc} — will retry next fire")
         sys.exit(rc)
