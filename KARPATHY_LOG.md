@@ -114,7 +114,11 @@ Sampled 30 replays from 148 total: 28 P1 wins, 2 P1 losses (93% sample rate, hig
 
 **Anomaly:** 18-tick loss suggests P1 vulnerable to fast openings on small-garrison maps. Worth a focused investigation in fire 4 (sample 5+ losses, look for opening-tick patterns).
 
-### Fire 3 queue — action_repeat sweep, **new parent v12.1.02-level_mix-hi**
+### Fire 3 queue — action_repeat sweep, **new parent v12.1.02-level_mix-hi** (DISCARDED — see fire 4)
+
+> **Note:** v12.1.03 action_repeat cells were discarded by Paul at 12:14 PT ("queue reset — b10 was Bootstrap, violates continuation rule"). Backstop re-queued v12.1.04-Continue-reward_version (lo/mid/hi) with parent `79250233` (v12.0.31-Bootstrap-entropy_coef-mid, rate=0.926).
+
+### Fire 3 queue — action_repeat sweep, **new parent v12.1.02-level_mix-hi** (original entry below)
 
 **Parent updated:** `v12.1.02-Continue-level_mix-hi` (`9e11181a-6c08-495f-914e-499dc8d46098`, Elo 1096, train_rate 0.846, n=148 training games). Best of fire 2; replaces v12.0.23 as continuation parent. Tests the chain-compounding premise — does each successive cell improve over its parent's training rate?
 
@@ -136,6 +140,29 @@ Sampled 30 replays from 148 total: 28 P1 wins, 2 P1 losses (93% sample rate, hig
 **Worker state:** active. karp.timer still inactive. UUID lookup bug caught + corrected (had truncated parent UUID at 8 chars; cli/db query's display row truncates the suffix — fixed by always pulling full UUID via SQL before queue).
 
 **Next fire:** 2026-05-03 12:26 PT (action_repeat-lo cell ~30% complete; mid cell starting).
+
+### Fire 4 — 2026-05-03 13:08 PT — no-op (queue non-empty), bench eval broken
+
+**Status:** v12.1.04-Continue-reward_version (lo/mid/hi) queued by backstop at 20:00 UTC. Parent: `79250233` (v12.0.31-Bootstrap-entropy_coef-mid, rate=0.926). One b10 run (`b10-260503-1802-default60-s2`) currently running ahead of them. Worker active, backstop active (firing every 15 min).
+
+**No post-mortem:** v12.1.03-action_repeat cells were discarded before running. No new continuation cells finished since fire 3.
+
+**🔴 Bench eval completely broken.** All bench matches for recent runs are failing (0/10 done per run) with `state_dict` loading errors — architecture mismatch between current model (v12 net) and champion archive entries. Runs still show `elo_status=rated` with elo_n_matches > 0, but these are **stale scores from before the architecture change**. No new match data is being produced.
+
+| run | rate | elo (stale) | bench matches done/total |
+|---|---|---|---|
+| v12.0.31-entropy_coef-mid (parent) | 0.926 | 981 | 0/10 |
+| v12.1.01-gamma-lo | 0.871 | 1014 | 0/10 |
+| v12.1.01-gamma-mid | 0.878 | 1060 | 0/10 |
+| v12.1.02-level_mix-hi | 0.846 | 1082 | 0/10 |
+
+**Impact:** Elo is currently meaningless for all v12 runs. `result.rate` (training rate) is the only reliable metric. The continuation cells ARE training correctly — training weight-loading works. It's only bench_eval's match runner that fails to load weights into the opponent model.
+
+**Action needed (not this fire):** fix bench_eval to handle the v12 architecture, or rebuild the champion archive with v12-compatible models.
+
+**3-game gut check:** skipped — `karp_review_games.py` depends on bench match games, which are all failing. Training replays (from Storage bucket) would need manual pull.
+
+**Queue depth:** 3 queued + 1 running → no queueing needed.
 
 ---
 
