@@ -86,6 +86,57 @@ Anomaly: all 3 sampled were P1 wins. Couldn't isolate a loss replay (didn't filt
 
 **Next fire:** 2026-05-03 10:35 PT — read mid cell training rate (will be ~50% complete), 3-game replay with explicit win/loss filter, queue next axis (rollout_steps round-robin).
 
+### Fire 3 — 2026-05-03 12:00 PT — post-mortem fire 2, action_repeat sweep
+
+**🔴 Loop instability #2:** fire 2 → fire 3 was 1h45m (scheduled 25 min). Wakeup chain dropped a 2nd time. Tightened next interval to 1500s (25 min). Backstop systemd timer still **deferred** — `karp_backstop.py` would queue Bootstrap (no `--from-run-id` plumbing). Patching that is fire 4–5 work.
+
+**Fire 2 post-mortem — predicted vs actual:**
+
+| cell | level_mix | predicted training_rate | actual rate | predicted KL | actual elo | match? | why diverged |
+|---|---|---|---|---|---|---|---|
+| lo | close-only | 90–95% | **86.1%** | 0.005–0.020 | 1042 | ❌ training_rate below by 4pp | close-only didn't yield expected over-fit boost; close maps may already be in parent's distribution so no novel signal |
+| mid | mix (control) | 85–92% | **80.8%** | 0.010–0.030 | 1074 | ❌ below 85% threshold | falsification triggered by my own rule; but lo+hi cells came in at 85-86% — variance hypothesis: PFSP rotation differs per cell, mid drew weaker opps so fewer informative updates |
+| hi | full-only | 75–85% | **84.6%** | 0.020–0.050 | 1096 | ✅ top of range | broader maps gave most-informative gradient; matched prediction exactly |
+
+**Updated root cause:** the falsification of fire 2's mid cell (80.8% < 85%) is **NOT** weight-load failure (lo and hi cells with same parent both hit 85-86%). It's **per-cell PFSP rotation variance** — `opponent_pool_mode=rotate_per_update` picks random archive members each PPO update, so 82 updates × different opponents = different effective difficulty. With the 80-87% spread observed across 6 v12.1 cells, single-cell results need ~3 replicates to discriminate hyperparam effects from rotation noise.
+
+**Champion drift confirmed:** `v12.0.23-Bootstrap-level_mix-mid` original Elo 1136 → fire 1 cells now score 1006/1054/1082 (re-rated as archive grew). Cannot use bench Elo as primary signal across days.
+
+**3-game gut check on `v12.1.02-Continue-level_mix-hi` (best fire 2 cell, rate=0.846):**
+
+Sampled 30 replays from 148 total: 28 P1 wins, 2 P1 losses (93% sample rate, higher than `rate=0.846` — sample bias toward early-update games).
+
+| game | upd | winner | ticks | level | p1_sends | p2_sends | note |
+|---|---|---|---|---|---|---|---|
+| WIN | 0025 g0 | P1 ✅ | 41 | random_4_8 | 11 | 16 | even send count, P1 wins on quality |
+| LOSS | 0022 g0 | P2 ⛔ | **18** | random_4_8 | 7 | 8 | very fast loss — P2 scored on opening |
+| MID  | 0026 g1 | P1 ✅ | 81 | random_4_8 | 38 | 27 | long game, varied send counts (10–300) — healthy late-game adaptation |
+
+**Anomaly:** 18-tick loss suggests P1 vulnerable to fast openings on small-garrison maps. Worth a focused investigation in fire 4 (sample 5+ losses, look for opening-tick patterns).
+
+### Fire 3 queue — action_repeat sweep, **new parent v12.1.02-level_mix-hi**
+
+**Parent updated:** `v12.1.02-Continue-level_mix-hi` (`9e11181a-6c08-495f-914e-499dc8d46098`, Elo 1096, train_rate 0.846, n=148 training games). Best of fire 2; replaces v12.0.23 as continuation parent. Tests the chain-compounding premise — does each successive cell improve over its parent's training rate?
+
+**Cells queued:**
+- `v12.1.03-Continue-action_repeat-lo` (action_repeat=1) — id `733f1bbb` — finest control
+- `v12.1.03-Continue-action_repeat-mid` (action_repeat=2) — id `cfab1e23` — control (matches parent)
+- `v12.1.03-Continue-action_repeat-hi` (action_repeat=4) — id `93b13e3f` — coarsest
+
+**Hypothesis + prediction:**
+
+| cell | action_repeat | hypothesis | predicted training_rate | predicted KL |
+|---|---|---|---|---|
+| lo | 1 | one decision per sim tick → 2× decisions per game vs parent. Finer control could let the agent react to micro-changes (incoming threats). Half the throughput → fewer episodes per cell. Could destabilize early. | 78–85% | 0.020–0.050 |
+| mid | 2 | matches parent exactly. Control. Should reproduce parent's rate ±2pp accounting for rotation variance. | 82–88% | 0.010–0.030 |
+| hi | 4 | one decision per 4 sim ticks. 2× throughput vs parent → more episodes per cell but coarser timing. Could plateau lower if agent needs sub-4-tick reactions, or could match if 2-tick already had slack. | 80–86% | 0.010–0.030 |
+
+**Falsification:** if mid (control) lands <80% — variance-adjusted floor — really need to investigate weight-load. Currently only one mid cell has been below 85%, with two others matching, so I'm treating 80-87% as the noise band.
+
+**Worker state:** active. karp.timer still inactive. UUID lookup bug caught + corrected (had truncated parent UUID at 8 chars; cli/db query's display row truncates the suffix — fixed by always pulling full UUID via SQL before queue).
+
+**Next fire:** 2026-05-03 12:26 PT (action_repeat-lo cell ~30% complete; mid cell starting).
+
 ---
 
 **Evaluation system change 2026-04-27.** Replaced random_legal-anchored auto-rate
