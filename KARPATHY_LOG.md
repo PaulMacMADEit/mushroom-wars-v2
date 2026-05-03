@@ -174,6 +174,42 @@ Sampled 30 replays from 148 total: 28 P1 wins, 2 P1 losses (93% sample rate, hig
 
 **Next action:** when v13 bootstrap series completes, pick strongest v13 cell as continuation parent (if rate>=0.70 on sim-v1.4). Until then, no-op.
 
+### Fire 6 — 2026-05-03 14:14 PT — v13 done/failed, queue v12.1.04 reward_version
+
+**v13 series wrap-up:**
+
+| cell | rate | status | note |
+|---|---|---|---|
+| v13.0.0-bootstrap | 0.851 | done | baseline established |
+| v13.0.1-r1.6 | 0.826 | done | continuation regressed 2.5pp vs bootstrap |
+| v13.0.2-r1.7 | — | **failed** | ReadTimeout (transient network, not code) — ran 105 updates before dying |
+
+v13 continuation (r1.6) regressed vs bootstrap — warm-start didn't compound for v13 on first try. Queue drained; worker idle.
+
+**Parent selection:** strongest v12.0 sim-v1.4 done cell = `v12.0.31-Bootstrap-entropy_coef-mid` (id `79250233`, rate=0.926, 69 updates). v13 cells not eligible as karp continuation parents (different model_id; weight shapes incompatible with v12.0 config).
+
+**3-game gut check on parent (v12.0.31-Bootstrap-entropy_coef-mid, rate=0.926):**
+
+| game | upd | result | duration | p1_sends | p2_sends | captures | note |
+|---|---|---|---|---|---|---|---|
+| WIN | 0002 | P1 ✅ | 15 ticks | 6 | 8 | 6 | fast decisive opener |
+| LOSS | 0035 | P2 ⛔ | 29 ticks | **0** | 15 | 3 | P1 zero sends — total passivity |
+| LOSS | 0069 | P2 ⛔ | 85 ticks | **0** | 40 | 3 | P1 zero sends again — noop collapse pattern |
+
+**🔴 Anomaly: noop collapse in losses.** Agent sends zero units when losing. Wins show healthy aggression (6+ sends), losses show complete shutdown. 92.6% rate masks this because losses are rare, but the pattern is pathological — agent has no recovery/counterplay behaviour. Will track whether continuation cells inherit or fix this.
+
+**Cells queued — v12.1.04-Continue-reward_version, parent `79250233` (rate=0.926):**
+
+| cell | reward_version | hypothesis | predicted training_rate |
+|---|---|---|---|
+| lo | 3 (v1.5 asymmetric capture) | richer gradient from shaping; warm-start should maintain parent's level | 88–94% |
+| mid | 4 (v1.6 full shaping) | densest gradient; may help continuation most | 89–95% |
+| hi | 5 (v1.7 pure terminal) | control — matches parent reward exactly | 90–95% |
+
+**Falsification:** if hi (control) lands rate <88%, warm-start from this parent is degrading.
+
+**Worker:** active. Backstop: active. 3 cells queued, ~20 min each → results in ~1h.
+
 ---
 
 **Evaluation system change 2026-04-27.** Replaced random_legal-anchored auto-rate
