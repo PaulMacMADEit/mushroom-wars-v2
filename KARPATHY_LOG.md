@@ -164,6 +164,16 @@ Sampled 30 replays from 148 total: 28 P1 wins, 2 P1 losses (93% sample rate, hig
 
 **Queue depth:** 3 queued + 1 running → no queueing needed.
 
+### Fire 5 — 2026-05-03 13:42 PT — no-op (v13 series active)
+
+**Status:** v13.0 series running (bootstrap done rate=0.85, v13.0.1-r1.6 running, v13.0.2-r1.7 queued). Worker active, backstop active (no-opping correctly). v12.1.04-reward_version cells never ran — superseded by v13 model series.
+
+**No post-mortem:** no new karp continuation cells finished since fire 3. The v12.1 continuation chain is effectively paused while v13 bootstraps.
+
+**No queueing:** queue non-empty (2 v13 cells active). Backstop will resume karp continuations when queue drains, or v13 series will establish new parents.
+
+**Next action:** when v13 bootstrap series completes, pick strongest v13 cell as continuation parent (if rate>=0.70 on sim-v1.4). Until then, no-op.
+
 ---
 
 **Evaluation system change 2026-04-27.** Replaced random_legal-anchored auto-rate
