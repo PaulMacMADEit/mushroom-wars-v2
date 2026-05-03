@@ -88,7 +88,7 @@
     import { sb, signedUrl, queryParam } from './lib/supabase.js';
     import { fmtTime, fmtDuration, fmtPct, esc, statusPill,
              fmtElo, ticksPerMin, totalTicks, fmtBig } from './lib/ui.js';
-    import { lineChart, bandChart } from './lib/chart.js';
+    import { lineChart, bandChart } from './lib/chart.js?v=chartjs-447';
 
     const $root = document.getElementById('root');
     const runId = queryParam('id');
