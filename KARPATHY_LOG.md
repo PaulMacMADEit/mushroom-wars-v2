@@ -4287,6 +4287,45 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### 2026-05-02 19:36 PT — BATCH 8 wrap (BREAKTHROUGH 93.3%) + BATCH 9 (chain extend from new best).
+
+**Batch 8 results** (3 × 20-min cells, identical config, warm from `6f3c51a1`):
+
+| cell | wall | wr | to | ep_len |
+|---|---|---|---|---|
+| lo | 1284s | 89.3% | 11% | 28.8 |
+| **mid** | **1285s** | **93.3%** | **7%** | 28.4 |
+| hi | 1303s | 91.4% | 9% | 28.0 |
+
+🚀 **First cell ever to break 92% falsifier (mid 93.3%).** Mean **91.3%** vs 10-min cells' 90.0% — doubling cell budget moves the plateau ~1.3pp.
+
+**Striking detail: mid (the previously-unlucky seed) flipped to BEST.** At 10-min cells, mid was consistently the worst (76.6 / 83.5 / 76.6 in Batches 4/6 — mean 79). At 20-min cells, mid hits 93.3%. Reading: the seed-unlucky-at-10-min effect was a "few-updates artifact" — the bad early trajectory dominated short cells; with 88+ updates the policy converges past it.
+
+**Verdict:** plateau is **partially training-time-bound**. 20-min cells help. NOT a clean "all 3 ≥ 92%" — variance still substantial (89.3 to 93.3 = 4pp range). Lever works, doesn't eliminate variance.
+
+`1ce6e9e6` (Batch 8 mid, **93.3% wr**) is the new strongest agent.
+
+### BATCH 9 — chain extend from 93.3%
+
+Test: **does the 93.3% peak chain forward, or revert toward the ~91% mean?**
+
+3 × 20-min cells, identical config (γ=0.995, ec=0.01), warm from new best.
+
+| cell | hypothesis | falsifier |
+|---|---|---|
+| lo (1084cd87) | chain extends, finds higher peak | wr ≥ 95% → keep extending chains |
+| mid (79250233) | replicates 93%+ — peak is sustainable | benchmark |
+| hi (f9e26ea3) | replicates 93%+ — peak is sustainable | benchmark |
+
+Decision tree:
+- **Mean ≥ 93%** → 93% is the new floor; chain is monotonically improving. Keep going.
+- **Mean ~91% (matches Batch 8)** → 93.3% was a one-cell peak; plateau at 91% with 20-min cells.
+- **Mean < 91%** → regression; the chain might be stuck at a local optimum the 93.3% briefly escaped.
+
+Queued. Same temporary YAML edit pattern (entropy_coef cells all 0.01) — restored after queue.
+
+---
+
 ### 2026-05-02 18:24 PT — BATCH 7 wrap (tightest cluster yet, no breakthrough) + BATCH 8 (20-min cells, plateau time-vs-structural test).
 
 **Batch 7 results** (rollout_steps varied @ γ=0.995, warm from `350cbb0e`):
