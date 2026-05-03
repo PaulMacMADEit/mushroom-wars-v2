@@ -4287,6 +4287,49 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### 2026-05-02 18:24 PT — BATCH 7 wrap (tightest cluster yet, no breakthrough) + BATCH 8 (20-min cells, plateau time-vs-structural test).
+
+**Batch 7 results** (rollout_steps varied @ γ=0.995, warm from `350cbb0e`):
+
+| cell | rs | wr | to | ep_len |
+|---|---|---|---|---|
+| lo | 4 | **90.7%** | 9% | 31.0 |
+| mid | 8 (current) | 90.4% | 10% | 28.8 |
+| hi | 16 | 89.5% | 11% | 28.8 |
+
+**Tightest cluster yet (±0.6pp).** rollout_steps doesn't move the plateau. ALL 6 priority parameter axes now exhausted with warm-start.
+
+**Cumulative @ γ=0.995 (excluding mid-seed outlier):**
+- 7 data points: 89.0, 89.5, 90.4, 90.5, 90.7, 90.8, 89.0
+- Mean **90.0%**, range 89.0–90.8%, **±0.9pp**
+
+**Plateau is real and tight.** No parameter knob breaks 92%.
+
+### BATCH 8 — 20-min cells, identical config (plateau time-vs-structural test)
+
+Single-variable change: cell budget 600s → 1200s. Doubles PPO updates (~88 vs ~44). All other knobs at their established best (γ=0.995, ec=0.01, rs=8, K=2, v1.7).
+
+3 cells, identical config, only seed differs (lo/mid/hi → seed_int via `_seed_to_int`).
+
+Warm parent: `6f3c51a1` (rs-lo 90.7%, the most recent strongest cell).
+
+| cell | budget | hypothesis | falsifier |
+|---|---|---|---|
+| lo (5f19df25) | 1200s | more updates → break plateau | wr ≥ 92% → time-bound |
+| mid (1ce6e9e6) | 1200s | same | wr ≥ 92% → time-bound (mid-seed pattern would predict ≤ 90%) |
+| hi (d75ebb89) | 1200s | same | wr ≥ 92% → time-bound |
+
+Decision tree:
+- **All 3 ≥ 92%** → plateau is training-time-bound. Pivot to longer chains (1800s+ cells, daisy-chain warm-starts).
+- **Mixed (some ≥92%, some not)** → 20-min helps but variance still dominates. Replicate or push further.
+- **All ≈ 90%** → plateau is STRUCTURAL. Pivot to architecture (deeper/wider net) or curriculum (different opponent / level mix).
+
+YAML edit: cell_budget_seconds 600→1200 (committed). entropy_coef axis cells temporarily set to all 0.01 for queueing (restored after).
+
+Queued. ~60 min wall (3 × 20-min cells).
+
+---
+
 ### 2026-05-02 17:40 PT — BATCH 6 wrap (stack didn't pay) + BATCH 7 (rollout_steps @ γ=0.995).
 
 **Batch 6 results** (entropy varied @ γ=0.995, warm from `350cbb0e` 90.8%):

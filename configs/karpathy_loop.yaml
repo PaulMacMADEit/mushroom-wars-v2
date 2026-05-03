@@ -22,10 +22,12 @@
 # ---------------------------------------------------------------------------
 schedule:
   fire_interval_seconds: 1800     # 30min between Claude-side wakeups
-  cell_budget_seconds:   600      # 2026-05-01 (PT) overnight plan: 10-min cells per Paul.
-                                  # Signal pops up quickly with shorter games on close_4_8 / 4_8 mix;
-                                  # 10 min lets KL-adaptive controller actually settle within a cell.
-                                  # Adjust update count via rollout_steps, NOT cell length.
+  cell_budget_seconds:   1200     # 2026-05-02 17:24 PT: bumped 600 → 1200 (20 min) for Batch 8.
+                                  # All 6 parameter knobs exhausted at 600s; γ=0.995 plateau at ~90%
+                                  # with ±1pp variance. Doubling cell budget = ~88 PPO updates instead
+                                  # of ~44 — tests "is plateau training-time bound or algorithmic?"
+                                  # If 20-min cells break 92%, return budget to 1800s+ for chains.
+                                  # If still ~90%, plateau is structural and we pivot to architecture.
   max_karp_queue_depth:  6        # skip queueing if >= this many karp-* are pending
   idle_fires_before_stop: 0       # 0 = never stop on idleness
 
