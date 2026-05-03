@@ -232,6 +232,41 @@ This is a re-run of the gamma axis from fire 1, but from a much stronger parent 
 
 **Worker:** active. Backstop: inactive. 3 cells queued (b8efd63a, c9986d63, 64a6ee41), ~20 min each.
 
+### Fire 8 — 2026-05-03 16:24 PT — no-op (v13.0.5 running), post-mortem fires 6-7
+
+**Status:** `v13.0.5-selfplay-mixed` (id `37aeb88a`, model v13.0, self_play=true, cont from `b8e2500b`) currently running. Worker active. Queue non-empty → no queueing.
+
+**Fire 7 post-mortem — v12.1.05 gamma cells (discarded):**
+
+All 3 cells discarded/failed — Paul killed them during v13 testing (`queue reset 2026-05-03 — disabled com.paul.karp-loop after it auto-queued during v13 testing`). No data to evaluate.
+
+**v13 series post-mortem (cells finished since fire 7):**
+
+| cell | rate | elo | parent | status | note |
+|---|---|---|---|---|---|
+| v13.0.3-size-4to8 | 0.892 | 1022 | v13.0.0 (0.851) | done | +4.1pp over parent — chain compounding working |
+| v13.0.4-size-4to8-cont | 0.918 | 1006 | v13.0.3 (0.892) | done | +2.6pp over parent — continued improvement |
+| v13.0.5-selfplay-mixed | — | — | v13.0.4 (0.918) | **running** | self_play=true, n_envs=32, numpy sim |
+
+v13 chain is showing compounding: 0.851 → 0.892 → 0.918 across 3 generations. Elo bounces (1009→1022→1006) confirm archive-drift noise — rate is the stable signal.
+
+**3-game gut check on `v13.0.4-size-4to8-cont` (rate=0.918, 288 replays):**
+
+| game | upd | result | dur | p1_sends | p2_sends | winner_f2f | bouncing? | note |
+|---|---|---|---|---|---|---|---|---|
+| WIN | 5 g0 | P1 ✅ | 29t | 13 | 14 | 4/13=31% | ok | even contest, P1 edges |
+| WIN | 70 g0 | P1 ✅ | 6t | 2 | 3 | 0/2=0% | ok | instant opener win |
+| WIN | 130 g0 | P1 ✅ | 19t | 9 | 8 | 0/9=0% | ok | clean aggression |
+| LOSS | 29 g0 | P2 ⛔ | 132t | 50 | 51 | 10/51=20% | ok | long battle, competitive — NOT noop collapse |
+| LOSS | 36 g0 | P2 ⛔ | 66t | **5** | 33 | 8/33=24% | ok | near-passive P1 (5 sends vs 33) |
+| LOSS | 78 g0 | P2 ⛔ | 55t | **7** | 27 | 3/27=11% | ok | near-passive P1 (7 sends vs 27) |
+
+**No bouncing pathology** — max winner f2f is 31%, well below 50% threshold. v13's chain reorder (src→tgt→pct) is structurally clean.
+
+**Partial noop-collapse regression:** 2 of 3 losses show near-passive P1 (5-7 sends vs 27-33 opponent). Better than fire 6's zero-send collapse (parent v12.0.31 had 0 sends in losses), but still a behavioral weakness — agent reduces activity when behind instead of counterattacking. Self-play training (v13.0.5) may address this by providing stronger loss-recovery signal.
+
+**Next action:** wait for v13.0.5-selfplay-mixed to finish. If rate > 0.918, chain continues compounding with self-play. If rate < 0.85, self-play may be too hard a jump from random_legal.
+
 ---
 
 **Evaluation system change 2026-04-27.** Replaced random_legal-anchored auto-rate
