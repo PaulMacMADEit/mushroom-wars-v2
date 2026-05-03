@@ -273,6 +273,7 @@
                 <option value="16">16×</option>
               </select>
             </label>
+            <button id="replay-download" title="download this game's JSON" disabled>⬇ download</button>
           </div>
           <canvas id="replay-canvas" style="display:none; width:100%; aspect-ratio:1/1; max-height:400px; background:var(--bg-card); border-radius:6px;"></canvas>
         </div>
@@ -619,7 +620,7 @@
       // populate live as the run progresses. Each is gated on key presence
       // so old runs (pre-2026-04-29) render the empty-state cleanly.
       renderEvalMatches(points);
-      renderTrainingOpp(points);
+      renderTrainingOpp(points).catch(e => console.warn('[training-opp]', e));
       renderWinRateProgression(points, run ?? {}).catch(e => console.warn('[wrp]', e));
       renderLevelMix(points);
       renderRotationRematch(run ?? {}).catch(e => console.warn('[rotation]', e));
@@ -889,12 +890,20 @@
     }
 
     /** Training opponent over time — shows what the agent played against
-     * during each phase of training. Compresses runs of the same label. */
-    function renderTrainingOpp(points) {
+     * during each phase of training. Compresses runs of the same label.
+     * Resolves `champion:abc12345` → friendly label via champions table,
+     * to match End-of-run rematch + Win-rate progression panels. */
+    async function renderTrainingOpp(points) {
       const $card = document.getElementById('training-opp');
       if (!$card) return;
+      const champMap = await loadChampLookup();
+      const labelFor = (raw) => {
+        if (typeof raw !== 'string' || !raw.startsWith('champion:')) return raw;
+        const idShort = raw.slice('champion:'.length, 'champion:'.length + 8);
+        return champMap[idShort]?.label || raw;
+      };
       const labeled = points
-        .map((p, i) => ({ update: i + 1, label: p.training_opp_label }))
+        .map((p, i) => ({ update: i + 1, label: labelFor(p.training_opp_label) }))
         .filter(p => p.label != null);
       if (!labeled.length) {
         $card.innerHTML = '<div class="muted">no opponent labels recorded yet.</div>';
@@ -1818,6 +1827,7 @@
       const $speed   = document.getElementById('replay-speed');
       const $where   = document.getElementById('replay-where');
       const $meta    = document.getElementById('replay-meta');
+      const $download = document.getElementById('replay-download');
 
       const meta = (run.result && run.result.replays) || null;
       if (!meta) {
@@ -1862,6 +1872,7 @@
       let idx     = pairs.length - 1;  // start on the most-recent
       let player  = null;
       let userPinnedToLatest = true;
+      let currentData = null;  // most-recently loaded replay JSON, for download
 
       $count.textContent = `(${pairs.length} captures${meta.live ? ' · live' : ''})`;
       $status.style.display = 'none';
@@ -1899,6 +1910,8 @@
         if (player) player.pause();
         player = new ReplayPlayer(data, $canvas);
         player.setSpeed(parseFloat($speed.value));
+        currentData = data;
+        if ($download) $download.disabled = false;
         $meta.textContent = `${data.duration_ticks} ticks · winner ${data.winner ?? '—'} · ${data.events.length} events · ${data.level_name}`;
         if (autoplay !== false) player.play();
         $play.textContent = '⏸';
@@ -1928,6 +1941,17 @@
       $play .addEventListener('click', () => { if (player) player.toggle(); });
       $speed.addEventListener('change', () => {
         if (player) player.setSpeed(parseFloat($speed.value));
+      });
+      if ($download) $download.addEventListener('click', () => {
+        if (!currentData) return;
+        const [u, g] = pairs[idx];
+        const fname = `mw2-${runId.slice(0, 8)}-upd${String(u).padStart(4, '0')}-g${g}.json`;
+        const blob = new Blob([JSON.stringify(currentData, null, 2)], { type: 'application/json' });
+        const url  = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = fname;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
       });
 
       document.addEventListener('keydown', (e) => {
