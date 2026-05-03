@@ -1,111 +1,87 @@
 # Mushroom Wars v2 — last-24h Supabase summary
 
-_Generated: 2026-05-01T18:00:24+00:00 (UTC). Auto-written by `scripts/write_runs_summary.py`._
+_Generated: 2026-05-03T18:00:28+00:00 (UTC). Auto-written by `scripts/write_runs_summary.py`._
 
 ## Counts
-- done: 71
-- failed: 7
-- discarded: 11
-- running: 0
-- queued: 1
+- done: 46
+- failed: 5
+- discarded: 0
+- running: 1
+- queued: 0
 
 ## Done runs
 
 | label | status | rate | updates | wall (s) | seed | opponent | sim | weights |
 |---|---|---|---|---|---|---|---|---|
-| v10.1.37-lr-lo | done | 0.097 | 10 | 350 | lo | neural (abbdd98f) | sim-v1.3 | yes |
-| v10.1.38-rollout_steps-lo | done | 0.180 | 16 | 324 | lo | neural (abbdd98f) | sim-v1.3 | yes |
-| v10.1.38-rollout_steps-mid | done | 0.149 | 10 | 347 | mid | neural (abbdd98f) | sim-v1.3 | yes |
-| v10.1.38-rollout_steps-hi | done | 0.082 | 5 | 327 | hi | neural (abbdd98f) | sim-v1.3 | yes |
-| v10.1.39-n_envs-mid | done | 0.144 | 10 | 338 | mid | neural (abbdd98f) | sim-v1.3 | yes |
-| v10.1.39-n_envs-hi | done | 0.087 | 7 | 348 | hi | neural (abbdd98f) | sim-v1.3 | yes |
-| v10.1.39-n_envs-lo | done | 0.213 | 16 | 317 | lo | neural (abbdd98f) | sim-v1.3 | yes |
-| v10.2.01-LargeMap-Base-01 | done | 0.676 | 250 | 1841 | lo-c1-c1-c2-c3-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.01-LargeMap-Base-02 | done | 0.689 | 250 | 1848 | lo-c1-c1-c2-c3-c1-c2 | random_legal | sim-v1.3 | yes |
-| v10.2.01-LargeMap-Base-03 | done | 0.606 | 254 | 1829 | lo-c1-c1-c2-c3-c1-c2-c3 | random_legal | sim-v1.3 | yes |
-| v10.2.01-LargeMap-Base-04 | done | 0.606 | 1099 | 1833 | lo-c1-c1-c2-c3-c1-c2-c3-c4 | random_legal | sim-v1.3 | yes |
-| v10.2.02-LargeMap-lr-lo | done | 0.662 | 170 | 319 | lo | random_legal | sim-v1.3 | yes |
-| v10.2.02-LargeMap-lr-mid | done | 0.667 | 178 | 319 | mid | random_legal | sim-v1.3 | yes |
-| v10.2.02-LargeMap-lr-hi | done | 0.601 | 179 | 319 | hi | random_legal | sim-v1.3 | yes |
-| v10.2.03-LargeMap-rollout_steps-lo | done | 0.542 | 237 | 318 | lo | random_legal | sim-v1.3 | yes |
-| v10.2.03-LargeMap-Base-01 | done | 0.758 | 172 | 319 | lo-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.03-LargeMap-Base-02 | done | 0.750 | 170 | 320 | lo-c1-c2 | random_legal | sim-v1.3 | yes |
-| v10.2.05-LargeMap-Base-01 | done | 0.715 | 105 | 334 | lo-c1-c2-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.06-LargeMap-gamma-lo | done | 0.501 | 40 | 341 | lo | random_legal | sim-v1.3 | yes |
-| v10.2.06-LargeMap-gamma-mid | done | 0.479 | 40 | 341 | mid | random_legal | sim-v1.3 | yes |
-| v10.2.06-LargeMap-gamma-hi | done | 0.474 | 40 | 344 | hi | random_legal | sim-v1.3 | yes |
-| v10.2.07-LargeMap-gae_lambda-lo | done | 0.474 | 40 | 343 | lo | random_legal | sim-v1.3 | yes |
-| v10.2.07-LargeMap-gae_lambda-mid | done | 0.505 | 40 | 353 | mid | random_legal | sim-v1.3 | yes |
-| v10.2.07-LargeMap-gae_lambda-hi | done | 0.475 | 40 | 343 | hi | random_legal | sim-v1.3 | yes |
-| v10.2.08-LargeMap-clip_range-lo | done | 0.484 | 40 | 352 | lo | random_legal | sim-v1.3 | yes |
-| v10.2.08-LargeMap-clip_range-mid | done | 0.471 | 38 | 326 | mid | random_legal | sim-v1.3 | yes |
-| v10.2.08-LargeMap-clip_range-hi | done | 0.470 | 40 | 357 | hi | random_legal | sim-v1.3 | yes |
-| v10.2.09-LargeMap-update_epochs-lo | done | 0.465 | 40 | 358 | lo | random_legal | sim-v1.3 | yes |
-| v10.2.09-LargeMap-update_epochs-mid | done | 0.482 | 37 | 327 | mid | random_legal | sim-v1.3 | yes |
-| v10.2.09-LargeMap-update_epochs-hi | done | 0.486 | 35 | 337 | hi | random_legal | sim-v1.3 | yes |
-| v10.2.05-LargeMap-Base-02 | done | 0.599 | 110 | 334 | lo-c1-c2-c1-c2 | random_legal | sim-v1.3 | yes |
-| v10.2.11-LargeMap-NoShape-01 | done | 0.758 | 160 | 320 | lo-c1-c2-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.11-LargeMap-BigEntropy-01 | done | 0.577 | 173 | 319 | lo-c1-c2-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.11-LargeMap-LongRoll-01 | done | 0.704 | 51 | 321 | lo-c1-c2-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.11-LargeMap-NoShape-02 | done | 0.771 | 168 | 319 | lo-c1-c2-c1-c2 | random_legal | sim-v1.3 | yes |
-| v10.2.11-LargeMap-NoShape-03 | done | 0.728 | 171 | 319 | lo-c1-c2-c1-c2-c3 | random_legal | sim-v1.3 | yes |
-| v10.2.11-LargeMap-NoShape-04 | done | 0.744 | 172 | 319 | lo-c1-c2-c1-c2-c3-c4 | random_legal | sim-v1.3 | yes |
-| v10.2.11-LargeMap-NoShape-05 | done | 0.727 | 157 | 321 | lo-c1-c2-c1-c2-c3-c4-c5 | random_legal | sim-v1.3 | yes |
-| v10.2.11-LargeMap-NoShape-06 | done | 0.735 | 49 | 321 | lo-c1-c2-c1-c2-c3-c4-c5-c6 | random_legal | sim-v1.3 | yes |
-| v10.2.12-LargeMap-EntropyLo-01 | done | 0.724 | 172 | 319 | lo-c1-c2-c1-c2-c3-c4-c5-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.12-LargeMap-EntropyMid-01 | done | 0.699 | 175 | 319 | lo-c1-c2-c1-c2-c3-c4-c5-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.12-LargeMap-EntropyHi-01 | done | 0.591 | 180 | 318 | lo-c1-c2-c1-c2-c3-c4-c5-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.13-LargeMap-EntropyLo-01 | done | 0.597 | 178 | 321 | lo-c1-c2-c1-c2-c3-c4-c5-c1-c1 | random_legal | sim-v1.3 | yes |
-| v10.3.01-GreedyOpp-Base-01 | done | 0.086 | 115 | 321 | lo-c1-c2-c1-c2-c3-c4-c5-c1 | greedy_capacity_aware | sim-v1.3 | yes |
-| v10.3.02-SelfPlay-Base-01 | done | 0.658 | 13 | 338 | lo-c1-c2-c1-c2-c3-c4-c5-c1 | neural (852c7cb8) | sim-v1.3 | yes |
-| v10.3.02-SelfPlay-Base-02 | done | 0.639 | 13 | 335 | lo-c1-c2-c1-c2-c3-c4-c5-c1-c2 | neural (852c7cb8) | sim-v1.3 | yes |
-| v10.3.02-SelfPlay-Base-03 | done | 0.523 | 13 | 334 | lo-c1-c2-c1-c2-c3-c4-c5-c1-c2-c3 | neural (cec90ee0) | sim-v1.3 | yes |
-| v10.3.02-SelfPlay-Base-04 | done | 0.476 | 13 | 335 | lo-c1-c2-c1-c2-c3-c4-c5-c1-c2-c3-c4 | neural (cec90ee0) | sim-v1.3 | yes |
-| v10.3.02-SelfPlay-Base-05 | done | 0.560 | 13 | 337 | lo-c1-c2-c1-c2-c3-c4-c5-c1-c2-c3-c4-c5 | neural (a9cad3b8) | sim-v1.3 | yes |
-| v10.3.02-SelfPlay-Base-06 | done | 0.822 | 13 | 345 | lo-c1-c2-c1-c2-c3-c4-c5-c1-c2-c3-c4-c5-c6 | neural (a9cad3b8) | sim-v1.3 | yes |
-| v10.3.02-SelfPlay-Base-07 | done | 0.653 | 13 | 336 | lo-c1-c2-c1-c2-c3-c4-c5-c1-c2-c3-c4-c5-c6-c7 | neural (b7c5b2d4) | sim-v1.3 | yes |
-| v10.3.02-SelfPlay-Base-08 | done | 0.633 | 13 | 335 | lo-c1-c2-c1-c2-c3-c4-c5-c1-c2-c3-c4-c5-c6-c7-c8 | neural (b7c5b2d4) | sim-v1.3 | yes |
-| v10.3.03-SelfPlayCheck-RateVsRandom-01 | done | 0.608 | 183 | 320 | lo-c1-c2-c1-c2-c3-c4-c5-c1-c1 | random_legal | sim-v1.3 | yes |
-| v10.3.04-SelfPlayCheck-VsRandom-01 | done | 0.690 | 170 | 319 | lo-c1-c2-c1-c2-c3-c4-c5-c1-c2-c3-c4-c5-c6-c7-c8-c1 | random_legal | sim-v1.3 | yes |
-| v10.3.05-LongCell-VsRandom-01 | done | 0.614 | 992 | 1818 | lo-c1-c2-c1-c2-c3-c4-c5-c1-c2-c3-c4-c5-c6-c7-c8-c1 | random_legal | sim-v1.3 | yes |
-| v10.3.06-SingleLevel-R4_8-01 | done | 0.701 | 122 | 321 | lo-c1-c2-c1-c2-c3-c4-c5-c1-c2-c3-c4-c5-c6-c7-c8-c1 | random_legal | sim-v1.3 | yes |
-| v10.3.07-CloseMap-R8_12-01 | done | 0.597 | 177 | 317 | lo-c1-c2-c1-c2-c3-c4-c5-c1-c2-c3-c4-c5-c6-c7-c8-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.20-CloseGrowN-R4_7-01 | done | 0.863 | 30 | 329 | lo-c1-c1-c2-c3-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.21-CloseGrowN-R5_9-01 | done | 0.890 | 38 | 332 | lo-c1-c1-c2-c3-c1-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.22-CloseGrowN-R6_11-01 | done | 0.915 | 40 | 349 | lo-c1-c1-c2-c3-c1-c1-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.23-CloseGrowN-R8_14-01 | done | 0.891 | 40 | 339 | lo-c1-c1-c2-c3-c1-c1-c1-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.24-CloseGrowN-R10_18-01 | done | 0.827 | 40 | 328 | lo-c1-c1-c2-c3-c1-c1-c1-c1-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.25-CloseGrowN-R12_22-01 | done | 0.609 | 45 | 351 | lo-c1-c1-c2-c3-c1-c1-c1-c1-c1-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.26-SlotShuffle-R10_18-01 | done | 0.590 | 40 | 336 | lo-c1-c1-c2-c3-c1-c1-c1-c1-c1-c1 | random_legal | sim-v1.3 | yes |
-| v10.2.26-SlotShuffle-R10_18-02 | done | 0.648 | 45 | 346 | lo-c1-c1-c2-c3-c1-c1-c1-c1-c1-c1-c2 | random_legal | sim-v1.3 | yes |
-| v10.2.26-SlotShuffle-R10_18-03 | done | 0.634 | 45 | 352 | lo-c1-c1-c2-c3-c1-c1-c1-c1-c1-c1-c2-c3 | random_legal | sim-v1.3 | yes |
-| v10.3.08-GreedyVsStrong-R10_18-01 | done | 0.002 | 40 | 335 | lo-c1-c1-c2-c3-c1-c1-c1-c1-c1-c1 | greedy_capacity_aware | sim-v1.3 | yes |
-| v10.3.09-Generalize-B6Mix-01 | done | 0.810 | 40 | 331 | lo-c1-c1-c2-c3-c1-c1-c1-c1-c1-c1 | random_legal | sim-v1.3 | yes |
-| v10.3.09-Generalize-B6Mix-02 | done | 0.812 | 41 | 328 | lo-c1-c1-c2-c3-c1-c1-c1-c1-c1-c1-c2 | random_legal | sim-v1.3 | yes |
-| v10.3.09-Generalize-B6Mix-03 | done | 0.826 | 42 | 330 | lo-c1-c1-c2-c3-c1-c1-c1-c1-c1-c1-c2-c3 | random_legal | sim-v1.3 | yes |
-| v10.3.09-Generalize-B6Mix-04 | done | 0.827 | 41 | 329 | lo-c1-c1-c2-c3-c1-c1-c1-c1-c1-c1-c2-c3-c4 | random_legal | sim-v1.3 | yes |
+| v12.0.21-Bootstrap-minibatch_size-lo | done | 0.512 | 36 | 682 | lo | neural (ce22b652) | sim-v1.4 | yes |
+| v12.0.21-Bootstrap-minibatch_size-hi | done | 0.559 | 41 | 675 | hi | neural (9377ae86) | sim-v1.4 | yes |
+| v12.0.21-Bootstrap-minibatch_size-mid | done | 0.551 | 43 | 686 | mid | neural (9377ae86) | sim-v1.4 | yes |
+| v12.0.22-Bootstrap-level_mix-mid | done | 0.446 | 45 | 713 | mid | neural (9377ae86) | sim-v1.4 | yes |
+| v12.0.22-Bootstrap-level_mix-hi | done | 0.579 | 47 | 688 | hi | neural (9377ae86) | sim-v1.4 | yes |
+| v12.0.22-Bootstrap-level_mix-lo | done | 0.470 | 42 | 685 | lo | neural (9377ae86) | sim-v1.4 | yes |
+| v12.0.23-Bootstrap-level_mix-mid | done | 0.819 | 41 | 684 | mid | neural (9377ae86) | sim-v1.4 | yes |
+| v12.0.23-Bootstrap-level_mix-hi | done | 0.806 | 39 | 688 | hi | neural (33b97b4b) | sim-v1.4 | yes |
+| v12.0.23-Bootstrap-level_mix-lo | done | 0.829 | 40 | 697 | lo | neural (9377ae86) | sim-v1.4 | yes |
+| v12.0.24-Bootstrap-action_repeat-hi | done | 0.837 | 29 | 699 | hi | neural (66e73c13) | sim-v1.4 | yes |
+| v12.0.24-Bootstrap-action_repeat-lo | done | 0.835 | 51 | 693 | lo | neural (9377ae86) | sim-v1.4 | yes |
+| v12.0.24-Bootstrap-action_repeat-mid | done | 0.856 | 44 | 679 | mid | neural (9377ae86) | sim-v1.4 | yes |
+| v12.0.25-Bootstrap-reward_version-hi | done | 0.810 | 40 | 698 | hi | neural (0a18601b) | sim-v1.4 | yes |
+| v12.0.25-Bootstrap-reward_version-lo | done | 0.819 | 39 | 690 | lo | neural (66e73c13) | sim-v1.4 | yes |
+| v12.0.25-Bootstrap-reward_version-mid | done | 0.810 | 40 | 690 | mid | neural (91ff2199) | sim-v1.4 | yes |
+| v12.0.26-Bootstrap-entropy_coef-lo | done | 0.803 | 40 | 727 | lo | neural (0a18601b) | sim-v1.4 | yes |
+| v12.0.26-Bootstrap-entropy_coef-mid | done | 0.809 | 40 | 713 | mid | neural (0a18601b) | sim-v1.4 | yes |
+| v12.0.26-Bootstrap-entropy_coef-hi | done | 0.808 | 43 | 691 | hi | neural (66e73c13) | sim-v1.4 | yes |
+| v12.0.27-Bootstrap-gamma-lo | done | 0.874 | 35 | 691 | lo | neural (66e73c13) | sim-v1.4 | yes |
+| v12.0.27-Bootstrap-gamma-mid | done | 0.877 | 36 | 682 | mid | neural (91ff2199) | sim-v1.4 | yes |
+| v12.0.27-Bootstrap-gamma-hi | done | 0.878 | 39 | 689 | hi | neural (0a18601b) | sim-v1.4 | yes |
+| v12.0.28-Bootstrap-entropy_coef-hi | done | 0.883 | 38 | 689 | hi | neural (91ff2199) | sim-v1.4 | yes |
+| v12.0.28-Bootstrap-entropy_coef-mid | done | 0.900 | 35 | 699 | mid | neural (91ff2199) | sim-v1.4 | yes |
+| v12.0.28-Bootstrap-entropy_coef-lo | done | 0.894 | 35 | 714 | lo | neural (91ff2199) | sim-v1.4 | yes |
+| v12.0.29-Bootstrap-rollout_steps-hi | done | 0.900 | 25 | 706 | hi | neural (91ff2199) | sim-v1.4 | yes |
+| v12.0.29-Bootstrap-rollout_steps-mid | done | 0.899 | 35 | 714 | mid | neural (0a18601b) | sim-v1.4 | yes |
+| v12.0.29-Bootstrap-rollout_steps-lo | done | 0.895 | 45 | 686 | lo | neural (66e73c13) | sim-v1.4 | yes |
+| v12.0.30-Bootstrap-entropy_coef-lo | done | 0.894 | 70 | 1319 | lo | neural (0a18601b) | sim-v1.4 | yes |
+| v12.0.30-Bootstrap-entropy_coef-mid | done | 0.911 | 69 | 1318 | mid | neural (91ff2199) | sim-v1.4 | yes |
+| v12.0.30-Bootstrap-entropy_coef-hi | done | 0.911 | 70 | 1339 | hi | neural (0a18601b) | sim-v1.4 | yes |
+| v12.0.31-Bootstrap-entropy_coef-lo | done | 0.915 | 70 | 1354 | lo | neural (0a18601b) | sim-v1.4 | yes |
+| v12.0.31-Bootstrap-entropy_coef-hi | done | 0.916 | 70 | 1355 | hi | neural (9377ae86) | sim-v1.4 | yes |
+| v12.0.31-Bootstrap-entropy_coef-mid | done | 0.926 | 69 | 1300 | mid | neural (0a18601b) | sim-v1.4 | yes |
+| v12.0.32-Bootstrap-level_mix-hi | done | 0.578 | 44 | 688 | hi | neural (91ff2199) | sim-v1.4 | yes |
+| v12.0.32-Bootstrap-level_mix-mid | done | 0.565 | 40 | 698 | mid | neural (66e73c13) | sim-v1.4 | yes |
+| v12.0.32-Bootstrap-level_mix-lo | done | 0.447 | 35 | 691 | lo | neural (9377ae86) | sim-v1.4 | yes |
+| v12.0.33-Bootstrap-action_repeat-lo | done | 0.467 | 50 | 689 | lo | neural (66e73c13) | sim-v1.4 | yes |
+| v12.0.33-Bootstrap-action_repeat-hi | done | 0.485 | 35 | 702 | hi | neural (66e73c13) | sim-v1.4 | yes |
+| v12.0.33-Bootstrap-action_repeat-mid | done | 0.498 | 40 | 687 | mid | neural (0a18601b) | sim-v1.4 | yes |
+| v12.0.34-Bootstrap-reward_version-hi | done | 0.553 | 42 | 685 | hi | neural (3ea75c71) | sim-v1.4 | yes |
+| v12.0.34-Bootstrap-reward_version-lo | done | 0.509 | 41 | 686 | lo | neural (3ea75c71) | sim-v1.4 | yes |
+| v12.1.01-Continue-gamma-mid | done | 0.878 | 80 | 1313 | mid | neural (3ea75c71) | sim-v1.4 | yes |
+| v12.1.01-Continue-gamma-lo | done | 0.871 | 82 | 1303 | lo | neural (3ea75c71) | sim-v1.4 | yes |
+| v12.1.01-Continue-gamma-hi | done | 0.860 | 80 | 1302 | hi | neural (926cd8fb) | sim-v1.4 | yes |
+| v12.1.02-Continue-level_mix-mid | done | 0.808 | 72 | 1310 | mid | neural (bc7cb18d) | sim-v1.4 | yes |
+| v12.1.02-Continue-level_mix-lo | done | 0.861 | 67 | 1308 | lo | neural (bc7cb18d) | sim-v1.4 | yes |
 
 ## Strongest checkpoints (rate >= 0.55, weights present)
 
 | run id | label | rate | updates | opponent |
 |---|---|---|---|---|
-| `59e1f367-96c9-41fc-ac60-d358d6ff9a50` | v10.2.01-LargeMap-Base-04 | 0.606 | 1099 | random_legal |
-| `821b7961-372a-495d-961e-b971ea92e151` | v10.3.05-LongCell-VsRandom-01 | 0.614 | 992 | random_legal |
-| `038fd4fd-c83a-497e-9371-075275c9b756` | v10.2.01-LargeMap-Base-03 | 0.606 | 254 | random_legal |
-| `ed108913-e9e5-4905-99a8-14d7a96cd332` | v10.2.01-LargeMap-Base-01 | 0.676 | 250 | random_legal |
-| `ef658d85-75cd-450c-b694-44402212618b` | v10.2.01-LargeMap-Base-02 | 0.689 | 250 | random_legal |
-| `619a92a5-a9f0-4700-a770-83878906f272` | v10.3.03-SelfPlayCheck-RateVsRandom-01 | 0.608 | 183 | random_legal |
-| `1170c864-030b-42e6-aa85-19ea8a4de3cf` | v10.2.12-LargeMap-EntropyHi-01 | 0.591 | 180 | random_legal |
-| `e279ceb8-3388-4fb4-b4c9-7124de8639f3` | v10.2.02-LargeMap-lr-hi | 0.601 | 179 | random_legal |
-| `2f8e80e5-8ef0-48a0-960a-fe375af2ae31` | v10.2.02-LargeMap-lr-mid | 0.667 | 178 | random_legal |
-| `e153f8ed-46a8-439d-b926-bdb60a25a96c` | v10.2.13-LargeMap-EntropyLo-01 | 0.597 | 178 | random_legal |
+| `91177c67-8b51-4a45-8e3d-fc8a05db3305` | v12.1.01-Continue-gamma-lo | 0.871 | 82 | neural (3ea75c71) |
+| `64f2c275-1e94-461c-9dd7-6f7942b751b2` | v12.1.01-Continue-gamma-mid | 0.878 | 80 | neural (3ea75c71) |
+| `7220a50b-fe50-4c4f-8623-29ed9160128e` | v12.1.01-Continue-gamma-hi | 0.860 | 80 | neural (926cd8fb) |
+| `491f3e8e-1706-43da-bc10-a9e7f9a6c622` | v12.1.02-Continue-level_mix-mid | 0.808 | 72 | neural (bc7cb18d) |
+| `5f19df25-7025-4629-8bbe-a94be33d441b` | v12.0.30-Bootstrap-entropy_coef-lo | 0.894 | 70 | neural (0a18601b) |
+| `d75ebb89-d0c2-430f-929f-fbc99c77f48f` | v12.0.30-Bootstrap-entropy_coef-hi | 0.911 | 70 | neural (0a18601b) |
+| `1084cd87-b549-4d87-a338-31687413a1f1` | v12.0.31-Bootstrap-entropy_coef-lo | 0.915 | 70 | neural (0a18601b) |
+| `f9e26ea3-0d07-4ef3-a909-eee46467eebb` | v12.0.31-Bootstrap-entropy_coef-hi | 0.916 | 70 | neural (9377ae86) |
+| `1ce6e9e6-b910-4b55-b6f4-95c0a7aa4c69` | v12.0.30-Bootstrap-entropy_coef-mid | 0.911 | 69 | neural (91ff2199) |
+| `79250233-8822-45f6-9eb2-52c1b4ef3993` | v12.0.31-Bootstrap-entropy_coef-mid | 0.926 | 69 | neural (0a18601b) |
 
 ## Failed runs
-- `88853a15` b7-260430-1803-default60-s1
-- `51f74dbc` b7-260430-1803-default60-s2
-- `5e725096` b7-260430-1803-default60-s3
-- `2d8c5b9b` b7-260430-1803-default60-s42
-- `5c92f104` b7-260430-1803-ceiling90-s7
-- `b426590b` v10.2.01-LargeMap-Base-FAILED-listFmtBug
-- `54ec9dc1` v10.3.01-GreedyOpp-Base-FAILED-backendDispatch
+- `9a09cc63` b9-260502-1802-default60-s6
+- `5ad85f1b` b9-260502-1802-default60-s5
+- `a9a0ed06` b9-260502-1802-default60-s8
+- `5f4c9f18` b9-260502-1802-default60-s99
+- `1595a140` b9-260502-1802-ceiling90-s13
+
+## Currently running
+- `9e11181a` v12.1.02-Continue-level_mix-hi
 
