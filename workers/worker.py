@@ -65,47 +65,40 @@ def pick_device() -> torch.device:
     return torch.device("cpu")
 
 
-def build_net_for_model(model_id: str, obs_size: int, num_actions: int) -> ActorCritic:
+def build_net_for_model(model_id: str, obs_size: int, num_actions: int) -> "ActorCritic":
     """Dispatch model_id → nn.Module.
 
     Keyed on the model_id string so we can swap architectures without touching
     existing rows. The obs/action checks catch "model row vs code drift" —
     i.e. someone changed encoder/action-space dims without bumping model_id.
+
+    Returns (net, net_version) — net_version is needed by PPOAgent for the
+    right sampling chain. Callers that don't yet thread net_version through
+    can take just `result[0]` (the bare net) but that's deprecated.
     """
     from sim.actions import ACTION_SPACE_SIZE
     from training.encoder import OBS_DIM
-    from training.net import ActorCritic
+    from training.nets import get_net_class
 
-    # (obs_dim, action_dim, builder) — builder takes no args; produces the net.
-    def _mk(body_dim: int):
-        return lambda: ActorCritic(body_dim=body_dim)
+    def _mk(body_dim: int, net_version: str):
+        Cls = get_net_class(net_version)
+        return lambda: Cls(body_dim=body_dim), net_version
     KNOWN = {
-        # v9.0-enc-full was the interim commit-1 model (full encoder + old
-        # flat 4097 head). Code has since moved to chained heads — running
-        # that model against this code will fail at inference, which is
-        # correct: the net topology doesn't match.
-        "v9.0-enc-full": (OBS_DIM, ACTION_SPACE_SIZE, _mk(128)),
-        # v9.0-full: full encoder + chained source/type/target heads
-        # (ARCHITECTURE §9.4). Default 128-wide body (production baseline).
-        "v9.0-full":     (OBS_DIM, ACTION_SPACE_SIZE, _mk(128)),
-        # Capacity-sweep variants (same architecture, wider trunk).
-        "v9.0-256":      (OBS_DIM, ACTION_SPACE_SIZE, _mk(256)),
-        "v9.0-512":      (OBS_DIM, ACTION_SPACE_SIZE, _mk(512)),
-        "v9.0-1024":     (OBS_DIM, ACTION_SPACE_SIZE, _mk(1024)),
-        # v10-1024: encoder bumped 1002 → 1008 (drop type_oh, add prod /
-        # wasted / share_live / reward_delta / 5-step action history /
-        # per-bldg event-explicit). Same chained heads, body=1024 unchanged.
-        "v10-1024":      (OBS_DIM, ACTION_SPACE_SIZE, _mk(1024)),
-        # v10.1: same architecture as v10-1024 (encoder v10, body=1024).
-        # Name change only — drops the body-width suffix Paul finds
-        # uninformative. Run labels under this model_id are formatted
-        # `v10.1.<exp>-<desc>` where <exp> is the per-fire experiment number.
-        "v10.1":         (OBS_DIM, ACTION_SPACE_SIZE, _mk(1024)),
-        # v12.0: clean break from v10. Set-transformer encoder (8 building
-        # tokens × 11 features + 4 group tokens × 6 + 1 GLOBAL token)
-        # with d_model=192. Pointer-style source/target heads. Action space
-        # 129 (2 send pcts × 8 src × 8 tgt + noop). ~1.2M params.
-        "v12.0":         (OBS_DIM, ACTION_SPACE_SIZE, _mk(192)),
+        # Pre-v12 IDs — historical body widths kept so old model rows still load.
+        "v9.0-enc-full": (OBS_DIM, ACTION_SPACE_SIZE, *_mk(128,  "v12")),
+        "v9.0-full":     (OBS_DIM, ACTION_SPACE_SIZE, *_mk(128,  "v12")),
+        "v9.0-256":      (OBS_DIM, ACTION_SPACE_SIZE, *_mk(256,  "v12")),
+        "v9.0-512":      (OBS_DIM, ACTION_SPACE_SIZE, *_mk(512,  "v12")),
+        "v9.0-1024":     (OBS_DIM, ACTION_SPACE_SIZE, *_mk(1024, "v12")),
+        "v10-1024":      (OBS_DIM, ACTION_SPACE_SIZE, *_mk(1024, "v12")),
+        "v10.1":         (OBS_DIM, ACTION_SPACE_SIZE, *_mk(1024, "v12")),
+        # v12.0: clean break — set-transformer encoder, pointer heads,
+        # chain src→type→tgt. Action space 129. ~1.2M params.
+        "v12.0":         (OBS_DIM, ACTION_SPACE_SIZE, *_mk(192,  "v12")),
+        # v13.0: same encoder + body as v12.0; reordered chain (src→tgt→pct)
+        # and head MLP wrappers on source/target. ~2.0M params, +16% FLOPs.
+        # See V13_PLAN.md.
+        "v13.0":         (OBS_DIM, ACTION_SPACE_SIZE, *_mk(192,  "v13")),
     }
     entry = KNOWN.get(model_id)
     if entry is None:
@@ -113,14 +106,14 @@ def build_net_for_model(model_id: str, obs_size: int, num_actions: int) -> Actor
             f"unknown model_id: {model_id!r} — add a case in build_net_for_model. "
             f"Known: {sorted(KNOWN)}"
         )
-    expected_obs, expected_actions, cls = entry
+    expected_obs, expected_actions, cls, net_version = entry
     if obs_size != expected_obs or num_actions != expected_actions:
         raise ValueError(
             f"model row {model_id!r} specifies obs={obs_size}, actions={num_actions}; "
             f"code expects obs={expected_obs}, actions={expected_actions}. "
             "Did the encoder/action space change without a new model id?"
         )
-    return cls()
+    return cls(), net_version
 
 
 # ---------------------------------------------------------------------------
@@ -853,7 +846,10 @@ def _upload_snapshot(run_id, snap_n: int, trainer) -> str | None:
             tmp_path = Path(tmp)
             w_file = tmp_path / "weights.pt"
             from training.checkpoint import save_state_dict
-            save_state_dict(trainer.agent.net.state_dict(), w_file)
+            save_state_dict(
+                trainer.agent.net.state_dict(), w_file,
+                net_version=trainer.agent.net_version,
+            )
             w_url = storage.upload("models", storage_path, w_file)
 
             n_url = None
@@ -1063,7 +1059,7 @@ def run_training(
     )
 
     # Build agent + trainer. Trainer owns its own vec env.
-    net = build_net_for_model(job["model_id"], model_meta["obs_size"], model_meta["num_actions"])
+    net, net_version = build_net_for_model(job["model_id"], model_meta["obs_size"], model_meta["num_actions"])
 
     # Continuation: download the parent's weights/optimizer/obs_norm and
     # load them into the freshly-built net before training. Artifacts live
@@ -1079,14 +1075,20 @@ def run_training(
             raw = parent_state["weights"]
             if isinstance(raw, dict) and "state_dict" in raw and "encoder_version" in raw:
                 weights = raw["state_dict"]
-                # Optional: warn if the parent's stamp disagrees with the
-                # current encoder. Continuations across encoder versions
-                # are nonsensical (shapes don't line up).
+                # Warn if the parent's stamps disagree with what we just
+                # built. Continuations across encoder/net versions are
+                # nonsensical (shapes don't line up).
                 from training.encoders import CURRENT_ENCODER_VERSION
+                from training.nets import DEFAULT_NET_VERSION
                 if raw["encoder_version"] != CURRENT_ENCODER_VERSION:
                     print(f"[worker] WARNING: parent stamped encoder_version="
                           f"{raw['encoder_version']!r} but current is "
                           f"{CURRENT_ENCODER_VERSION!r}; continuation likely will crash.")
+                parent_net_version = raw.get("net_version", DEFAULT_NET_VERSION)
+                if parent_net_version != net_version:
+                    print(f"[worker] WARNING: parent stamped net_version="
+                          f"{parent_net_version!r} but current model_id implies "
+                          f"{net_version!r}; continuation will fail at load_state_dict.")
             else:
                 weights = raw
             net.load_state_dict(weights)
@@ -1125,7 +1127,7 @@ def run_training(
         except Exception as exc:
             print(f"[worker] opponent download failed ({source}); pure self-play: {exc}")
 
-    agent = PPOAgent(net, device=device)
+    agent = PPOAgent(net, device=device, net_version=net_version)
     trainer = PPOTrainer(
         agent, cfg, seed=seed_int,
         opponent_name=opponent_name,
@@ -1313,7 +1315,10 @@ def _run_rotation_rematch(trainer, run_id: str, metrics_history: list[dict],
     out_dir = Path(tempfile.mkdtemp(prefix="mw2-rematch-"))
     p1_path = out_dir / "weights.pt"
     from training.checkpoint import save_state_dict
-    save_state_dict(trainer.agent.net.state_dict(), p1_path)
+    save_state_dict(
+        trainer.agent.net.state_dict(), p1_path,
+        net_version=trainer.agent.net_version,
+    )
     if trainer.obs_norm is not None:
         trainer.obs_norm.save(str(out_dir / "obs_norm.pt"))
 
@@ -1403,7 +1408,10 @@ def save_and_upload(
         log_file       = tmp_path / "metrics.json"
 
         from training.checkpoint import save_state_dict
-        save_state_dict(trainer.agent.net.state_dict(), weights_file)
+        save_state_dict(
+            trainer.agent.net.state_dict(), weights_file,
+            net_version=trainer.agent.net_version,
+        )
         # Optimizer state isn't routed through the encoder dispatch — its
         # shape only depends on the net it optimises, which the loader has
         # already version-resolved by the time it reads optimizer.pt.

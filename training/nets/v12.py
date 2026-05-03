@@ -1,4 +1,4 @@
-"""v13 actor-critic — set-transformer encoder + reordered pointer heads.
+"""v12 actor-critic — set-transformer encoder + pointer-style heads.
 
 Architecture (set-transformer over slot-tokens):
 
@@ -13,42 +13,33 @@ Architecture (set-transformer over slot-tokens):
     n_layers × (multi-head self-attention with key-padding mask + FFN)
     pre-LN, GELU, FFN width = ffn_mult × d_model
 
-  Heads — sampling chain reordered to src → tgt → pct:
-    source_logits:  q = source_q_mlp(GLOBAL); k = source_k_mlp(buildings)
+  Heads (factored to match the agent's sampling chain):
+    source_logits:  q = source_q_proj(GLOBAL); k = source_k_proj(buildings)
                     → (B, N_BUILDINGS) scaled dot-product
-                    7A: q-MLP and k-MLP wrap the projections (NEW vs v12)
-    target_logits:  q = target_q_mlp([GLOBAL; src_token]);
-                    k = target_k_mlp(buildings)
-                    → (B, N_BUILDINGS) scaled dot-product
-                    7C: q-MLP and k-MLP wrap the projections (NEW vs v12)
-    pct_logits:     pct_head([GLOBAL; src_token; tgt_token])
-                    → (B, NUM_PCT_CHOICES) — outputs are {noop=0, 50%=1, 100%=2}
-                    7B: linear(3d→d) + GELU + linear(d→3) (input dim grew from 2d to 3d
-                    because pct now conditions on the chosen tgt as well as src — this is
-                    the key structural fix for the cap-overflow pathology in v12)
+    cond_logits:    given chosen src building token,
+                    type_logits  = type_head([GLOBAL; src_token])
+                                   shape (B, NUM_TYPE_CHOICES) — 2 send pcts + noop
+                    tgt_logits   = target_q_proj([GLOBAL; src]) · target_k_proj(buildings)
+                                   → (B, N_BUILDINGS) scaled dot-product
     value:          value_head(GLOBAL) → scalar
 
 The body returned by forward_body is a tuple (tokens, key_padding_mask)
 where tokens is (B, 1+N_B+N_G, d_model). Heads slice in.
 
-v12 → v13 differences:
-  - sampling chain reordered: src → tgt → pct (was src → type → tgt). pct now
-    conditions on (src, tgt). This is the structural fix for the policy
-    pathology where cap-overflow led to friendly-to-friendly bouncing.
-  - the old `cond_logits(body, src) -> (type_logits, tgt_logits)` is split into
-    two separate methods: `target_logits(body, src)` and `pct_logits(body, src, tgt)`.
-    PPOAgent dispatches on net_version to call them in the right order.
-  - source_q/k and target_q/k each pre-projection wrapped in a 2-layer MLP
-    (d → 2d → d, GELU). +16% forward FLOPs concentrated in the action heads.
-  - "type" head renamed "pct" head; output ordering changed: {noop, 50%, 100%}
-    (was {50%, 100%, noop}). The agent re-maps to v12's flat env action space.
+Why this matches the agent's existing chain (training/agent.py): the
+external interface — forward_body / value / source_logits / cond_logits —
+is byte-identical to v10's. Only the internals change. The chained
+(src → type | src → tgt | src) sampling logic, masking decomposition, and
+PPO update path stay untouched.
 
-Action mapping to env's flat action index — UNCHANGED contract:
-    pct=0 (noop)     → action = NOOP_INDEX
-    pct=1 (50%)      → action = encode(type_idx=0, src, tgt)   # 50% in SEND_PERCENTAGES
-    pct=2 (100%)     → action = encode(type_idx=1, src, tgt)   # 100% in SEND_PERCENTAGES
-This keeps env+sim untouched — they decode v13's emitted action exactly as
-they decode v12's. v13 vs v12 cross-play uses the same action space.
+v10 → v12 differences:
+  - body is no longer a flat (B, body_dim) tensor — it's a tuple. The
+    agent treats it as opaque, so this is fine.
+  - source_logits is now permutation-equivariant by construction (pointer
+    head over building tokens, no positional bias).
+  - target_head conditions on the literal source token (richer than v10's
+    16-dim src embedding).
+  - NUM_TYPES = 2 (was 4); NUM_TYPE_CHOICES = 3 (was 5).
 """
 
 from __future__ import annotations
@@ -69,26 +60,18 @@ from training.encoder import (
 )
 
 
-# Pct head outputs: {noop=0, 50%=1, 100%=2}. NUM_PCT_CHOICES = 1 (noop) + len(SEND_PERCENTAGES).
-NUM_SEND_PCTS    = len(C.SEND_PERCENTAGES)        # 2 (50, 100)
-NUM_PCT_CHOICES  = NUM_SEND_PCTS + 1              # 3 (noop, 50%, 100%)
-NUM_SRC          = C.MAX_BUILDING_SLOTS           # 8
-NUM_TGT          = C.MAX_BUILDING_SLOTS           # 8
-
-# Pct ordinals — keep the agent's mapping to v12's encode() unambiguous.
-PCT_NOOP         = 0
-PCT_FIRST_SEND   = 1   # pct ∈ [PCT_FIRST_SEND, PCT_FIRST_SEND + NUM_SEND_PCTS)
+NUM_TYPES         = len(C.SEND_PERCENTAGES)       # 2
+NUM_TYPE_CHOICES  = NUM_TYPES + 1                 # 3 (+1 for noop)
+NUM_SRC           = C.MAX_BUILDING_SLOTS          # 8
+NUM_TGT           = C.MAX_BUILDING_SLOTS          # 8
 
 
-# v13 architecture defaults — same body width/depth as v12; only heads grew.
+# v12 architecture defaults — chosen to land at ~1M params on a 13-token set.
+# See research notes 2026-05-01 (set-transformer + AlphaStar precedent).
 D_MODEL  = 192
 N_LAYERS = 2
 N_HEADS  = 4
 FFN_MULT = 4
-
-# Head capacity multiplier for the source/target MLP wrappers (NEW in v13).
-# Hidden width = HEAD_MLP_MULT * D_MODEL. Set to 2 → 384 hidden, +16% FLOPs.
-HEAD_MLP_MULT = 2
 
 # Token-stream layout — these positions are referenced by the heads' slicing
 # code. Order is (GLOBAL, buildings…, groups…) so building indices line up
@@ -111,7 +94,7 @@ NUM_OWNER_EMB     = 3
 
 
 def infer_d_model(state_dict: dict, default: int = D_MODEL) -> int:
-    """Peek the model width from a saved v13 ActorCritic state_dict.
+    """Peek the model width from a saved ActorCritic state_dict.
 
     `global_proj.weight` has shape (d_model, GLOBAL_FEATS). Lets the worker
     reconstruct the right-sized net without storing size in the runs row.
@@ -126,27 +109,17 @@ def infer_body_dim(state_dict: dict, default: int = D_MODEL) -> int:
 
 
 def infer_obs_dim(state_dict: dict, default: int = OBS_DIM) -> int:
-    """Encoder version controls the contract; recompute from constants."""
+    """Peek the obs size from a saved ActorCritic state_dict.
+
+    `global_proj.weight` has shape (d_model, GLOBAL_FEATS). The full obs is
+    GLOBAL_FEATS + N_BUILDINGS * BUILDING_FEATS + N_GROUPS * GROUP_FEATS,
+    so we recompute from constants — encoder version controls the contract.
+    """
     return default
 
 
-def _make_head_mlp(in_dim: int, hidden_mult: int, out_dim: int) -> nn.Sequential:
-    """Build the v13 head pre-projection MLP: (in → hidden → out, GELU).
-
-    Used by source/target heads. Hidden width is `hidden_mult * D_MODEL` —
-    not `hidden_mult * in_dim` — so concatenated inputs (target_q reads
-    [global; src] = 2d) don't accidentally inflate the hidden state.
-    """
-    hidden = hidden_mult * D_MODEL
-    return nn.Sequential(
-        nn.Linear(in_dim, hidden),
-        nn.GELU(),
-        nn.Linear(hidden, out_dim),
-    )
-
-
 class TransformerLayer(nn.Module):
-    """One pre-LN self-attention layer + FFN. Unchanged from v12."""
+    """One pre-LN self-attention layer + FFN."""
 
     def __init__(self, d_model: int, n_heads: int, ffn_mult: int):
         super().__init__()
@@ -174,12 +147,8 @@ class TransformerLayer(nn.Module):
 
 
 class ActorCritic(nn.Module):
-    """v13 set-transformer actor-critic.
-
-    Forward is split so the agent can sample source → target → pct in three
-    passes that share the encoded body. PPOAgent dispatches on net_version
-    to call (source_logits, target_logits, pct_logits) in the right order.
-    """
+    """Set-transformer actor-critic. Forward is split so the agent can sample
+    source → (type, tgt | source) in two passes that share the encoded body."""
 
     def __init__(
         self,
@@ -188,19 +157,17 @@ class ActorCritic(nn.Module):
         n_layers: int = N_LAYERS,
         n_heads: int = N_HEADS,
         ffn_mult: int = FFN_MULT,
-        head_mlp_mult: int = HEAD_MLP_MULT,
         # Back-compat: old workers/configs pass `body_dim`.
         body_dim: int | None = None,
-        head_hidden: int | None = None,  # unused under v13; kept for kwarg compat
+        head_hidden: int | None = None,  # unused under v12; kept for kwarg compat
     ):
         super().__init__()
         if body_dim is not None:
             d_model = body_dim
-        self.d_model       = d_model
-        self.n_layers      = n_layers
-        self.n_heads       = n_heads
-        self.ffn_mult      = ffn_mult
-        self.head_mlp_mult = head_mlp_mult
+        self.d_model  = d_model
+        self.n_layers = n_layers
+        self.n_heads  = n_heads
+        self.ffn_mult = ffn_mult
 
         # Tokenizers — one linear projection per token type.
         self.global_proj = nn.Linear(GLOBAL_FEATS,  d_model)
@@ -219,27 +186,22 @@ class ActorCritic(nn.Module):
         ])
         self.final_ln = nn.LayerNorm(d_model)
 
-        # Source head (7A) — MLP wrapper before pointer projections (NEW v13).
-        self.source_q_mlp  = _make_head_mlp(d_model,     head_mlp_mult, d_model)
-        self.source_k_mlp  = _make_head_mlp(d_model,     head_mlp_mult, d_model)
+        # Pointer head: source.
         self.source_q_proj = nn.Linear(d_model, d_model)
         self.source_k_proj = nn.Linear(d_model, d_model)
 
-        # Target head (7C) — MLP wrappers; q reads [global; src_token] (2d input).
-        self.target_q_mlp  = _make_head_mlp(d_model * 2, head_mlp_mult, d_model)
-        self.target_k_mlp  = _make_head_mlp(d_model,     head_mlp_mult, d_model)
-        self.target_q_proj = nn.Linear(d_model, d_model)
+        # Pointer head: target. Query conditioned on [GLOBAL; src_token].
+        self.target_q_proj = nn.Linear(d_model * 2, d_model)
         self.target_k_proj = nn.Linear(d_model, d_model)
 
-        # Pct head (7B, was "type") — input grew to 3d ([global; src; tgt])
-        # because pct now conditions on the chosen tgt as well as src.
-        self.pct_head = nn.Sequential(
-            nn.Linear(d_model * 3, d_model),
+        # Type head: 3-way classification from [GLOBAL; src_token].
+        self.type_head = nn.Sequential(
+            nn.Linear(d_model * 2, d_model),
             nn.GELU(),
-            nn.Linear(d_model, NUM_PCT_CHOICES),
+            nn.Linear(d_model, NUM_TYPE_CHOICES),
         )
 
-        # Value head (7D) — unchanged from v12.
+        # Value head: scalar from GLOBAL.
         self.value_head = nn.Sequential(
             nn.Linear(d_model, d_model),
             nn.GELU(),
@@ -255,55 +217,65 @@ class ActorCritic(nn.Module):
                 nn.init.orthogonal_(m.weight, gain=2.0 ** 0.5)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
-        # Pointer-head output projections at small gain (keeps early entropy
-        # high while letting the MLP wrappers learn useful features).
+        # Policy-head outputs at small gain (keeps early entropy high).
         for last_layer in (self.source_q_proj, self.source_k_proj,
                            self.target_q_proj, self.target_k_proj):
             nn.init.orthogonal_(last_layer.weight, gain=0.1)
             if last_layer.bias is not None:
                 nn.init.zeros_(last_layer.bias)
-        pct_last = self.pct_head[-1]
-        nn.init.orthogonal_(pct_last.weight, gain=0.01)
-        nn.init.zeros_(pct_last.bias)
+        type_last = self.type_head[-1]
+        nn.init.orthogonal_(type_last.weight, gain=0.01)
+        nn.init.zeros_(type_last.bias)
         # Value head at gain 1 so it predicts near-zero initially.
         value_last = self.value_head[-1]
         nn.init.orthogonal_(value_last.weight, gain=1.0)
         nn.init.zeros_(value_last.bias)
-        # Embeddings small uniform.
+        # Embeddings small uniform (so they barely perturb the per-token signal
+        # at init; the network learns useful values from gradients).
         nn.init.uniform_(self.type_emb.weight,  -0.1, 0.1)
         nn.init.uniform_(self.owner_emb.weight, -0.1, 0.1)
 
     # ------------------------------------------------------------------
-    # Token decode + encoder (unchanged from v12)
+    # Token decode + encoder
     # ------------------------------------------------------------------
 
     def _decode_obs_to_tokens(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Slice flat obs into per-token feature blocks, project, return
+        (tokens (B, N_TOKENS, d), key_padding_mask (B, N_TOKENS) bool)."""
         B = obs.shape[0]
         device = obs.device
 
-        globals_flat = obs[:, :GLOBAL_FEATS]
+        globals_flat = obs[:, :GLOBAL_FEATS]                                  # (B, GF)
         bldg_offset_end = GLOBAL_FEATS + N_BUILDINGS * BUILDING_FEATS
         bldg_flat = obs[:, GLOBAL_FEATS:bldg_offset_end].reshape(B, N_BUILDINGS, BUILDING_FEATS)
         grp_flat  = obs[:, bldg_offset_end:].reshape(B, N_GROUPS, GROUP_FEATS)
 
-        bldg_alive = bldg_flat[..., 0]
-        grp_alive  = grp_flat[..., 0]
+        # Alive flags from the encoder's known column positions.
+        bldg_alive = bldg_flat[..., 0]  # BLDG_FEAT_ALIVE = 0
+        grp_alive  = grp_flat[..., 0]   # GRP_FEAT_ALIVE = 0
 
+        # Owner ids (long for embedding lookup). Clamp guards against weird
+        # values during obs-norm corner cases (RunningNorm shouldn't move
+        # categorical columns much, but defence in depth).
         bldg_owner_id = bldg_flat[..., 1].long().clamp(0, NUM_OWNER_EMB - 1)
         grp_owner_id  = grp_flat[..., 1].long().clamp(0, NUM_OWNER_EMB - 1)
 
+        # Type embedding ids — broadcast scalar lookups so we can add to the
+        # whole token block at once.
         type_global   = self.type_emb(torch.tensor(TYPE_EMB_GLOBAL,   device=device, dtype=torch.long))
         type_building = self.type_emb(torch.tensor(TYPE_EMB_BUILDING, device=device, dtype=torch.long))
         type_group    = self.type_emb(torch.tensor(TYPE_EMB_GROUP,    device=device, dtype=torch.long))
 
-        global_tok = self.global_proj(globals_flat) + type_global
-        bldg_tok   = self.bldg_proj(bldg_flat) + type_building
+        # Project + add positional/type/owner signals.
+        global_tok = self.global_proj(globals_flat) + type_global       # (B, d)
+        bldg_tok   = self.bldg_proj(bldg_flat) + type_building          # (B, N_B, d)
         bldg_tok   = bldg_tok + self.owner_emb(bldg_owner_id)
-        grp_tok    = self.grp_proj(grp_flat) + type_group
+        grp_tok    = self.grp_proj(grp_flat) + type_group               # (B, N_G, d)
         grp_tok    = grp_tok + self.owner_emb(grp_owner_id)
 
-        tokens = torch.cat([global_tok.unsqueeze(1), bldg_tok, grp_tok], dim=1)
+        tokens = torch.cat([global_tok.unsqueeze(1), bldg_tok, grp_tok], dim=1)  # (B, T, d)
 
+        # key_padding_mask: True where the position should be IGNORED.
         global_alive = torch.ones(B, 1, device=device, dtype=bldg_alive.dtype)
         alive = torch.cat([global_alive, bldg_alive, grp_alive], dim=1)
         key_padding_mask = alive < 0.5
@@ -318,7 +290,7 @@ class ActorCritic(nn.Module):
         return (tokens, key_padding_mask)
 
     # ------------------------------------------------------------------
-    # Heads (v13 chain: source → target → pct)
+    # Heads
     # ------------------------------------------------------------------
 
     def value(self, body) -> torch.Tensor:
@@ -331,59 +303,46 @@ class ActorCritic(nn.Module):
         global_token = tokens[:, TOKEN_GLOBAL_IDX, :]
         bldg_tokens  = tokens[:, TOKEN_BLDG_START:TOKEN_BLDG_END, :]
 
-        q = self.source_q_proj(self.source_q_mlp(global_token))      # (B, d)
-        k = self.source_k_proj(self.source_k_mlp(bldg_tokens))       # (B, N_B, d)
+        q = self.source_q_proj(global_token)              # (B, d)
+        k = self.source_k_proj(bldg_tokens)               # (B, N_B, d)
         scale = 1.0 / math.sqrt(self.d_model)
-        return torch.einsum("bd,bnd->bn", q, k) * scale              # (B, N_B)
+        return torch.einsum("bd,bnd->bn", q, k) * scale   # (B, N_B)
 
-    def target_logits(self, body, src_idx: torch.Tensor) -> torch.Tensor:
-        """Target distribution given the chosen source. (B, N_BUILDINGS)."""
+    def cond_logits(
+        self,
+        body,
+        src_idx: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         tokens, _ = body
         global_token = tokens[:, TOKEN_GLOBAL_IDX, :]
         bldg_tokens  = tokens[:, TOKEN_BLDG_START:TOKEN_BLDG_END, :]
 
         B = tokens.shape[0]
         batch_idx = torch.arange(B, device=tokens.device)
-        src_token = bldg_tokens[batch_idx, src_idx]                  # (B, d)
+        src_token = bldg_tokens[batch_idx, src_idx]       # (B, d)
+        cat = torch.cat([global_token, src_token], dim=-1)  # (B, 2d)
 
-        q_in = torch.cat([global_token, src_token], dim=-1)          # (B, 2d)
-        q = self.target_q_proj(self.target_q_mlp(q_in))              # (B, d)
-        k = self.target_k_proj(self.target_k_mlp(bldg_tokens))       # (B, N_B, d)
+        type_logits = self.type_head(cat)                 # (B, NUM_TYPE_CHOICES)
+
+        q = self.target_q_proj(cat)                       # (B, d)
+        k = self.target_k_proj(bldg_tokens)               # (B, N_B, d)
         scale = 1.0 / math.sqrt(self.d_model)
-        return torch.einsum("bd,bnd->bn", q, k) * scale              # (B, N_B)
+        tgt_logits = torch.einsum("bd,bnd->bn", q, k) * scale  # (B, N_B)
 
-    def pct_logits(self, body, src_idx: torch.Tensor, tgt_idx: torch.Tensor) -> torch.Tensor:
-        """Pct distribution given (source, target). (B, NUM_PCT_CHOICES).
-
-        Outputs in order {noop=0, 50%=1, 100%=2}.
-        """
-        tokens, _ = body
-        global_token = tokens[:, TOKEN_GLOBAL_IDX, :]
-        bldg_tokens  = tokens[:, TOKEN_BLDG_START:TOKEN_BLDG_END, :]
-
-        B = tokens.shape[0]
-        batch_idx = torch.arange(B, device=tokens.device)
-        src_token = bldg_tokens[batch_idx, src_idx]                  # (B, d)
-        tgt_token = bldg_tokens[batch_idx, tgt_idx]                  # (B, d)
-
-        cat = torch.cat([global_token, src_token, tgt_token], dim=-1)  # (B, 3d)
-        return self.pct_head(cat)                                    # (B, NUM_PCT_CHOICES)
+        return type_logits, tgt_logits
 
 
 __all__ = [
     "ActorCritic",
     "TransformerLayer",
-    "NUM_SEND_PCTS",
-    "NUM_PCT_CHOICES",
+    "NUM_TYPES",
+    "NUM_TYPE_CHOICES",
     "NUM_SRC",
     "NUM_TGT",
-    "PCT_NOOP",
-    "PCT_FIRST_SEND",
     "D_MODEL",
     "N_LAYERS",
     "N_HEADS",
     "FFN_MULT",
-    "HEAD_MLP_MULT",
     "infer_d_model",
     "infer_body_dim",
     "infer_obs_dim",

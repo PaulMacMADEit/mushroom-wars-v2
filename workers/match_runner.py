@@ -74,45 +74,59 @@ def _load_agent(state: dict, device: torch.device):
     caller must substitute `random_legal_opponent` when playing that side.
 
     Otherwise returns (agent, obs_norm, encode_fn) where `encode_fn` is the
-    encoder version that produced the weights — i.e. v9.0 for unstamped
-    archive checkpoints, v10 for new ones. Loaders that ignored the
-    encoder version pre-v10 silently used the current encoder, which
-    breaks once OBS_DIM diverges across versions.
+    encoder version that produced the weights. The right ActorCritic class
+    is dispatched via the net registry on `net_version` (added in v13);
+    legacy stamps without `net_version` resolve to v12.
     """
     if state.get("weights") is None:
         return None, None, None
     from training.encoders import DEFAULT_ENCODER_VERSION, get_encoder
-    from training.net import infer_body_dim, infer_obs_dim
+    from training.nets import DEFAULT_NET_VERSION, get_net_class
 
     # `state["weights"]` is either a raw state_dict (legacy) or a wrapped
-    # {state_dict, encoder_version} dict (v10+).
+    # {state_dict, encoder_version, net_version?} dict.
     raw = state["weights"]
     if isinstance(raw, dict) and "state_dict" in raw and "encoder_version" in raw:
-        weights        = raw["state_dict"]
+        weights         = raw["state_dict"]
         encoder_version = raw["encoder_version"]
+        net_version     = raw.get("net_version", DEFAULT_NET_VERSION)
     else:
-        weights        = raw
+        weights         = raw
         encoder_version = DEFAULT_ENCODER_VERSION
+        net_version     = DEFAULT_NET_VERSION
 
     encoder_entry = get_encoder(encoder_version)
+    NetClass = get_net_class(net_version)
 
     # Size the net to the trunk's actual obs_dim, not the current OBS_DIM
-    # constant. ActorCritic(obs_dim=…) wires the trunk's first Linear layer.
-    body_dim = infer_body_dim(weights)
-    obs_dim  = infer_obs_dim(weights)
+    # constant. NetClass(obs_dim=…) wires the trunk's first Linear layer.
+    # infer_body_dim/infer_obs_dim are module-level functions (not class
+    # methods), so we resolve them through the per-version module.
+    body_dim = _infer_dim_module(net_version, "body", weights)
+    obs_dim  = _infer_dim_module(net_version, "obs",  weights)
     if obs_dim != encoder_entry.obs_dim:
         raise ValueError(
             f"checkpoint trunk obs_dim={obs_dim} but encoder_version="
             f"{encoder_version!r} expects {encoder_entry.obs_dim}"
         )
-    net = ActorCritic(obs_dim=obs_dim, body_dim=body_dim)
+    net = NetClass(obs_dim=obs_dim, body_dim=body_dim)
     net.load_state_dict(weights)
-    agent = PPOAgent(net, device=device)
+    agent = PPOAgent(net, device=device, net_version=net_version)
     obs_norm: RunningNorm | None = None
     if state["obs_norm"] is not None:
         obs_norm = RunningNorm(obs_dim)  # file shape wins on load anyway
         obs_norm.load_state_dict(state["obs_norm"])
     return agent, obs_norm, encoder_entry.encode
+
+
+def _infer_dim_module(net_version: str, which: str, state_dict: dict) -> int:
+    """Resolve infer_body_dim / infer_obs_dim from the per-version module."""
+    if net_version == "v12":
+        from training.nets import v12 as mod
+    else:
+        from training import net as mod
+    fn = mod.infer_body_dim if which == "body" else mod.infer_obs_dim
+    return fn(state_dict)
 
 
 def _play_one_game(

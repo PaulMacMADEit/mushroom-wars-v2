@@ -33,20 +33,31 @@ class OpponentPool:
     # Register / sample / evict
     # ------------------------------------------------------------------
 
-    def register(self, net: torch.nn.Module, obs_norm, tag: str) -> tuple[Path, Optional[Path]]:
+    def register(
+        self,
+        net: torch.nn.Module,
+        obs_norm,
+        tag: str,
+        net_version: Optional[str] = None,
+    ) -> tuple[Path, Optional[Path]]:
         """Snapshot `net` (and optionally `obs_norm`) under `tag`. Returns the
-        paths so the caller can pass them into the env factory right away."""
+        paths so the caller can pass them into the env factory right away.
+
+        `net_version` stamps the topology version on the saved checkpoint so
+        the loader can pick the right ActorCritic class. Defaults to None
+        which falls through to `CURRENT_NET_VERSION` in `save_state_dict`."""
         snap_dir = self.root / f"snap-{tag}"
         snap_dir.mkdir(exist_ok=True)
 
         w_path = snap_dir / "weights.pt"
         # v10: wrap with encoder_version stamp so loaders dispatch to the
-        # right encoder. Legacy raw saves still load via the back-compat
-        # path in checkpoint.load_state_dict_with_version.
+        # right encoder. v13: also stamp net_version. Legacy raw saves still
+        # load via the back-compat path in checkpoint.load_state_dict_with_version.
         from training.checkpoint import save_state_dict
         save_state_dict(
             {k: v.detach().cpu() for k, v in net.state_dict().items()},
             w_path,
+            net_version=net_version,
         )
 
         n_path: Optional[Path] = None

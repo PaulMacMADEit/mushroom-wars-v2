@@ -101,13 +101,17 @@ def test_wrapped_save_round_trips_version():
 
 
 def test_explicit_version_override():
-    """Caller can stamp a non-current version (e.g. converted backfill)."""
+    """Caller can stamp a non-current version (e.g. converted backfill).
+
+    v13 (2026-05-03): load_state_dict_with_version now returns a 3-tuple
+    (state_dict, encoder_version, net_version). Updated to unpack accordingly.
+    """
     net = ActorCritic()
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "weights.pt"
         save_state_dict(net.state_dict(), path, encoder_version="v9.0")
 
-        _, enc_version = load_state_dict_with_version(
+        _, enc_version, _net_version = load_state_dict_with_version(
             path, weights_only=False,
         )
         assert enc_version == "v9.0"

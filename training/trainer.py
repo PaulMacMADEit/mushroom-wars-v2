@@ -255,15 +255,15 @@ class PPOTrainer:
         # Each archive member: (state_dict, encoder_version) so the loader can
         # dispatch the right encoder per swap. v9.0 archive members default
         # to "v9.0" via the unstamped-checkpoint fallback.
-        self._lb_state_dicts: list[tuple[dict, str]] = []
+        self._lb_state_dicts: list[tuple[dict, str, str]] = []
         self._lb_obs_norms: list = []
         if self._leaderboard and self.cfg.opponent_pool_mode == "rotate_per_update":
             from sim.envs.opponents import preload_state_dict, preload_obs_norm
             from training.encoders import get_encoder
             opp_device = (opponent_kwargs or {}).get("device", "cpu")
             for w_path, n_path, _w in self._leaderboard:
-                sd, enc_v = preload_state_dict(str(w_path), device=opp_device)
-                self._lb_state_dicts.append((sd, enc_v))
+                sd, enc_v, net_v = preload_state_dict(str(w_path), device=opp_device)
+                self._lb_state_dicts.append((sd, enc_v, net_v))
                 # Size obs_norm to match the encoder version that produced
                 # the saved obs_norm file (the file shape wins anyway).
                 self._lb_obs_norms.append(preload_obs_norm(
@@ -961,8 +961,8 @@ class PPOTrainer:
         else:
             idx = int(np.random.randint(0, len(self._leaderboard)))
 
-        # Cached (state_dict, encoder_version) + obs_norm — already in RAM from init.
-        state_dict, encoder_version = self._lb_state_dicts[idx]
+        # Cached (state_dict, encoder_version, net_version) + obs_norm — already in RAM from init.
+        state_dict, encoder_version, net_version = self._lb_state_dicts[idx]
         obs_norm = self._lb_obs_norms[idx]
         # Track which archive members the agent has faced so end_of_run_rematch
         # can replay each one at the end of training.
@@ -973,6 +973,7 @@ class PPOTrainer:
             obs_norm=obs_norm,
             device=device,
             encoder_version=encoder_version,
+            net_version=net_version,
         )
 
         # Swap in both the vec env (legacy path) and the fused_rollout
@@ -1109,6 +1110,7 @@ class PPOTrainer:
             save_state_dict(
                 {k: v.detach().cpu() for k, v in self.agent.net.state_dict().items()},
                 eval_ckpt_dir / "weights.pt",
+                net_version=self.agent.net_version,
             )
             if self.obs_norm is not None:
                 self.obs_norm.save(str(eval_ckpt_dir / "obs_norm.pt"))
@@ -1230,7 +1232,8 @@ class PPOTrainer:
         """
         assert self.pool is not None
         w, n = self.pool.register(
-            self.agent.net, self.obs_norm, tag=f"u{self._update_count:05d}"
+            self.agent.net, self.obs_norm, tag=f"u{self._update_count:05d}",
+            net_version=self.agent.net_version,
         )
         lb = self._leaderboard
         use_lb = self.cfg.leaderboard_bias > 0 and len(lb) > 0

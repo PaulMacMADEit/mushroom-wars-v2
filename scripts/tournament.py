@@ -43,7 +43,7 @@ from sim.envs.opponents import random_legal_opponent_batched
 from sim.state import State, empty_state
 from training.agent import PPOAgent
 from training.encoder import OBS_DIM, encode_obs
-from training.net import ActorCritic, infer_body_dim, infer_obs_dim
+from training.net import ActorCritic, infer_body_dim, infer_obs_dim  # noqa: F401  (kept for back-compat re-exports)
 from training.obs_norm import RunningNorm
 
 
@@ -134,32 +134,39 @@ def _load_policy(path: str | Path, device: torch.device):
 
     if not Path(weights_path).exists():
         raise FileNotFoundError(f"weights.pt not found at {weights_path}")
-    raw = torch.load(str(weights_path), map_location=device, weights_only=True)
+    raw = torch.load(str(weights_path), map_location=device, weights_only=False)
     # 2026-04-29 fire 80: v10 trainer wraps weights as {state_dict, encoder_version}.
-    # v9 saved a flat state_dict (no version stamp).
+    # v13 (2026-05-03) adds `net_version` for separate net topology versioning.
     if isinstance(raw, dict) and "state_dict" in raw and "encoder_version" in raw:
+        from training.nets import DEFAULT_NET_VERSION
         state_dict      = raw["state_dict"]
         encoder_version = raw["encoder_version"]
+        net_version     = raw.get("net_version", DEFAULT_NET_VERSION)
     else:
         from training.encoders import DEFAULT_ENCODER_VERSION
+        from training.nets import DEFAULT_NET_VERSION
         state_dict      = raw
         encoder_version = DEFAULT_ENCODER_VERSION
+        net_version     = DEFAULT_NET_VERSION
     from training.encoders import get_encoder
+    from training.nets import get_net_class
     encoder_entry = get_encoder(encoder_version)
-    body_dim = infer_body_dim(state_dict)
-    obs_dim  = infer_obs_dim(state_dict)
+    NetClass = get_net_class(net_version)
+    # infer_body_dim / infer_obs_dim live in the per-version module.
+    if net_version == "v12":
+        from training.nets import v12 as _net_mod
+    else:
+        from training import net as _net_mod
+    body_dim = _net_mod.infer_body_dim(state_dict)
+    obs_dim  = _net_mod.infer_obs_dim(state_dict)
     if obs_dim != encoder_entry.obs_dim:
         raise ValueError(
             f"checkpoint trunk obs_dim={obs_dim} but encoder {encoder_version!r} "
             f"expects {encoder_entry.obs_dim} — version mismatch"
         )
-    # 2026-04-29: must size the net to the checkpoint's actual obs_dim — not
-    # the current OBS_DIM constant — or v9.0 (1002) ↔ v10 (1008) cross-version
-    # matches crash with `size mismatch for trunk.0.weight`. The encoder is
-    # dispatched per-checkpoint so a v9 net gets fed v9-shape obs.
-    net = ActorCritic(obs_dim=obs_dim, body_dim=body_dim)
+    net = NetClass(obs_dim=obs_dim, body_dim=body_dim)
     net.load_state_dict(state_dict)
-    agent = PPOAgent(net, device=device)
+    agent = PPOAgent(net, device=device, net_version=net_version)
     obs_norm = None
     if obs_norm_p and Path(obs_norm_p).exists():
         # File shape wins on load; the constant just sets a placeholder.

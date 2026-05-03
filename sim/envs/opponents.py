@@ -222,11 +222,12 @@ def _mirror_ownership(obs: dict) -> dict:
 def preload_state_dict(
     weights_path: str,
     device: str = "cpu",
-) -> tuple[dict, str]:
+) -> tuple[dict, str, str]:
     """Read a weights .pt file once into RAM.
 
-    Returns `(state_dict, encoder_version)`. Legacy raw saves (no wrapper)
-    resolve to `DEFAULT_ENCODER_VERSION` ("v9.0") via `checkpoint`.
+    Returns `(state_dict, encoder_version, net_version)`. Legacy saves
+    resolve to `DEFAULT_ENCODER_VERSION` / `DEFAULT_NET_VERSION` via
+    `checkpoint.load_state_dict_with_version`.
 
     Pair with `make_neural_opponent_cached` for fast per-update swaps
     under opponent_pool_mode=rotate_per_update.
@@ -239,9 +240,9 @@ def preload_state_dict(
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
     from training.checkpoint import load_state_dict_with_version
     # weights_only=False because new wrapped saves include the
-    # `encoder_version` string field which torch's `weights_only` mode
-    # rejects (it whitelists tensors only). The wrapper is project-internal
-    # so this is safe.
+    # `encoder_version` and `net_version` string fields which torch's
+    # `weights_only` mode rejects (it whitelists tensors only). The
+    # wrapper is project-internal so this is safe.
     return load_state_dict_with_version(
         weights_path, map_location=device, weights_only=False,
     )
@@ -273,14 +274,17 @@ def make_neural_opponent_cached(
     device: str = "cpu",
     recorder=None,
     encoder_version: Optional[str] = None,
+    net_version: Optional[str] = None,
 ) -> Opponent:
     """Build an Opponent callable from a pre-loaded state_dict + obs_norm.
 
     `encoder_version` selects which encoder to run on each call (must
     match the obs distribution the state_dict was trained on). When None,
-    defaults to `DEFAULT_ENCODER_VERSION` — the v9.0 fallback for legacy
-    unstamped checkpoints. Pass the value returned alongside the
-    state_dict by `preload_state_dict`.
+    defaults to `DEFAULT_ENCODER_VERSION`.
+
+    `net_version` selects which ActorCritic topology to instantiate. When
+    None, defaults to `DEFAULT_NET_VERSION` (v12 — covers all unstamped
+    legacy checkpoints). Pass the value returned by `preload_state_dict`.
 
     Faster than `make_neural_opponent` for hot-swap paths because no disk
     I/O happens here — caller is expected to have called `preload_state_dict`
@@ -291,27 +295,47 @@ def make_neural_opponent_cached(
     """
     from training.agent import PPOAgent
     from training.encoders import DEFAULT_ENCODER_VERSION, get_encoder
-    from training.net import ActorCritic, infer_body_dim, infer_obs_dim
+    from training.nets import DEFAULT_NET_VERSION, get_net_class
 
     if encoder_version is None:
         encoder_version = DEFAULT_ENCODER_VERSION
+    if net_version is None:
+        net_version = DEFAULT_NET_VERSION
     encoder_entry = get_encoder(encoder_version)
+    NetClass = get_net_class(net_version)
 
     # Size the net to the saved trunk's actual obs_dim, not the current
-    # encoder's. A v9.0 checkpoint has trunk.0 ∈ (body, 1002); a v10
-    # checkpoint has (body, 1008). Default ActorCritic(obs_dim=OBS_DIM)
-    # would always pick v10's 1008 and crash on a v9.0 state_dict load.
-    body_dim = infer_body_dim(state_dict)
-    obs_dim  = infer_obs_dim(state_dict)
+    # encoder's. infer_body_dim / infer_obs_dim are module-level functions
+    # in each net module — resolve through the per-version module.
+    body_dim = _infer_body_dim_module(net_version, state_dict)
+    obs_dim  = _infer_obs_dim_module(net_version, state_dict)
     if obs_dim != encoder_entry.obs_dim:
         raise ValueError(
             f"checkpoint trunk obs_dim={obs_dim} but encoder_version="
             f"{encoder_version!r} expects obs_dim={encoder_entry.obs_dim}"
         )
-    net = ActorCritic(obs_dim=obs_dim, body_dim=body_dim)
+    net = NetClass(obs_dim=obs_dim, body_dim=body_dim)
     net.load_state_dict(state_dict)
-    agent = PPOAgent(net, device=device)
+    agent = PPOAgent(net, device=device, net_version=net_version)
     return _build_opponent_callable(agent, obs_norm, recorder, encoder_entry.encode)
+
+
+def _infer_body_dim_module(net_version: str, state_dict: dict) -> int:
+    """Resolve infer_body_dim from the per-version module (module-level fn)."""
+    if net_version == "v12":
+        from training.nets.v12 import infer_body_dim
+        return infer_body_dim(state_dict)
+    from training.net import infer_body_dim
+    return infer_body_dim(state_dict)
+
+
+def _infer_obs_dim_module(net_version: str, state_dict: dict) -> int:
+    """Resolve infer_obs_dim from the per-version module (module-level fn)."""
+    if net_version == "v12":
+        from training.nets.v12 import infer_obs_dim
+        return infer_obs_dim(state_dict)
+    from training.net import infer_obs_dim
+    return infer_obs_dim(state_dict)
 
 
 def make_neural_opponent(
@@ -338,7 +362,7 @@ def make_neural_opponent(
     waiting for subprocs stuck on `futex_do_wait`). We hide the GPU from
     the subproc's torch *before* importing it so opponents stay CPU-only.
     """
-    state_dict, encoder_version = preload_state_dict(weights_path, device=device)
+    state_dict, encoder_version, net_version = preload_state_dict(weights_path, device=device)
     # Size obs_norm to whatever shape the saved file actually has — see
     # preload_obs_norm; the file's own shape wins regardless of the
     # constructor arg.
@@ -349,6 +373,7 @@ def make_neural_opponent(
     return make_neural_opponent_cached(
         state_dict, obs_norm, device=device, recorder=recorder,
         encoder_version=encoder_version,
+        net_version=net_version,
     )
 
 
