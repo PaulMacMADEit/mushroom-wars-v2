@@ -1235,7 +1235,7 @@ def run_training(
                 metrics_history=metrics_history,
                 level=cfg.level_name,
                 level_mix=getattr(cfg, "level_mix", None),
-                n_games=25,
+                n_games=150,
             )
             print(f"[worker] rotation rematch: {len(rotation_rematch)} opponents replayed", flush=True)
         except Exception as exc:
@@ -1335,6 +1335,10 @@ def _run_rotation_rematch(trainer, run_id: str, metrics_history: list[dict],
                 p1=str(p1_path), p2=str(weights_path),
                 games=n_games, level=level, level_mix=level_mix, max_ticks=200,
                 seed=10000 + idx, verbose=False,
+                # Stochastic — apples-to-apples with the stochastic training
+                # rollout win_rate. tournament default (deterministic=True) is
+                # for stable Elo/bench_eval; rematch wants comparability.
+                deterministic=False,
             )
             total = res.get("total", 0)
             p1_wins = res.get("p1_wins", 0)

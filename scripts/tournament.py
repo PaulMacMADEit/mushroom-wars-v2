@@ -235,7 +235,7 @@ def _decode_action_to_packed(idx: int, out: np.ndarray):
 
 def _pick_actions(kind: str, agent, obs_norm, states: list[State],
                   player: int, rng: np.random.Generator,
-                  encode_fn=None) -> np.ndarray:
+                  encode_fn=None, deterministic: bool = True) -> np.ndarray:
     """Returns (n_envs,) flat action indices for the given player.
 
     `encode_fn` is the encoder matching this checkpoint's version (v9.0 vs
@@ -267,10 +267,10 @@ def _pick_actions(kind: str, agent, obs_norm, states: list[State],
         obs_array[i] = enc(d)
     if obs_norm is not None:
         obs_array = obs_norm.normalize(obs_array)
-    # Eval is deterministic — sampling injects noise that costs win rate vs
-    # weak opponents (random_legal) and creates unstable Elo against strong
-    # ones. Training still samples (entropy_coef handles exploration there).
-    flat_actions, *_ = agent.act_batch(obs_array, masks, deterministic=True)
+    # Default eval is deterministic — argmax keeps Elo stable. Pass
+    # deterministic=False from paths that want apples-to-apples with the
+    # stochastic training rollouts (e.g. End-of-run rematch).
+    flat_actions, *_ = agent.act_batch(obs_array, masks, deterministic=deterministic)
     return flat_actions.astype(np.int64)
 
 
@@ -284,6 +284,7 @@ def run_match(
     device: torch.device | None = None,
     verbose: bool = False,
     level_mix: list | dict | None = None,
+    deterministic: bool = True,
 ) -> dict:
     """Run one head-to-head match and return {p1_wins, p2_wins, draws, total, settled, wall_s}.
 
@@ -320,8 +321,8 @@ def run_match(
     t0 = time.perf_counter()
     for tick in range(max_ticks):
         states = vec.snapshot_numpy_states()
-        a1_flat = _pick_actions(p1_kind, p1_agent, p1_norm, states, C.OWNER_P1, rng, p1_encode)
-        a2_flat = _pick_actions(p2_kind, p2_agent, p2_norm, states, C.OWNER_P2, rng, p2_encode)
+        a1_flat = _pick_actions(p1_kind, p1_agent, p1_norm, states, C.OWNER_P1, rng, p1_encode, deterministic=deterministic)
+        a2_flat = _pick_actions(p2_kind, p2_agent, p2_norm, states, C.OWNER_P2, rng, p2_encode, deterministic=deterministic)
         a_batch = np.zeros((games, 2, ACTION_DIM), dtype=np.int32)
         for i in range(games):
             _decode_action_to_packed(int(a1_flat[i]), a_batch[i, 0])
