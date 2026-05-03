@@ -210,6 +210,28 @@ v13 continuation (r1.6) regressed vs bootstrap — warm-start didn't compound fo
 
 **Worker:** active. Backstop: active. 3 cells queued, ~20 min each → results in ~1h.
 
+### Fire 7 — 2026-05-03 14:50 PT — v12.1.04 failed, queue v12.1.05 gamma
+
+**v12.1.04 status:** only lo cell was queued (mid/hi never inserted). lo failed with SIGINT — interrupted before producing results. No post-mortem possible.
+
+**Parent selection:** unchanged — `v12.0.31-Bootstrap-entropy_coef-mid` (id `79250233`, rate=0.926). Still the strongest sim-v1.4 done cell.
+
+**3-game gut check:** skipped — no new finished cells since fire 6. Parent's noop-collapse-in-losses anomaly (fire 6) still the standing behavioral concern.
+
+**Cells queued — v12.1.05-Continue-gamma, parent `79250233` (rate=0.926):**
+
+This is a re-run of the gamma axis from fire 1, but from a much stronger parent (0.926 vs 0.878). Fire 1 gamma cells landed 0.860–0.878 — all below parent. If continuation from a stronger base yields rates above 0.926, gamma tuning has value; if they cluster below, gamma is not the lever.
+
+| cell | gamma | hypothesis | predicted training_rate |
+|---|---|---|---|
+| lo | 0.99 | matches parent's discount exactly → pure continuation control | 90–95% |
+| mid | 0.995 | longer credit horizon; terminal-only reward may benefit from seeing further | 89–94% |
+| hi | 0.999 | near-undiscounted; high variance from value-target shock vs parent's 0.99 baseline | 85–93% |
+
+**Falsification:** if lo (control, gamma=0.99 matching parent) lands rate <88%, warm-start from this parent is degrading — same test as fire 6's falsification rule.
+
+**Worker:** active. Backstop: inactive. 3 cells queued (b8efd63a, c9986d63, 64a6ee41), ~20 min each.
+
 ---
 
 **Evaluation system change 2026-04-27.** Replaced random_legal-anchored auto-rate
