@@ -724,14 +724,10 @@
         return;
       }
       const champMap = await loadChampLookup();
-      const labelFor = (raw) => {
-        if (typeof raw !== 'string' || !raw.startsWith('champion:')) return raw;
-        const idShort = raw.slice('champion:'.length, 'champion:'.length + 8);
-        return champMap[idShort]?.label || raw;
-      };
+      const labelFor = (raw) => resolveOppLabel(raw, champMap);
       const tsFor = (raw) => {
-        if (typeof raw !== 'string' || !raw.startsWith('champion:')) return -1;
-        const idShort = raw.slice('champion:'.length, 'champion:'.length + 8);
+        const idShort = champShortFromLabel(raw);
+        if (!idShort) return -1;
         return champMap[idShort]?.archived_at ?? 0;
       };
       // Sort by archived_at DESC (newest opponent first). Lets you read top→
@@ -897,11 +893,7 @@
       const $card = document.getElementById('training-opp');
       if (!$card) return;
       const champMap = await loadChampLookup();
-      const labelFor = (raw) => {
-        if (typeof raw !== 'string' || !raw.startsWith('champion:')) return raw;
-        const idShort = raw.slice('champion:'.length, 'champion:'.length + 8);
-        return champMap[idShort]?.label || raw;
-      };
+      const labelFor = (raw) => resolveOppLabel(raw, champMap);
       const labeled = points
         .map((p, i) => ({ update: i + 1, label: labelFor(p.training_opp_label) }))
         .filter(p => p.label != null);
@@ -1233,10 +1225,23 @@
       _champLookup = map;
       return map;
     }
-    // Convenience: extract the 8-char id from a "champion:XXXXXXXX" label.
+    // Convenience: extract the 8-char id from either "champion:XXXXXXXX" or
+    // a bare 8-hex string (rotation_rematch keys come through as bare IDs).
     function champShortFromLabel(rawLabel) {
-      if (typeof rawLabel !== 'string' || !rawLabel.startsWith('champion:')) return null;
-      return rawLabel.slice('champion:'.length, 'champion:'.length + 8) || null;
+      if (typeof rawLabel !== 'string') return null;
+      if (rawLabel.startsWith('champion:')) {
+        return rawLabel.slice('champion:'.length, 'champion:'.length + 8) || null;
+      }
+      if (/^[0-9a-f]{8}$/i.test(rawLabel)) return rawLabel.toLowerCase();
+      return null;
+    }
+    // Single source of truth for "champion id → friendly label". Used by
+    // End-of-run rematch, Training opponent timeline, and Win-rate progression
+    // so all three panels show identical references.
+    function resolveOppLabel(raw, champMap) {
+      const idShort = champShortFromLabel(raw);
+      if (!idShort) return raw;
+      return champMap?.[idShort]?.label || raw;
     }
 
     /** Win rate progression in 10% buckets across the run.
@@ -1261,15 +1266,7 @@
       // Champion id → {label, archived_at_ms}, cached. Used to render
       // readable opponent rows AND order them by recency (newest first).
       const champMap = await loadChampLookup();
-      const labelForOpp = (rawLabel) => {
-        if (typeof rawLabel !== 'string') return String(rawLabel);
-        if (rawLabel.startsWith('champion:')) {
-          const idShort = rawLabel.slice('champion:'.length, 'champion:'.length + 8);
-          const entry = champMap[idShort];
-          return (entry && entry.label) || rawLabel;
-        }
-        return rawLabel;
-      };
+      const labelForOpp = (rawLabel) => resolveOppLabel(rawLabel, champMap);
       // Newest-first ordering. Champion rows sort by archived_at desc;
       // non-champion labels (random_legal / self_play:* / neural:?) go to
       // the bottom in alphabetical order.
