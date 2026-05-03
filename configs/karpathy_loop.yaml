@@ -57,19 +57,23 @@ queue_policy:
 #   `major_change`    - human-readable descriptor of what changed in this step
 #                       (LargeMap, ChampOpp, ...). Goes into every label.
 model:
-  model_id:       "v12.0"        # 2026-05-01: clean break from v10/v11.
-                                 # Set-transformer encoder + pointer heads
-                                 # over 8-building / 4-group slot tokens.
-                                 # 2 send pcts (50/100) + noop. ~1.2M params.
+  model_id:       "v13.0"        # 2026-05-03: net topology bump from v12.
+                                 # Same set-transformer encoder + obs space.
+                                 # Sampling chain reordered to src→tgt→pct(noop)
+                                 # so pct conditions on (src, tgt). Source/target
+                                 # heads wrap projections in 2-layer MLPs (d→2d→d).
+                                 # +16% forward FLOPs. ~1.87M params.
   simulator_id:   "sim-v1.4"     # MAX_BUILDING_SLOTS=8, MAX_UNIT_GROUP_SLOTS=4,
-                                 # SEND_PERCENTAGES=(50,100). v12 sim contract.
-  version_prefix: "v12.1"        # 2026-05-03 00:15 PT: bumped to Step 1 (Continue).
-                                 # Every cell now warm-starts from a parent run via
-                                 # `queue_karp_sweep.py --from-run-id`. Step 0 (Bootstrap)
-                                 # was 34 cells of fresh-init runs all capped <=Elo 1137;
-                                 # warm-starting from v12.0.23-Bootstrap-level_mix-mid
-                                 # (Elo 1136, sim-v1.4 compatible) should compound gains
-                                 # cell-over-cell instead of resetting each fire.
+                                 # SEND_PERCENTAGES=(50,100). Same as v12 — v13 only
+                                 # changed net topology, not env/sim.
+  version_prefix: "v13.1"        # 2026-05-03: bumped to Step 1 (Continue) for v13.
+                                 # Every cell warm-starts from a parent run via
+                                 # `queue_karp_sweep.py --from-run-id`. Step 0
+                                 # (Bootstrap) was v13.0.0-bootstrap +
+                                 # v13.0.{1..4} continuations; v13.0.4 closed Step 0
+                                 # at 90.4% win-rate vs random_legal on
+                                 # random_close_4_8 with 144 updates. Step 1 starts
+                                 # from there with the karp-sweep continuation chain.
   major_change:   "Continue"     # Goes into every label + description
 
 # ---------------------------------------------------------------------------
