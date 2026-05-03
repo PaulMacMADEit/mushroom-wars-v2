@@ -1,5 +1,42 @@
 # Karpathy Loop — hyperparam sweep log
 
+## Continuation chain — kicked off 2026-05-03 00:15 PT (no horizon, until Paul says stop)
+
+**Driver change.** Every cell from this fire onward warm-starts off a parent run via `--from-run-id`. Prior 34-cell `v12.0.X-Bootstrap-*` series ran fresh-init every cell — cluster Elo 850–1137, no compounding. New format: `v12.1.NN-Continue-<axis>-<cell>`.
+
+**Hard rules (Paul confirmed 2026-05-02 23:40 PT):** never queue Bootstrap cells; per-cell hypothesis+prediction *before* queueing; per-cell post-mortem (predicted vs actual table) after results land; 3-game gut check every fire (WIN+LOSS+mid); run until stop.
+
+**Sim compatibility audit (fire 1).** v10.1.00-SmallMap-Root (Elo 1427) and v10.2.24-CloseGrowN-R10_18-01 (Elo 1040) are both on **sim-v1.3** — incompatible with current **sim-v1.4** trainer (MAX_BUILDING_SLOTS 32→8, action head 4→2). Their weights also missing from disk. Best sim-v1.4 candidate: **v12.0.23-Bootstrap-level_mix-mid** (`8bf21abf-df45-4823-bbbe-94462701342b`), Elo 1136, n=20. Selected as parent for fire 1.
+
+### Fire 1 — 2026-05-03 00:15 PT — gamma sweep, warm-start v12.0.23
+
+**Parent:** `v12.0.23-Bootstrap-level_mix-mid` (Elo 1136). lr=3e-3, entropy=0.01, rollout_steps=8, n_envs=1800, fused, pfsp_champion opp, reward_version=5 (v1.7 PURE TERMINAL), level_mix={random_4_8: 1.0, random_close_4_8: 1.0}.
+
+**Cells queued:**
+- `v12.1.01-Continue-gamma-lo` (gamma=0.99) — id `91177c67`
+- `v12.1.01-Continue-gamma-mid` (gamma=0.995) — id `64f2c275`
+- `v12.1.01-Continue-gamma-hi` (gamma=0.999) — id `7220a50b`
+
+**Hypothesis + prediction (per cell, BEFORE results):**
+
+| cell | gamma | hypothesis | predicted final_wr | predicted KL | predicted Elo Δ vs 1136 |
+|---|---|---|---|---|---|
+| lo | 0.99 | warm-start with parent's exact discount → resume gradient improvement; PFSP rotation against same-tier archive provides similar opponent strength. Cleanest test of "does continuation alone help?" | 50–58% | 0.005–0.030 | +20 to +60 (Elo 1156–1196) |
+| mid | 0.995 | longer effective horizon under same base weights → stronger credit for late-game terminal wins. May destabilize early via different value targets but converge stronger. | 50–58% | 0.020–0.060 | +0 to +50 (Elo 1136–1186) |
+| hi | 0.999 | near-undiscounted terminal signal. With v1.7 PURE TERMINAL already, this is the most "win-only" config. Either unlocks decisive play or PPO clipping kills updates from value-target shock. | 45–58% (wide) | 0.050–0.150 | -30 to +60 (Elo 1106–1196) |
+
+**Falsification:** if all 3 cells land Elo ≤ 1136 (parent), the warm-start premise is broken — either weights aren't loading correctly, or the parent was already at the local-optimum ceiling for this hyperparam regime + opponent pool. Will pivot to curriculum/reward changes.
+
+**3-game gut check (latest pre-continuation run = `v12.0.34-Bootstrap-reward_version-hi`, Elo 1128):**
+
+`scripts/karp_review_games.py` returned "no bench games found for this run" — bench match games table empty for that run id. Limitation logged; fire 2 will manually pull replays from the `replays` Storage bucket using `logs/{run_id}/replays/upd_NNNN_g0.json` pattern (replay_per_update on by default, ~2 games per PPO update during training). Fire 1 gut check skipped.
+
+**Worker state at queue time:** mushroom-worker active; karp.timer inactive (intentionally — driving from Claude side until queue script verified continuation-correct, then will restart as backstop fire 2+); scheduler.timer next fires 11:00 PT today (won't conflict with continuation runs).
+
+**Next fire:** 2026-05-03 00:41 PT (cell lo expected ~70% complete by then).
+
+---
+
 **Evaluation system change 2026-04-27.** Replaced random_legal-anchored auto-rate
 with the champion archive + `bench_eval` system. Old sweeps below used "vs
 baseline (random_legal)" + "vs top-5" as axes — those axes no longer exist.

@@ -63,8 +63,14 @@ model:
                                  # 2 send pcts (50/100) + noop. ~1.2M params.
   simulator_id:   "sim-v1.4"     # MAX_BUILDING_SLOTS=8, MAX_UNIT_GROUP_SLOTS=4,
                                  # SEND_PERCENTAGES=(50,100). v12 sim contract.
-  version_prefix: "v12.0"        # Step 0 (bootstrap). Bump .step on curriculum graduation.
-  major_change:   "Bootstrap"    # Goes into every label + description
+  version_prefix: "v12.1"        # 2026-05-03 00:15 PT: bumped to Step 1 (Continue).
+                                 # Every cell now warm-starts from a parent run via
+                                 # `queue_karp_sweep.py --from-run-id`. Step 0 (Bootstrap)
+                                 # was 34 cells of fresh-init runs all capped <=Elo 1137;
+                                 # warm-starting from v12.0.23-Bootstrap-level_mix-mid
+                                 # (Elo 1136, sim-v1.4 compatible) should compound gains
+                                 # cell-over-cell instead of resetting each fire.
+  major_change:   "Continue"     # Goes into every label + description
 
 # ---------------------------------------------------------------------------
 # Training opponent — who does the agent play against during rollouts?
