@@ -789,7 +789,14 @@ def _download_pfsp_champions(
     out_dir = Path(tempfile.mkdtemp(prefix="mw2-pfsp-"))
     results: list[tuple] = []
     # rows is ordered archived_at DESC, so position=0 is the newest.
-    decay = float(max(0.0, min(1.0, recency_decay)))
+    # recency_decay semantics:
+    #   < 1.0 — newer champions weighted higher (default 0.5 → newest dominates)
+    #   = 1.0 — uniform PFSP (no recency bias)
+    #   > 1.0 — OLDER champions weighted higher (boost weak-baseline exposure).
+    #           For N champions, decay = 3^(1/(N-1)) makes oldest 3× the newest.
+    # Lower-clamp at 0 still applies; upper clamp lifted 2026-05-03 (v13 work)
+    # to allow oldest-boost configs without a code change per use.
+    decay = float(max(0.0, recency_decay))
     for position, (champ_id, source_rid, w_url, n_url, label) in enumerate(rows):
         if not w_url:
             continue
