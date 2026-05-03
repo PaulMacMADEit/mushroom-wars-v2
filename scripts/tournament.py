@@ -38,7 +38,7 @@ import torch
 from sim import config as C
 from sim.actions import ACTION_SPACE_SIZE, NOOP_INDEX, SLOTS_SQ, compute_mask_batched
 from sim.engine_jax import ACTION_DIM, ACTION_KIND_NOOP, ACTION_KIND_SEND
-from sim.envs.jax_vec_env import JaxVecEnv, _step_batched
+from sim.envs.jax_vec_env import JaxVecEnv
 from sim.envs.opponents import random_legal_opponent_batched
 from sim.state import State, empty_state
 from training.agent import PPOAgent
@@ -317,7 +317,10 @@ def run_match(
     p1_wins = p2_wins = draws = settled = 0
     finished = np.zeros(games, dtype=bool)
 
-    import jax.numpy as jnp
+    # Use the canonical sim entry point — JaxVecEnv.step() — so this harness
+    # cannot drift from training rollouts (training/trainer.py:457). step()
+    # captures terminal_phase before its internal auto-reset; we use the
+    # `finished` mask to ignore subsequent ticks for already-settled envs.
     t0 = time.perf_counter()
     for tick in range(max_ticks):
         states = vec.snapshot_numpy_states()
@@ -327,13 +330,11 @@ def run_match(
         for i in range(games):
             _decode_action_to_packed(int(a1_flat[i]), a_batch[i, 0])
             _decode_action_to_packed(int(a2_flat[i]), a_batch[i, 1])
-        a1 = jnp.asarray(a_batch[:, 0, :], dtype=jnp.int32)
-        a2 = jnp.asarray(a_batch[:, 1, :], dtype=jnp.int32)
-        vec.state, _r1, _r2, dones = _step_batched(vec.state, a1, a2)
-        terminated = np.asarray(dones)
+        result = vec.step(a_batch)
+        terminated = np.asarray(result.terminated)
         new_done = terminated & ~finished
         if new_done.any():
-            phase_arr = np.asarray(vec.state.phase)
+            phase_arr = np.asarray(result.terminal_phase)
             for i in np.where(new_done)[0]:
                 ph = int(phase_arr[i])
                 if ph == C.PHASE_P1_WINS:
@@ -481,64 +482,21 @@ def main():
     print(f"P2: {args.p2}")
     print(f"{args.games} games × max {args.max_ticks} ticks on {args.level}")
 
-    p1_kind, p1_agent, p1_norm, p1_encode = _load_policy(args.p1, device)
-    p2_kind, p2_agent, p2_norm, p2_encode = _load_policy(args.p2, device)
-
-    vec = JaxVecEnv(n_envs=args.games, level_name=args.level, base_seed=args.seed)
-    rng = np.random.default_rng(args.seed)
-
-    p1_wins = 0
-    p2_wins = 0
-    draws   = 0
-    settled = 0
-    finished = np.zeros(args.games, dtype=bool)
-
-    # Bypass JaxVecEnv.step_chunk because it auto-resets done envs (which
-    # corrupts post-step phase reads). Use _step_batched directly so each
-    # env stops at its terminal phase and we can read it.
-    import jax.numpy as jnp
-    t0 = time.perf_counter()
-    for tick in range(args.max_ticks):
-        states = vec.snapshot_numpy_states()
-
-        a1_flat = _pick_actions(p1_kind, p1_agent, p1_norm, states, C.OWNER_P1, rng, p1_encode)
-        a2_flat = _pick_actions(p2_kind, p2_agent, p2_norm, states, C.OWNER_P2, rng, p2_encode)
-
-        a_batch = np.zeros((args.games, 2, ACTION_DIM), dtype=np.int32)
-        for i in range(args.games):
-            _decode_action_to_packed(int(a1_flat[i]), a_batch[i, 0])
-            _decode_action_to_packed(int(a2_flat[i]), a_batch[i, 1])
-
-        a1 = jnp.asarray(a_batch[:, 0, :], dtype=jnp.int32)
-        a2 = jnp.asarray(a_batch[:, 1, :], dtype=jnp.int32)
-        vec.state, _r1, _r2, dones = _step_batched(vec.state, a1, a2)
-        terminated = np.asarray(dones)
-
-        # Score newly terminated envs by reading their phase from the
-        # post-step state (no auto-reset — phase reflects winner).
-        new_done = terminated & ~finished
-        if new_done.any():
-            phase_arr = np.asarray(vec.state.phase)
-            for i in np.where(new_done)[0]:
-                ph = int(phase_arr[i])
-                if ph == C.PHASE_P1_WINS:
-                    p1_wins += 1
-                elif ph == C.PHASE_P2_WINS:
-                    p2_wins += 1
-                else:
-                    draws += 1
-                settled += 1
-                finished[i] = True
-
-        if finished.all():
-            break
-
-    wall = time.perf_counter() - t0
-
-    # 2026-04-29 fire 65: timeouts tracked separately from resolved draws.
-    timeouts = args.games - settled
-
-    total = p1_wins + p2_wins + draws + timeouts
+    # Single match path — run_match is THE harness. Keeps the CLI in lockstep
+    # with archive_eval / rotation_rematch / rerate / Elo gate.
+    res = run_match(
+        p1=args.p1, p2=args.p2,
+        games=args.games, max_ticks=args.max_ticks,
+        level=args.level, seed=args.seed, device=device,
+        verbose=False,
+    )
+    p1_wins  = res["p1_wins"]
+    p2_wins  = res["p2_wins"]
+    draws    = res["draws"]
+    timeouts = res["timeouts"]
+    settled  = res["settled"]
+    total    = res["total"]
+    wall     = res["wall_s"]
     print(f"\n=== results ({wall:.1f}s wall) ===")
     print(f"  P1 wins:  {p1_wins:>5d} ({100*p1_wins/total:5.1f}%)")
     print(f"  P2 wins:  {p2_wins:>5d} ({100*p2_wins/total:5.1f}%)")
