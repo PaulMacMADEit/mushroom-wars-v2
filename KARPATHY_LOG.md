@@ -4287,6 +4287,47 @@ distribution shift). Will reassess once chain reaches >97%.
 queue normal karp axes in parallel. No conflict — they all run on the same
 queue.
 
+### 2026-05-02 17:40 PT — BATCH 6 wrap (stack didn't pay) + BATCH 7 (rollout_steps @ γ=0.995).
+
+**Batch 6 results** (entropy varied @ γ=0.995, warm from `350cbb0e` 90.8%):
+
+| cell | ec | γ | wr | to |
+|---|---|---|---|---|
+| lo | 0.003 | 0.995 | 90.5% | 9% |
+| mid | 0.01 | 0.995 | 83.5% | 16% |
+| hi (stacked) | 0.03 | 0.995 | 89.0% | 11% |
+
+**Stacking entropy=0.03 + γ=0.995 did NOT beat γ=0.995 alone.** Batch 5 mid (γ=0.995, ec=0.01) hit 90.8%; Batch 6 hi (γ=0.995, ec=0.03) was 89.0%. **Entropy=0.03 from Batch 4 was variance, not a robust second knob.**
+
+**Robust signal:** γ=0.995 alone broke the ~86% plateau to ~90% — across 3 different ec settings, lo+hi both ≥89%, suggesting γ=0.995 is the dominant lever and entropy is incidental.
+
+**Mid-cell underperformance pattern (3rd time):**
+- Batch 4 mid (γ=0.99, ec=0.01): 76.6%
+- Batch 5 lo (γ=0.99, ec=0.03): 83.7%
+- Batch 6 mid (γ=0.995, ec=0.01): 83.5%
+
+The `mid` label maps to a deterministic seed via `_seed_to_int("mid")` in worker.py. That specific seed appears to consistently produce lower-quality runs. Could be an artifact (the seed lands in a bad initial RNG state for the JAX env reset distribution) — worth keeping in mind when reading later batches but not blocking.
+
+### BATCH 7 — rollout_steps @ γ=0.995
+
+Last unwarmed parameter knob with breakthrough potential. Larger rollout = better gradient estimate; smaller = more updates per cell. Both directions could break 92%.
+
+Warm parent: `350cbb0e` (gamma-mid 90.8%, γ=0.995, ec=0.01).
+
+| cell | rollout_steps | γ (override) | hypothesis |
+|---|---|---|---|
+| lo (6f3c51a1) | 4 (more updates/cell) | 0.995 | more PPO steps refines further |
+| mid (f620a543) | 8 (current) | 0.995 | parity benchmark |
+| hi (e00494ff) | 16 (better gradient est) | 0.995 | cleaner gradient breaks plateau |
+
+Falsifier: any cell ≥92% → switch baseline. All within 2pp → rs=8 is fine, plateau is structural.
+
+If this batch closes without breakthrough, every untested-with-warm parameter axis is exhausted and we're confidently at the structural plateau (~90% with current architecture + 10-min cells). Next move would be a bigger lever (longer cells, architecture, opponent change).
+
+Queued.
+
+---
+
 ### 2026-05-02 16:58 PT — BATCH 5 wrap (gamma warm — γ=0.995 NEW BEST) + BATCH 6 (stack winners).
 
 **Batch 5 results** (warm from `6b21f7ee` entropy-hi 88.6%, ec=0.03):
