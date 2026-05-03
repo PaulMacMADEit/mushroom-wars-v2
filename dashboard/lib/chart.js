@@ -2,10 +2,11 @@
 // Uses Chart.js via ESM CDN. For the scale we're working at (100-1000
 // updates per run), Chart.js performance is fine.
 
-// Pinned: 4.5.1 has a regression that throws "Recursion detected:
-// _scriptable->_scriptable" on chart.hide()/chart.show(), breaking legend
-// toggling for every chart. 4.5.0 works.
-import Chart from 'https://esm.sh/chart.js@4.5.0/auto';
+// Pinned: Chart.js 4.5.0+ regressed scriptable resolution — calling
+// chart.hide()/chart.show() on a chart built with our config throws
+// "Recursion detected: _scriptable->_scriptable", breaking legend toggling
+// across every chart. 4.4.7 works.
+import Chart from 'https://esm.sh/chart.js@4.4.7/auto';
 
 Chart.defaults.color = '#8a93a6';
 Chart.defaults.borderColor = '#262a36';
