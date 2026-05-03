@@ -88,7 +88,7 @@
     import { sb, signedUrl, queryParam } from './lib/supabase.js';
     import { fmtTime, fmtDuration, fmtPct, esc, statusPill,
              fmtElo, ticksPerMin, totalTicks, fmtBig } from './lib/ui.js';
-    import { lineChart, bandChart } from './lib/chart.js?v=chartjs-447';
+    import { lineChart, bandChart } from './lib/chart.js?v=options-proxy-fix';
 
     const $root = document.getElementById('root');
     const runId = queryParam('id');
@@ -501,10 +501,14 @@
       };
       const wireLegendPersist = (id, chart) => {
         try {
-          chart.options.plugins = chart.options.plugins || {};
-          chart.options.plugins.legend = chart.options.plugins.legend || {};
-          // Inline Chart.js default legend toggle (avoids needing the Chart
-          // global imported here). After toggling, snapshot to localStorage.
+          // Set onClick directly. Don't reassign chart.options.plugins or
+          // chart.options.plugins.legend with `|| {}` — chart.options is a
+          // Chart.js options proxy and reassigning a slot replaces the
+          // descriptor-aware proxy with a plain object, which then breaks
+          // every subsequent chart.update()/hide()/show() with "Recursion
+          // detected: _scriptable->_scriptable" or "n.startsWith is not a
+          // function". Chart.js always provides plugins.legend on a line
+          // chart, so we can write through directly.
           chart.options.plugins.legend.onClick = function (e, legendItem, legend) {
             const index = legendItem.datasetIndex;
             const ci = legend.chart;
