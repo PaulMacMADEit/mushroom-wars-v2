@@ -37,6 +37,9 @@
         </select>
       </label>
       <button id="refresh" style="background:var(--accent);color:#000;border:0;padding:6px 14px;border-radius:6px;cursor:pointer;">refresh</button>
+      <span style="flex:1"></span>
+      <button id="open-local" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);padding:6px 14px;border-radius:6px;cursor:pointer;">open local replay…</button>
+      <input id="open-local-input" type="file" accept=".json,application/json" style="display:none;">
     </div>
 
     <div class="card" id="games">
@@ -130,6 +133,34 @@
     $refresh.addEventListener('click', load);
     $limit.addEventListener('change', load);
     $level.addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
+
+    // --- Open a local replay JSON file ---------------------------------------
+    // Stash the parsed JSON in sessionStorage and hand off to game.html via
+    // ?local=<key>. game.html reads sessionStorage and pops the entry.
+    const $openLocal = document.getElementById('open-local');
+    const $openLocalInput = document.getElementById('open-local-input');
+    $openLocal.addEventListener('click', () => {
+      $openLocalInput.value = '';
+      $openLocalInput.click();
+    });
+    $openLocalInput.addEventListener('change', () => {
+      const f = $openLocalInput.files?.[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = ev.target.result;
+        try {
+          JSON.parse(text); // validate before handing off
+        } catch (err) {
+          alert(`Not a valid JSON replay: ${err.message}`);
+          return;
+        }
+        const key = `mw2_local_${Date.now().toString(36)}`;
+        sessionStorage.setItem(key, text);
+        location.href = `./game.html?local=${encodeURIComponent(key)}`;
+      };
+      reader.readAsText(f);
+    });
 
     load().catch(e => $games.innerHTML = `<div class="error">${esc(e.message)}</div>`);
   </script>

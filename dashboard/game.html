@@ -2235,11 +2235,21 @@
       navigateTo(navMode === 'match' ? currentGameIdx + 1 : currentGameIdx - 1);
     });
 
-    // --- ?url= and ?match= params -----------------------------------------
+    // --- ?url=, ?match=, ?local= params -----------------------------------
     const _qs = new URLSearchParams(location.search);
     const url = _qs.get("url");
     const matchId = _qs.get("match");
-    if (url) {
+    const localKey = _qs.get("local");
+    if (localKey) {
+      try {
+        const raw = sessionStorage.getItem(localKey);
+        if (!raw) throw new Error("local replay not found in sessionStorage");
+        loadReplay(JSON.parse(raw));
+        sessionStorage.removeItem(localKey);
+      } catch (err) {
+        $status.textContent = `local load error: ${err.message}`;
+      }
+    } else if (url) {
       fetch(url)
         .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
         .then(loadReplay)
