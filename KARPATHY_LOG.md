@@ -267,6 +267,31 @@ v13 chain is showing compounding: 0.851 → 0.892 → 0.918 across 3 generations
 
 **Next action:** wait for v13.0.5-selfplay-mixed to finish. If rate > 0.918, chain continues compounding with self-play. If rate < 0.85, self-play may be too hard a jump from random_legal.
 
+### Fire 10 — 2026-05-03 17:33 PT — stale v13.0.5 cleaned, queue v13.1.01 rollout_steps
+
+**Stale run cleanup:** `v13.0.5-selfplay-mixed` (id `b62bf6bc`) was "running" but worker idle for ~28 min. No weights/results/error written. Marked failed. Self-play mixed mode failed twice (discarded + stale) — possible issue with self_play=true + v13 continuation path.
+
+**Post-mortem — v13.0.4-size-4to8-cont (rate=0.918):** still the chain tip. v13 chain: 0.851→0.892→0.918 over 3 generations. No new cells completed since fire 8.
+
+**Gut check (v13.0.4, late training replays):**
+
+| replay | winner | ticks | P1 sends | friendly | bounce% | P1 captures |
+|---|---|---|---|---|---|---|
+| upd_0050_g0 | P1 | 5 | 1 | 0 | 0% | 1 |
+| upd_0050_g1 | P1 | 9 | 5 | 0 | 0% | 2 |
+| upd_0040_g0 | P1 | 6 | 2 | 0 | 0% | 2 |
+| upd_0040_g1 | P1 | 16 | 8 | 0 | 0% | 7 |
+| upd_0030_g0 | P1 | 24 | 11 | 0 | 0% | 8 |
+| upd_0030_g1 | P2 | 40 | 11 | 1 | 9% | 5 |
+
+No bouncing pathology. Agent is aggressive — 0% friendly sends in 5/6 games. The LOSS shows P1 outpaced on captures (5 vs 8). Healthy play pattern.
+
+**Queued:** `v13.1.01-Continue-rollout_steps-{lo,mid,hi}` (4/8/16), warm-start from v13.0.4 (rate=0.918), PFSP champion opponents, 20 min budget each.
+
+**Hypothesis:** rollout_steps=8 (mid/baseline) should hold at 0.90-0.93. rs=4 (lo) → more PPO updates but shallower GAE → rate 0.88-0.92. rs=16 (hi) → fewer updates, longer horizon → rate 0.87-0.91.
+
+**Watcher:** PID 48796 on `7740dcae` (lo cell).
+
 ### Fire 9 — 2026-05-03 17:00 PT — no-op (v13.0.5-selfplay-mixed ~69% done)
 
 **Status:** `v13.0.5-selfplay-mixed` (id `b62bf6bc`, model v13.0, self_play=true, cont from v13.0.4 rate=0.918) running — 622s/900s elapsed (~5 min remaining). Worker active, backstop inactive.
