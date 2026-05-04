@@ -292,6 +292,40 @@ No bouncing pathology. Agent is aggressive — 0% friendly sends in 5/6 games. T
 
 **Watcher:** PID 48796 on `7740dcae` (lo cell).
 
+### Fire 12 — 2026-05-03 18:44 PT — post-mortem rollout_steps-mid, hi still running
+
+**Status:** Worker active, backstop inactive. rollout_steps-lo done (rate=0.858), mid done (rate=0.864), hi running (~44 updates, ~4 min remaining). Queue non-empty → no queueing.
+
+**Post-mortem — v13.1.01-Continue-rollout_steps-mid (rs=8, control):**
+
+| cell | predicted rate | actual rate | actual elo | match? | why diverged |
+|---|---|---|---|---|---|
+| mid (rs=8) | 0.90–0.93 | **0.864** | 1058 | ❌ below by 4-7pp | parent was 0.918 after v13.0.4 chain compounding; continuation under PFSP champion rotation drew harder opponents than the parent's training distribution. Bench archive now includes v12+v13 cross-lineage champions. Rate 0.864 is consistent with lo's 0.858 — rs=4 vs rs=8 barely matters when the binding constraint is opponent quality, not GAE depth |
+
+**Cross-cell comparison so far:**
+
+| cell | rs | predicted rate | actual rate | elo | delta from parent (0.918) |
+|---|---|---|---|---|---|
+| lo | 4 | 0.88–0.92 | 0.858 | 1050 | -0.060 |
+| mid | 8 | 0.90–0.93 | 0.864 | 1058 | -0.054 |
+| hi | 16 | 0.87–0.91 | running | — | — |
+
+**Emerging signal:** lo and mid are within 0.6pp of each other. rollout_steps is NOT a binding knob at this level — opponent quality dominates. Confirms fire 2's finding that level_mix-hi (broader maps) gave most-informative gradient. The axis to push is curriculum/opponent, not PPO update shape.
+
+**3-game gut check on rollout_steps-mid (14 replays sampled: 13W/1L):**
+
+| game | result | ticks | p1_sends | p2_sends | note |
+|---|---|---|---|---|---|
+| upd_0005_g0 | WIN | 26 | 12 | 8 | healthy aggression, balanced sends |
+| upd_0015_g0 | WIN | 26 | 11 | 8 | clean mid-training win |
+| upd_0085_g1 | LOSS | 71 | **5** | 36 | passive-loss pattern persists — P1 shuts down when behind |
+
+**Bouncing pathology:** replay format lacks per-event target ownership; can't compute f2f/total_sends ratio from raw events without building-ownership tracking. No structural evidence of bouncing in send patterns (sends go to varying dst indices, not cycling between same pair).
+
+**Persistent anomaly: passive losses.** Same pattern as fire 11's lo cell — losses show P1 at 5 sends vs 36 opponent sends. Agent gives up when losing rather than fighting back. Present across v12 and v13 lineages, across rollout_steps values. Root cause is reward-shaped: pure terminal reward gives no gradient signal for "losing less badly" so the policy has no incentive to keep trying once value estimate drops. Fixing this requires either intermediate reward for recovery actions or a negative passivity penalty.
+
+**Next fire expects:** hi (rs=16) results. Given lo≈mid, hi will likely land in a similar range (0.85-0.87). If so, rollout_steps axis is conclusively flat and we move to the next round-robin axis.
+
 ### Fire 11 — 2026-05-03 18:10 PT — no-op (rollout_steps mid running, hi queued)
 
 **Status:** v13.1.01-Continue-rollout_steps-lo done, mid running, hi queued. Worker active, backstop inactive. Queue non-empty → no queueing.
