@@ -292,6 +292,37 @@ No bouncing pathology. Agent is aggressive — 0% friendly sends in 5/6 games. T
 
 **Watcher:** PID 48796 on `7740dcae` (lo cell).
 
+### Fire 16 — 2026-05-03 21:02 PT — post-mortem entropy_coef (all done), queue v13.1.05 level_mix
+
+**Status:** Worker active, backstop inactive. entropy_coef sweep complete. Queue was empty → queued level_mix.
+
+**Post-mortem — v13.1.03-Continue-entropy_coef (all 3 done):**
+
+| cell | entropy_coef | predicted rate | actual rate | match? | why diverged |
+|---|---|---|---|---|---|
+| lo | 0.003 | 0.86–0.92 | **0.863** | ✅ bottom | exploitation mode, lower exploration |
+| mid | 0.01 (control) | 0.85–0.91 | **0.867** | ✅ mid-range | baseline holds as expected |
+| hi | 0.03 | 0.82–0.88 | **0.854** | ✅ mid-range | extra entropy cost small but measurable |
+
+**Finding:** entropy_coef has minimal impact — 1.3pp spread (0.854–0.867). Baseline 0.01 is marginally best. Not a lever worth further tuning at this regime.
+
+**Failed runs since fire 15:**
+- `v13.1.04-selfplay-mixed` × 2: "Unknown level: phase1_full_mix_4_8" — level name not registered in sim. Self-play mixed path broken.
+
+**3-game gut check:** No replays in Supabase storage for v13.1.03 cells (replay upload path not writing to bucket). Gut check skipped — relying on fire 10's v13.0.4 gut check (healthy play, no bouncing, passive-loss partially addressed).
+
+**Cells queued — v13.1.05-Continue-level_mix, parent `b8e2500b` (v13.0.4, rate=0.918):**
+
+| cell | level_mix | hypothesis | predicted training_rate |
+|---|---|---|---|
+| lo | close_only (random_close_4_8) | specialist training on easier maps; should maintain high rate | 0.88–0.93 |
+| mid | mixed (close + ranged) | harder distribution, some rate drop from mixed curriculum | 0.84–0.90 |
+| hi | ranged_only (random_4_8) | hardest maps only; significant rate drop expected | 0.78–0.86 |
+
+**Falsification:** if lo (easiest) lands rate <0.85, warm-start is degrading regardless of curriculum.
+
+**Watcher:** PID 62203 on `3b990dcf` (lo cell). 3 cells queued, ~20 min each.
+
 ### Fire 15 — 2026-05-03 20:28 PT — no-op (entropy_coef mid running, hi queued), post-mortem lo
 
 **Status:** Worker active, backstop inactive. entropy_coef-lo done, mid running, hi queued. Queue non-empty → no queueing.
