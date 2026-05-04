@@ -93,15 +93,23 @@ def _import_tournament():
     return importlib.import_module("scripts.tournament")
 
 
-def _run_match(tournament, run_id: str, opp: str | None, games: int, seed: int) -> dict:
+def _run_match(
+    tournament, run_id: str, opp: str | None, games: int, seed: int,
+    action_repeat: int = 1, deterministic: bool = False,
+) -> dict:
     # max_ticks omitted — tournament.run_match defaults to live
-    # C.GAME_TIMEOUT_TICKS so bench_eval matches the per-run cap (the
-    # worker mutates GAME_TIMEOUT_TICKS at run-start when
-    # hyperparams.game_timeout_ticks is set).
+    # C.GAME_TIMEOUT_TICKS so bench_eval matches the per-run cap.
+    # action_repeat must mirror the run's training cfg.action_repeat
+    # (otherwise the agent gets ~K× more decisions per game-time-unit at
+    # eval than at training — distribution shift, biases the rate).
+    # deterministic=False matches training's stochastic action sampling so
+    # the bench_eval rate is comparable to the rolling training rate.
     return tournament.run_match(
         p1=run_id,
         p2=opp if opp is not None else "random_legal",
         games=games, level=LEVEL, seed=seed, verbose=False,
+        action_repeat=action_repeat,
+        deterministic=deterministic,
     )
 
 
@@ -276,12 +284,31 @@ def run_bench_eval(run_id: str, label: str) -> dict:
     t0 = time.perf_counter()
     tournament = _import_tournament()
 
+    # Pull the run's action_repeat from its stored hyperparams so all
+    # bench_eval matches mirror the training cfg. Default 1 if missing.
+    # Critical: training rolls with K=cfg.action_repeat env ticks per
+    # decision; if bench_eval runs K=1 the agent gets ~K× more decisions
+    # per game-time-unit, biases the rate.
+    action_repeat = 1
+    try:
+        with connect() as _c, _c.cursor() as _cur:
+            _cur.execute(
+                "SELECT (hyperparams->>'action_repeat')::int FROM runs WHERE id = %s",
+                (run_id,),
+            )
+            row = _cur.fetchone()
+            if row and row[0] is not None:
+                action_repeat = max(1, int(row[0]))
+    except Exception as _exc:
+        print(f"[bench] {label}: action_repeat lookup failed: {_exc} — using 1", flush=True)
+
     summary: dict = {
         "run_id": run_id, "label": label,
         "bootstrap_rate": None, "passed_bootstrap": None,
         "archive_size": 0, "bench_vector": {},
         "pfsp_weight": None, "promoted": False,
         "final_status": "unrated", "wall_s": None,
+        "action_repeat": action_repeat,
     }
 
     # ------------------------------------------------------------------ #
@@ -294,7 +321,8 @@ def run_bench_eval(run_id: str, label: str) -> dict:
         print(f"[bench] {label}: archive thin ({len(arch)} champs) — "
               f"running bootstrap gate ({BOOTSTRAP_GATE_GAMES} vs random_legal)", flush=True)
         res = _run_match(tournament, run_id, opp=None,
-                         games=BOOTSTRAP_GATE_GAMES, seed=2001)
+                         games=BOOTSTRAP_GATE_GAMES, seed=2001,
+                         action_repeat=action_repeat)
         rate = res["p1_wins"] / max(res["total"], 1)
         summary["bootstrap_rate"] = rate
 
@@ -334,7 +362,8 @@ def run_bench_eval(run_id: str, label: str) -> dict:
         source_rid  = str(champ["source_run_id"])
 
         res = _run_match(tournament, run_id, opp=source_rid,
-                         games=SWEEP_GAMES, seed=3000 + i)
+                         games=SWEEP_GAMES, seed=3000 + i,
+                         action_repeat=action_repeat)
         wr = res["p1_wins"] / max(res["total"], 1)
         bench_vector[champ_id] = round(wr, 4)
         win_rates.append(wr)
@@ -366,7 +395,8 @@ def run_bench_eval(run_id: str, label: str) -> dict:
         print(f"[bench] {label}: promotion check vs {current_champ['label'][:40]} "
               f"({PROMO_GAMES} games)", flush=True)
         res_p = _run_match(tournament, run_id, opp=champ_source,
-                           games=PROMO_GAMES, seed=4001)
+                           games=PROMO_GAMES, seed=4001,
+                           action_repeat=action_repeat)
         promo_wr = res_p["p1_wins"] / max(res_p["total"], 1)
         print(f"[bench] {label}: promotion win-rate = {promo_wr:.1%} "
               f"(need {PROMO_THRESHOLD:.0%})", flush=True)
