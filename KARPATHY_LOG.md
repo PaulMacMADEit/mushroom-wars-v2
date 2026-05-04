@@ -292,6 +292,36 @@ No bouncing pathology. Agent is aggressive — 0% friendly sends in 5/6 games. T
 
 **Watcher:** PID 48796 on `7740dcae` (lo cell).
 
+### Fire 13 — 2026-05-03 19:18 PT — post-mortem rollout_steps (all done), queue minibatch_size
+
+**Status:** Worker active, backstop inactive. rollout_steps-{lo,mid,hi} all done. `v13.0.5-selfplay-mixed` (32f7c016) running (~6 min in, 15 min budget). Queue was empty → queued minibatch_size sweep.
+
+**Post-mortem — v13.1.01-Continue-rollout_steps (full sweep):**
+
+| cell | rs | predicted rate | actual rate | actual elo | match? | why diverged |
+|---|---|---|---|---|---|---|
+| lo | 4 | 0.88–0.92 | **0.858** | 1023 | ❌ below by 2pp | shallower GAE + harder PFSP opponents vs parent's training distribution |
+| mid | 8 | 0.90–0.93 | **0.864** | 1051 | ❌ below by 4pp | same; PFSP rotation draws cross-lineage champions |
+| hi | 16 | 0.87–0.91 | **0.816** | 1042 | ❌ below by 5pp | fewer PPO updates per 20-min budget (longer rollouts = fewer update cycles). GAE horizon gain doesn't compensate |
+
+**Conclusion:** rollout_steps axis is flat between rs=4 and rs=8 (0.6pp delta), with rs=16 clearly worse (5pp below mid). **rs=8 confirmed as baseline** — not worth tuning further. Binding constraint is opponent quality, not PPO update shape. Moving to minibatch_size.
+
+**3-game gut check:** No replays available for rollout_steps cells (storage empty, temp files cleaned). Fires 11+12 already gut-checked lo and mid thoroughly — passive-loss pattern documented, no bouncing pathology. Skipping for this fire.
+
+**Queued:** `v13.1.02-Continue-minibatch_size-{lo,mid,hi}` (256/512/1024), warm-start from v13.0.4 (rate=0.918), PFSP champion opponents, 20 min budget each.
+
+**Hypothesis + prediction:**
+
+| cell | minibatch_size | hypothesis | predicted rate | predicted Elo Δ vs parent |
+|---|---|---|---|---|
+| lo | 256 | smaller batches → more SGD steps per update, noisier gradients → slightly better exploration but more variance | 0.85–0.90 | -0.07 to -0.02 |
+| mid | 512 | baseline — control for rollout_steps sweep regression | 0.85–0.89 | -0.07 to -0.03 |
+| hi | 1024 | larger batches → fewer SGD steps, smoother gradient, less noise → slightly lower rate if update count is binding | 0.82–0.87 | -0.10 to -0.05 |
+
+**Falsification:** if all 3 land within 2pp of each other, minibatch_size is also flat at this level (like rollout_steps). If lo dominates by >3pp, gradient noise helps and we should lower baseline.
+
+**Watcher:** PID 5138 on `6f0db321` (lo cell).
+
 ### Fire 12 — 2026-05-03 18:44 PT — post-mortem rollout_steps-mid, hi still running
 
 **Status:** Worker active, backstop inactive. rollout_steps-lo done (rate=0.858), mid done (rate=0.864), hi running (~44 updates, ~4 min remaining). Queue non-empty → no queueing.
