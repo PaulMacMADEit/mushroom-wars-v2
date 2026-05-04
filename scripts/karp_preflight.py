@@ -226,7 +226,7 @@ def check_smoke_match() -> tuple[bool, list[str]]:
         print(f"  champion: {champ['label']} (era={champ['arch_era']})")
         res = tournament.run_match(
             p1=run_id, p2="random_legal",
-            games=4, level="random_close_4_5", max_ticks=200, seed=99, verbose=False,
+            games=4, level="random_close_4_5", seed=99, verbose=False,
         )
         rate = res["p1_wins"] / max(res["total"], 1)
         print(f"  {PASS}  rate vs random_legal = {rate:.1%} ({res['p1_wins']}/{res['total']})")

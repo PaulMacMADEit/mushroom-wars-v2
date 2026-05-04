@@ -166,7 +166,7 @@ def main():
                     res = run_match(
                         p1=u["id"], p2=opp,
                         games=args.games, level=args.level,
-                        max_ticks=200, seed=i, verbose=False,
+                        seed=i, verbose=False,
                     )
                     update_elo_from_match(
                         c, p1_run_id=u["id"],

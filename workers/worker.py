@@ -409,7 +409,7 @@ def _auto_rate_run(run_id: str, label: str) -> None:
         res = tournament.run_match(
             p1=run_id, p2="random_legal",
             games=AUTO_RATE_GAMES, level=AUTO_RATE_LEVEL,
-            max_ticks=200, seed=i, verbose=False,
+            seed=i, verbose=False,
         )
         with connect() as c:
             new_elo, _ = tournament.update_elo_from_match(
@@ -1378,7 +1378,13 @@ def _run_rotation_rematch(trainer, run_id: str, metrics_history: list[dict],
         try:
             res = tournament.run_match(
                 p1=str(p1_path), p2=str(weights_path),
-                games=n_games, level=level, level_mix=level_mix, max_ticks=200,
+                games=n_games, level=level, level_mix=level_mix,
+                # max_ticks defaults to C.GAME_TIMEOUT_TICKS — which honours
+                # the per-run game_timeout_ticks override mutated at run-start
+                # in worker.py. Critical for apples-to-apples rematch: if
+                # training ran with timeout=500, the rematch must too,
+                # otherwise the agent's late-game policies time out at 200
+                # and bias the rate downward.
                 seed=10000 + idx, verbose=False,
                 # Stochastic — apples-to-apples with the stochastic training
                 # rollout win_rate. tournament default (deterministic=True) is

@@ -94,10 +94,14 @@ def _import_tournament():
 
 
 def _run_match(tournament, run_id: str, opp: str | None, games: int, seed: int) -> dict:
+    # max_ticks omitted — tournament.run_match defaults to live
+    # C.GAME_TIMEOUT_TICKS so bench_eval matches the per-run cap (the
+    # worker mutates GAME_TIMEOUT_TICKS at run-start when
+    # hyperparams.game_timeout_ticks is set).
     return tournament.run_match(
         p1=run_id,
         p2=opp if opp is not None else "random_legal",
-        games=games, level=LEVEL, max_ticks=MAX_TICKS, seed=seed, verbose=False,
+        games=games, level=LEVEL, seed=seed, verbose=False,
     )
 
 

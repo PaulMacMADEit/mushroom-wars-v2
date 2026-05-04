@@ -285,7 +285,7 @@ def run_match(
     p1: str,
     p2: str,
     games: int = 100,
-    max_ticks: int = 200,
+    max_ticks: int | None = None,
     level: str = "random_8_16",
     seed: int = 0,
     device: torch.device | None = None,
@@ -299,11 +299,18 @@ def run_match(
     forms as the CLI: experiment dir path, Supabase run id, or
     'random_legal'/'noop'.
 
+    `max_ticks`: per-game cap. None (default) means "use the live
+    `sim.config.GAME_TIMEOUT_TICKS`" — which honours per-run overrides
+    from `hyperparams.game_timeout_ticks`. Pass an explicit value only
+    when you want to evaluate under a different cap than training.
+
     `level_mix`: optional dict {name: weight} or list of (name, weight). When
     provided, each env samples a level on reset; `level` becomes a label only.
     Required when `level` is a label like "phase1_full_mix_4_8" that the
     static level loader doesn't recognise.
     """
+    if max_ticks is None:
+        max_ticks = int(C.GAME_TIMEOUT_TICKS)
     if device is None:
         # `torch.cuda.is_available()` can return True on machines where
         # `torch.cuda.device_count() == 0` (driver/runtime mismatch — seen

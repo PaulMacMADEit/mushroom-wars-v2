@@ -101,7 +101,7 @@ def handle(job: dict, mark_done_fn, mark_failed_fn) -> None:
         try:
             res = run_match(
                 p1=target_run_id, p2=opp_id,
-                games=games, max_ticks=200, level=level, seed=seed,
+                games=games, level=level, seed=seed,
                 device=device, verbose=False,
             )
             with connect() as conn:
