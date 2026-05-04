@@ -1042,6 +1042,14 @@ def run_training(
     if "sim_backend" in hp:
         os.environ["SIM_BACKEND"] = str(hp["sim_backend"])
 
+    # self_play=True spawns multiprocessing children for parallel envs. On
+    # PaulLinux (driver 580/CUDA 13) JAX's cuda12 plugin crashes during
+    # cuInit in those forks, killing the worker. Self-play runs don't use
+    # JAX (sim_backend=numpy), so pin JAX_PLATFORMS=cpu so subprocs skip
+    # GPU init entirely. Inherits to children via os.environ.
+    if hp.get("self_play"):
+        os.environ["JAX_PLATFORMS"] = "cpu"
+
     # Build config: start from defaults, overlay any hyperparams the caller provided.
     cfg_kwargs = {k: v for k, v in hp.items() if k in PPOConfig.__dataclass_fields__}
     cfg = PPOConfig(**cfg_kwargs)
