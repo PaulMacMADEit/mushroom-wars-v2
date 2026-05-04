@@ -292,6 +292,38 @@ No bouncing pathology. Agent is aggressive — 0% friendly sends in 5/6 games. T
 
 **Watcher:** PID 48796 on `7740dcae` (lo cell).
 
+### Fire 14 — 2026-05-03 19:53 PT — post-mortem minibatch_size CUDA failure, fix + queue entropy_coef
+
+**Status:** Worker active, backstop inactive. minibatch_size-{lo,mid,hi} all **failed** (CUDA device error). Queue empty → fixed bug + queued entropy_coef sweep.
+
+**Post-mortem — v13.1.02-Continue-minibatch_size (all 3 cells FAILED):**
+
+| cell | minibatch_size | predicted rate | actual rate | status | why failed |
+|---|---|---|---|---|---|
+| lo | 256 | 0.85–0.90 | — | FAILED | `torch.load` on CUDA-saved opponent weights with `device="cuda"` on CPU-only worker |
+| mid | 512 | 0.85–0.89 | — | FAILED | same |
+| hi | 1024 | 0.82–0.87 | — | FAILED | same |
+
+**Root cause:** `queue_karp_sweep.py:196` hardcoded `"device": "cuda"` in `opponent_kwargs` for PFSP champion opponents. PaulLinux worker has no GPU → `torch.load(map_location="cuda")` crashes. **Fixed:** changed to `"device": "cpu"`. Committed `da6f99d`, deployed to PaulLinux.
+
+**Also done (selfplay-mixed):** `v13.0.5-selfplay-mixed` (32f7c016) finished at rate=0.854, below v13.0.4 parent (0.918). Self-play regressed again — same as the earlier attempt. Shelf self-play for now.
+
+**3-game gut check:** skipped — no replays in Storage for any recent cells. Replay persistence appears broken (0 replays found for rollout_steps-mid, v13.0.4 parent, and selfplay-mixed). Needs investigation in a future fire.
+
+**Parent selection:** `v13.0.4-size-4to8-cont` (`b8e2500b`, rate=0.918, model_id=v13.0, sim-v1.4). Still the chain tip — rollout_steps cells all regressed, minibatch_size cells never ran, selfplay-mixed regressed.
+
+**Queued — v13.1.03-Continue-entropy_coef, parent `b8e2500b` (rate=0.918):**
+
+| cell | entropy_coef | hypothesis | predicted rate |
+|---|---|---|---|
+| lo | 0.003 | lower entropy → more exploitation, less exploration. Warm-start already has good policy → less noise helps compound. Risk: mode collapse | 0.86–0.92 |
+| mid | 0.01 | control — matches parent's entropy_coef exactly. Tests continuation-alone | 0.85–0.91 |
+| hi | 0.03 | higher entropy → more exploration. Could find better strategies but noisier updates → lower rate | 0.82–0.88 |
+
+**Falsification:** if mid (control) lands rate <0.85, warm-start continuation from this parent is systematically degrading under PFSP opponents (consistent with rollout_steps pattern). Would suggest the binding constraint is opponent quality/rotation variance, not any hyperparameter.
+
+**Watcher:** PID 23857 on `1fd92e6a` (lo cell).
+
 ### Fire 13 — 2026-05-03 19:18 PT — post-mortem rollout_steps (all done), queue minibatch_size
 
 **Status:** Worker active, backstop inactive. rollout_steps-{lo,mid,hi} all done. `v13.0.5-selfplay-mixed` (32f7c016) running (~6 min in, 15 min budget). Queue was empty → queued minibatch_size sweep.
