@@ -22,12 +22,10 @@
 # ---------------------------------------------------------------------------
 schedule:
   fire_interval_seconds: 1800     # 30min between Claude-side wakeups
-  cell_budget_seconds:   1200     # 2026-05-02 17:24 PT: bumped 600 → 1200 (20 min) for Batch 8.
-                                  # All 6 parameter knobs exhausted at 600s; γ=0.995 plateau at ~90%
-                                  # with ±1pp variance. Doubling cell budget = ~88 PPO updates instead
-                                  # of ~44 — tests "is plateau training-time bound or algorithmic?"
-                                  # If 20-min cells break 92%, return budget to 1800s+ for chains.
-                                  # If still ~90%, plateau is structural and we pivot to architecture.
+  cell_budget_seconds:   600      # 2026-05-03 23:42 PT: cut 1200 → 600 (10 min) for 24h overnight chain.
+                                  # Paul's call: prioritise breadth over depth — sweep 10 axes in 24h
+                                  # (~48 cells / ~5 axis loops) instead of deepening 7 axes at 20 min.
+                                  # Self-play continues; v13.1 Continue chain stays warm-started cell-to-cell.
   max_karp_queue_depth:  6        # skip queueing if >= this many karp-* are pending
   idle_fires_before_stop: 0       # 0 = never stop on idleness
 
@@ -294,6 +292,33 @@ sweep_axes:
       - { label: "mid", value: 2 }
       - { label: "hi",  value: 4 }
 
+  # 2026-05-03 23:42 PT: un-parked for 24h overnight chain. PPO trust-region
+  # tightness — under self-play volatility, smaller clip may stabilise.
+  - axis: "clip_range"
+    cells:
+      - { label: "lo",  value: 0.10 }
+      - { label: "mid", value: 0.20 }
+      - { label: "hi",  value: 0.30 }
+
+  # 2026-05-03 23:42 PT: NEW axis. Recency decay across PFSP archive sampling.
+  # lo=0.25 → strong newest bias (0.25^k drops fast); mid=0.5 (baseline);
+  # hi=0.9 → flatter, broader archive diet. Tests whether v13.1 plateau is
+  # opponent-monoculture (vs newest few) or under-specialised (vs broad pool).
+  - axis: "leaderboard_recency_decay"
+    cells:
+      - { label: "lo",  value: 0.25 }
+      - { label: "mid", value: 0.50 }
+      - { label: "hi",  value: 0.90 }
+
+  # 2026-05-03 23:42 PT: un-parked. PPO sample reuse per rollout — too high
+  # = overfit to buffer, too low = wastes data. With rollout_steps=8, this
+  # is the second knob on data efficiency.
+  - axis: "update_epochs"
+    cells:
+      - { label: "lo",  value: 2 }
+      - { label: "mid", value: 4 }
+      - { label: "hi",  value: 8 }
+
 # Parked axes — definitions preserved but excluded from round-robin tonight.
 # `lr` is parked because KL-adaptive controller now self-tunes within each
 # cell; sweeping a flat lr would fight the controller.
@@ -315,18 +340,6 @@ sweep_axes_parked:
       - { label: "lo",  value: 0.90 }
       - { label: "mid", value: 0.95 }
       - { label: "hi",  value: 0.98 }
-
-  - axis: "clip_range"
-    cells:
-      - { label: "lo",  value: 0.10 }
-      - { label: "mid", value: 0.20 }
-      - { label: "hi",  value: 0.30 }
-
-  - axis: "update_epochs"
-    cells:
-      - { label: "lo",  value: 2 }
-      - { label: "mid", value: 4 }
-      - { label: "hi",  value: 8 }
 
   - axis: "value_coef"
     cells:
