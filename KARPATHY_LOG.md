@@ -292,6 +292,33 @@ No bouncing pathology. Agent is aggressive — 0% friendly sends in 5/6 games. T
 
 **Watcher:** PID 48796 on `7740dcae` (lo cell).
 
+### Fire 11 — 2026-05-03 18:10 PT — no-op (rollout_steps mid running, hi queued)
+
+**Status:** v13.1.01-Continue-rollout_steps-lo done, mid running, hi queued. Worker active, backstop inactive. Queue non-empty → no queueing.
+
+**Post-mortem — v13.1.01-rollout_steps-lo (rs=4):**
+
+| cell | predicted rate | actual rate | predicted Elo Δ | actual elo | match? | why diverged |
+|---|---|---|---|---|---|---|
+| lo (rs=4) | 0.88–0.92 | **0.858** | n/a | 1050 | ❌ below range by 2pp | rs=4 → 2× PPO updates per episode but shallower GAE; shorter horizon hurt credit assignment for terminal-only reward. Parent at 0.918 with rs=8 had better GAE estimates |
+
+**3-game gut check on `v13.1.01-Continue-rollout_steps-lo` (rate=0.858, 100 replays: 92W/8L):**
+
+| game | result | ticks | p1_sends | p2_sends | p1_f2f | bounce% | note |
+|---|---|---|---|---|---|---|---|
+| upd_0005_g0 | WIN | 14 | 7 | 4 | 0 | 0% | clean aggressive win |
+| upd_0026_g0 | WIN | 21 | 11 | 9 | 3 | 27% | healthy, some consolidation sends |
+| upd_0050_g1 | WIN | 19 | 9 | 6 | 1 | 11% | clean late-training win |
+| upd_0014_g1 | LOSS | 120 | **5** | 55 | 0 | 0% | near-passive P1 — noop collapse in losses |
+| upd_0020_g0 | LOSS | 71 | **3** | 35 | 0 | 0% | 3 sends total — shutdown mode |
+| upd_0023_g1 | LOSS | 200 | **11** | 100 | 0 | 0% | timeout, P1 massively outpaced |
+
+**No bouncing pathology** — 0% f2f in all losses, max 27% in wins. Well below 50% threshold.
+
+**Persistent anomaly: near-passive losses.** Losses show P1 at 3-11 sends vs 29-100 opponent sends. Same pattern from fire 6 (v12 parent) and fire 8 (v13.0.4). Agent shuts down when behind rather than counterattacking. This is behavioral, not architectural — likely needs reward-shaping for recovery behavior (negative reward for passivity in losing positions, or shaped intermediate rewards that keep gradient signal flowing in losses).
+
+**Next fire expects:** mid (rs=8, control) and hi (rs=16) results. mid should be closest to parent rate (0.90-0.93). hi may underperform if fewer PPO updates per budget cap outweigh longer horizon.
+
 ### Fire 9 — 2026-05-03 17:00 PT — no-op (v13.0.5-selfplay-mixed ~69% done)
 
 **Status:** `v13.0.5-selfplay-mixed` (id `b62bf6bc`, model v13.0, self_play=true, cont from v13.0.4 rate=0.918) running — 622s/900s elapsed (~5 min remaining). Worker active, backstop inactive.
