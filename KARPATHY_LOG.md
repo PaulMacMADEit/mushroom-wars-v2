@@ -292,6 +292,36 @@ No bouncing pathology. Agent is aggressive — 0% friendly sends in 5/6 games. T
 
 **Watcher:** PID 48796 on `7740dcae` (lo cell).
 
+### Fire 15 — 2026-05-03 20:28 PT — no-op (entropy_coef mid running, hi queued), post-mortem lo
+
+**Status:** Worker active, backstop inactive. entropy_coef-lo done, mid running, hi queued. Queue non-empty → no queueing.
+
+**Post-mortem — v13.1.03-Continue-entropy_coef-lo (done):**
+
+| cell | entropy_coef | predicted rate | actual rate | actual final_wr | match? | why diverged |
+|---|---|---|---|---|---|---|
+| lo | 0.003 | 0.86–0.92 | **0.863** | 0.927 | ✅ bottom of range | lower entropy hit predicted floor; exploitation mode maintained parent's level without collapse |
+
+**Bench eval:** still broken — all 10 opponents fail with CUDA device error on `torch.load`. Training rate is sole signal. Elo unrated.
+
+**3-game gut check on entropy_coef-lo (`1fd92e6a`, rate=0.863, 230 replays: ~86%W):**
+
+| game | result | ticks | p1_sends | p2_sends | winner_f2f | bounce% | note |
+|---|---|---|---|---|---|---|---|
+| upd_0005_g0 | WIN | 28t | 7 | 12 | 0/7 | 0% | healthy aggression, fewer sends but wins on targeting |
+| upd_0080_g1 | WIN | 18t | 8 | 7 | 0/8 | 0% | fast decisive mid-training win |
+| upd_0005_g1 | LOSS | 82t | 22 | 26 | 0/26 | 0% | competitive loss — P1 still active (22 vs 26 sends) |
+
+**No bouncing pathology** — 0% f2f across all sampled replays.
+
+**Passive-loss improvement:** the one loss shows P1 at 22 sends vs 26 opponent (ratio 0.85) — a marked improvement over prior cells where losses showed P1 at 3-7 sends vs 27-55 opponent. Low entropy_coef (0.003) may be reducing exploration noise that caused the agent to shut down in losing positions. Only 1 loss in sample though — signal is weak, need mid/hi cells for comparison.
+
+**Predictions still open:**
+- mid (0.01, control): predicted 0.85–0.91 → running
+- hi (0.03): predicted 0.82–0.88 → queued
+
+**Next fire:** entropy_coef-mid should finish ~20:40 PT. Will post-mortem mid+hi and queue next axis (level_mix round-robin).
+
 ### Fire 14 — 2026-05-03 19:53 PT — post-mortem minibatch_size CUDA failure, fix + queue entropy_coef
 
 **Status:** Worker active, backstop inactive. minibatch_size-{lo,mid,hi} all **failed** (CUDA device error). Queue empty → fixed bug + queued entropy_coef sweep.
