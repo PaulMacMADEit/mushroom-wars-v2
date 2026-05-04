@@ -1381,10 +1381,13 @@ def _run_rotation_rematch(trainer, run_id: str, metrics_history: list[dict],
                 games=n_games, level=level, level_mix=level_mix,
                 # max_ticks defaults to C.GAME_TIMEOUT_TICKS — which honours
                 # the per-run game_timeout_ticks override mutated at run-start
-                # in worker.py. Critical for apples-to-apples rematch: if
-                # training ran with timeout=500, the rematch must too,
-                # otherwise the agent's late-game policies time out at 200
-                # and bias the rate downward.
+                # in worker.py.
+                # action_repeat threaded from cfg so the rematch agent makes
+                # decisions at the same rate as during training (cfg.action_repeat
+                # = K env ticks per agent decision). Without this the agent
+                # gets ~K× more decisions per game-time-unit at eval than at
+                # training — distribution shift that biases the rate down.
+                action_repeat=getattr(trainer.cfg, "action_repeat", 1),
                 seed=10000 + idx, verbose=False,
                 # Stochastic — apples-to-apples with the stochastic training
                 # rollout win_rate. tournament default (deterministic=True) is

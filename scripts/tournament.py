@@ -292,6 +292,7 @@ def run_match(
     verbose: bool = False,
     level_mix: list | dict | None = None,
     deterministic: bool = True,
+    action_repeat: int | None = None,
 ) -> dict:
     """Run one head-to-head match and return {p1_wins, p2_wins, draws, total, settled, wall_s}.
 
@@ -311,6 +312,12 @@ def run_match(
     """
     if max_ticks is None:
         max_ticks = int(C.GAME_TIMEOUT_TICKS)
+    # action_repeat: how many env ticks share one agent decision. Mirrors
+    # the trainer's cfg.action_repeat (training/fused_rollout.py:116). When
+    # the trainer trained with K=2, eval also needs K=2 to keep the agent's
+    # decision rate matched — otherwise the rematch policy gets twice as
+    # many decisions per game-time-unit, which is a distribution shift.
+    K = max(1, int(action_repeat) if action_repeat is not None else 1)
     if device is None:
         # `torch.cuda.is_available()` can return True on machines where
         # `torch.cuda.device_count() == 0` (driver/runtime mismatch — seen
@@ -337,12 +344,14 @@ def run_match(
     p1_wins = p2_wins = draws = settled = 0
     finished = np.zeros(games, dtype=bool)
 
-    # Use the canonical sim entry point — JaxVecEnv.step() — so this harness
-    # cannot drift from training rollouts (training/trainer.py:457). step()
-    # captures terminal_phase before its internal auto-reset; we use the
-    # `finished` mask to ignore subsequent ticks for already-settled envs.
+    # Use the canonical sim entry point — when K=1, JaxVecEnv.step(); when
+    # K>1, step_chunk(K) so the agent's decision rate matches training.
+    # Both step variants capture terminal_phase before auto-reset; we use
+    # the `finished` mask to ignore subsequent ticks for already-settled
+    # envs.
     t0 = time.perf_counter()
-    for tick in range(max_ticks):
+    n_decisions = (max_ticks + K - 1) // K  # ceil; total env ticks ≤ max_ticks
+    for _ in range(n_decisions):
         states = vec.snapshot_numpy_states()
         a1_flat = _pick_actions(p1_kind, p1_agent, p1_norm, states, C.OWNER_P1, rng, p1_encode, deterministic=deterministic)
         a2_flat = _pick_actions(p2_kind, p2_agent, p2_norm, states, C.OWNER_P2, rng, p2_encode, deterministic=deterministic)
@@ -350,11 +359,16 @@ def run_match(
         for i in range(games):
             _decode_action_to_packed(int(a1_flat[i]), a_batch[i, 0])
             _decode_action_to_packed(int(a2_flat[i]), a_batch[i, 1])
-        result = vec.step(a_batch)
-        terminated = np.asarray(result.terminated)
+        if K == 1:
+            result = vec.step(a_batch)
+            terminated = np.asarray(result.terminated)
+            phase_arr  = np.asarray(result.terminal_phase)
+        else:
+            result = vec.step_chunk(a_batch, K=K)
+            terminated = np.asarray(result["dones"])
+            phase_arr  = np.asarray(result["terminal_phase"])
         new_done = terminated & ~finished
         if new_done.any():
-            phase_arr = np.asarray(result.terminal_phase)
             for i in np.where(new_done)[0]:
                 ph = int(phase_arr[i])
                 if ph == C.PHASE_P1_WINS:
