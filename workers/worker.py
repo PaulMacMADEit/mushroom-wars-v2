@@ -49,6 +49,11 @@ import torch
 
 from cli.db import PROJECT, connect
 from training.agent import PPOAgent
+# Capture the default GAME_TIMEOUT_TICKS once at module import so each
+# run_training can either honour hp.game_timeout_ticks or restore the default.
+# Keeps a per-run override from leaking across jobs in this worker process.
+from sim import config as _SIM_CONFIG_FOR_DEFAULT
+_ORIG_GAME_TIMEOUT_TICKS: int = int(_SIM_CONFIG_FOR_DEFAULT.GAME_TIMEOUT_TICKS)
 from training.net import ActorCritic
 from training.trainer import PPOConfig, PPOTrainer
 
@@ -1049,6 +1054,26 @@ def run_training(
     # GPU init entirely. Inherits to children via os.environ.
     if hp.get("self_play"):
         os.environ["JAX_PLATFORMS"] = "cpu"
+
+    # Per-run game timeout. Default 200 from sim/config.GAME_TIMEOUT_TICKS;
+    # hp.game_timeout_ticks overrides for this run only. We mutate the
+    # constant in-place (engine reads via attribute lookup each call) and
+    # bump the encoder's TIMEOUT_NORM in lockstep so tick/TIMEOUT_NORM stays
+    # in [0,1] and the policy doesn't see distribution shift. Always
+    # written, so a prior run's override never leaks into the next run
+    # within the same worker process.
+    from sim import config as _C
+    from training import encoder as _ENC
+    new_t = int(hp.get("game_timeout_ticks", _ORIG_GAME_TIMEOUT_TICKS))
+    _C.GAME_TIMEOUT_TICKS = new_t
+    _ENC.TIMEOUT_NORM = float(new_t)
+    try:
+        from training.encoders import v9 as _ENC_V9
+        _ENC_V9.TIMEOUT_NORM = float(new_t)
+    except Exception:
+        pass
+    if new_t != _ORIG_GAME_TIMEOUT_TICKS:
+        print(f"[worker] game_timeout_ticks override: {_ORIG_GAME_TIMEOUT_TICKS} -> {new_t}", flush=True)
 
     # Build config: start from defaults, overlay any hyperparams the caller provided.
     cfg_kwargs = {k: v for k, v in hp.items() if k in PPOConfig.__dataclass_fields__}

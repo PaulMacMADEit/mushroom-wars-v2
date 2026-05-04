@@ -847,6 +847,50 @@ class PPOTrainer:
         rv = self.cfg.reward_version if self.cfg.reward_version >= 0 else (1 if self.cfg.reward_v13 else 0)
         state = sim_levels.reset(level_name=level_name, seed=seed, reward_version=rv)
 
+        # P2 selection — when the trainer is rotating against a leaderboard
+        # archive, replay capture should show the policy playing against an
+        # actual archive member (not random_legal). Picks one PFSP-weighted
+        # member, builds a fresh neural opponent callable, and uses it as P2.
+        # Falls back to random_legal when no rotation pool is loaded.
+        opp_rng = np.random.default_rng(seed ^ 0x5A5A5A5A)
+        opp_run_id = ""
+        opp_label  = "random_legal"
+        opp_callable = None
+        if getattr(self, "_lb_state_dicts", None):
+            from sim.envs.opponents import make_neural_opponent_cached
+            n = len(self._lb_state_dicts)
+            if self._lb_weights is not None and len(self._lb_weights) == n:
+                opp_idx = int(opp_rng.choice(n, p=self._lb_weights))
+            else:
+                opp_idx = int(opp_rng.integers(0, n))
+            sd, enc_v, net_v = self._lb_state_dicts[opp_idx]
+            obs_n = self._lb_obs_norms[opp_idx] if self._lb_obs_norms else None
+            opp_callable = make_neural_opponent_cached(
+                state_dict=sd, obs_norm=obs_n, device="cpu",
+                encoder_version=enc_v, net_version=net_v,
+            )
+            # Resolve full label from DB (single round-trip, cached per-run via
+            # self._lb_label_cache to avoid hammering on every replay capture).
+            weights_path = self._leaderboard[opp_idx][0] if self._leaderboard else ""
+            opp_run_id = _extract_label_from_weights_path(weights_path) or ""
+            cache = getattr(self, "_lb_label_cache", None)
+            if cache is None:
+                cache = {}
+                self._lb_label_cache = cache
+            if opp_run_id and opp_run_id not in cache:
+                try:
+                    from cli.db import connect as _db_connect
+                    with _db_connect() as _c, _c.cursor() as _cur:
+                        _cur.execute(
+                            "SELECT label FROM runs WHERE id::text LIKE %s LIMIT 1",
+                            (f"{opp_run_id}%",),
+                        )
+                        row = _cur.fetchone()
+                        cache[opp_run_id] = (row[0] if row else "") or ""
+                except Exception as _exc:
+                    cache[opp_run_id] = ""
+            opp_label = cache.get(opp_run_id) or f"champion:{opp_run_id}"
+
         # Recorder uses the engine's per-tick event buffer to produce the
         # public replay schema. capture_map snapshots the initial layout.
         recorder = Recorder(
@@ -854,12 +898,10 @@ class PPOTrainer:
             sim_version="v12",
             level_name=level_name,
             seed=seed,
+            opponent_run_id=opp_run_id,
+            opponent_label=opp_label,
         )
         recorder.capture_map(state)
-
-        # P2 random rng — separate from level-pick rng so opponent variability
-        # doesn't depend on the level mix.
-        opp_rng = np.random.default_rng(seed ^ 0x5A5A5A5A)
 
         # _state_to_obs_dict_for_player from tournament.py builds the dict the
         # encoder expects (with v10+ event fields). Importing here keeps the
@@ -885,8 +927,14 @@ class PPOTrainer:
                     enc_p1[None, :], mask_p1[None, :], deterministic=True,
                 )
                 a1_idx = int(action_arr[0])
-                # P2 — random legal.
-                a2_idx = random_legal_opponent(state, opp_rng)
+                # P2 — neural rotation member when available, else random.
+                if opp_callable is not None:
+                    try:
+                        a2_idx = int(opp_callable(state, opp_rng))
+                    except Exception:
+                        a2_idx = random_legal_opponent(state, opp_rng)
+                else:
+                    a2_idx = random_legal_opponent(state, opp_rng)
 
             a1 = decode(a1_idx)
             a2 = decode(a2_idx)

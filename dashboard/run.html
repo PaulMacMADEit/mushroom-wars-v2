@@ -1913,7 +1913,8 @@
         player.setSpeed(parseFloat($speed.value));
         currentData = data;
         if ($download) $download.disabled = false;
-        $meta.textContent = `${data.duration_ticks} ticks · winner ${data.winner ?? '—'} · ${data.events.length} events · ${data.level_name}`;
+        const _opp = data.opponent_label || (data.opponent_run_id ? `champion:${data.opponent_run_id}` : 'random_legal');
+        $meta.textContent = `${data.duration_ticks} ticks · winner ${data.winner ?? '—'} · ${data.events.length} events · ${data.level_name} · vs ${_opp}`;
         if (autoplay !== false) player.play();
         $play.textContent = '⏸';
         player.onStateChange((p) => {

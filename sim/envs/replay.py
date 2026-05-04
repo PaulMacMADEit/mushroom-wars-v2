@@ -53,6 +53,14 @@ class Recorder:
     level_name: str = ""
     seed: Optional[int] = None
 
+    # Opponent metadata so the dashboard can show "vs <full label>" in the
+    # replay viewer. opponent_run_id is the short id; opponent_label is the
+    # full label (e.g. v13.1.01-Continue-rollout_steps-mid). Default "" for
+    # legacy captures (P2=random_legal); trainer sets these when capturing
+    # against a rotation pool member.
+    opponent_run_id: str = ""
+    opponent_label:  str = ""
+
     _map: Optional[dict] = field(default=None, init=False)
     _events: list[dict] = field(default_factory=list, init=False)
     _decisions: list[dict] = field(default_factory=list, init=False)
@@ -204,6 +212,8 @@ class Recorder:
             "game_timeout_ticks": C.GAME_TIMEOUT_TICKS,
             "duration_ticks":     duration,
             "winner":             self._winner,
+            "opponent_run_id":    self.opponent_run_id,
+            "opponent_label":     self.opponent_label,
             "map":                self._map,
             "events":             self._events,
             "decisions":          self._decisions,
