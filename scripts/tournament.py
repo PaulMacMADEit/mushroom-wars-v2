@@ -305,7 +305,13 @@ def run_match(
     static level loader doesn't recognise.
     """
     if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # `torch.cuda.is_available()` can return True on machines where
+        # `torch.cuda.device_count() == 0` (driver/runtime mismatch — seen
+        # on PaulLinux post-self_play). Both checks together avoid the
+        # "Attempting to deserialize object on CUDA device 0 but
+        # torch.cuda.device_count() is 0" failure inside `_load_policy`.
+        cuda_ok = torch.cuda.is_available() and torch.cuda.device_count() > 0
+        device = torch.device("cuda" if cuda_ok else "cpu")
 
     p1_kind, p1_agent, p1_norm, p1_encode = _load_policy(p1, device)
     p2_kind, p2_agent, p2_norm, p2_encode = _load_policy(p2, device)
@@ -483,7 +489,8 @@ def main():
                     help="Elo K-factor for --update-elo (default 32)")
     args = ap.parse_args()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cuda_ok = torch.cuda.is_available() and torch.cuda.device_count() > 0
+    device = torch.device("cuda" if cuda_ok else "cpu")
     print(f"device: {device}")
     print(f"P1: {args.p1}")
     print(f"P2: {args.p2}")
