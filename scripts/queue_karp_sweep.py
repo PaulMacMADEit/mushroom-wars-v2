@@ -193,7 +193,7 @@ def queue_sweep(
         run_id = str(rows_db[0][0])
         label  = rows_db[0][1]
         print(f"[karp]   {cell_label}: opponent={label} ({run_id[:8]}) via {mode}")
-        return "neural", {"device": "cuda", "opponent_run_id": run_id, **base_kwargs}, False
+        return "neural", {"device": "cpu", "opponent_run_id": run_id, **base_kwargs}, False
 
     print(f"[karp] training_opponent.mode={opp_mode}")
 
