@@ -267,6 +267,14 @@ v13 chain is showing compounding: 0.851 → 0.892 → 0.918 across 3 generations
 
 **Next action:** wait for v13.0.5-selfplay-mixed to finish. If rate > 0.918, chain continues compounding with self-play. If rate < 0.85, self-play may be too hard a jump from random_legal.
 
+### Fire 9 — 2026-05-03 17:00 PT — no-op (v13.0.5-selfplay-mixed ~69% done)
+
+**Status:** `v13.0.5-selfplay-mixed` (id `b62bf6bc`, model v13.0, self_play=true, cont from v13.0.4 rate=0.918) running — 622s/900s elapsed (~5 min remaining). Worker active, backstop inactive.
+
+**No post-mortem:** no new cells finished since fire 8. v13 chain compounding remains at 0.851→0.892→0.918 (3 generations).
+
+**No queueing:** queue non-empty (1 running). Next fire should catch v13.0.5 results and queue continuation if rate>=0.70.
+
 ---
 
 **Evaluation system change 2026-04-27.** Replaced random_legal-anchored auto-rate
