@@ -6,11 +6,12 @@ paths:
   - "configs/**/*.py"
   - "configs/**/*.yaml"
   - "scripts/cron_agent_pulse.py"
-  - "JAX_PORT_PLAN.md"
-  - "CURRICULUM_PLAN.md"
-  - "FUSED_ROLLOUT_PLAN.md"
-  - "PHASE_G_PLAN.md"
+  - "docs/archive/JAX_PORT_PLAN.md"
+  - "docs/archive/CURRICULUM_PLAN.md"
+  - "docs/archive/FUSED_ROLLOUT_PLAN.md"
+  - "docs/archive/PHASE_G_PLAN.md"
   - "KARPATHY_LOG.md"
+  - "V13_PLAN.md"
 ---
 
 # Mushroom Wars v2 — training discipline (path-scoped)

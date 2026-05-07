@@ -1,5 +1,15 @@
 # Mushroom Wars v2 — Architecture
 
+> **Status note (2026-05-07):** this is the original 2026-04 design doc. The
+> rebuild has shipped — sim, trainer, worker, dashboard, champion archive,
+> bench-eval are all operational. Some decisions captured here did NOT land
+> (Phaser TS playable game was dropped; Modal cloud-burst was never wired up;
+> `modal_app/` doesn't exist). For the active line of work see
+> [V13_PLAN.md](./V13_PLAN.md) and [KARPATHY_LOG.md](./KARPATHY_LOG.md).
+> Archived plans (FUSED_ROLLOUT, JAX_PORT, PHASE_G, CURRICULUM) live in
+> `docs/archive/` — all shipped. The decision log below is preserved as
+> historical context.
+
 Design document for the ground-up rebuild of the Mushroom Wars RL training stack.
 Captures every core decision, the reasoning, and the rejected alternatives.
 
@@ -1191,4 +1201,4 @@ The rebuild is "done" when all of these are true:
 
 ---
 
-*Last updated: 2026-04-21. Author: Paul + Claude. Status: design, not yet implemented.*
+*Last updated: 2026-04-21. Author: Paul + Claude. Status: original design doc — see header note for what shipped vs drifted.*

@@ -27,12 +27,11 @@ Read once, bookmark, re-read when you catch yourself drifting.
 
 ## 3. Configuration — no hard-coded values
 
-- **Three config files.** `config/game.yaml` (sim rules + balance), `config/training.yaml` (PPO hyperparams + net shape), `config/infra.yaml` (supabase, modal, machines).
-- **YAML for data, Python+pydantic for validation.** Load into a typed config class at startup; bad values fail loud.
-- **Game constants live in `game.yaml`.** `MAX_GAME_SECONDS`, `PRODUCTION_TICK_MS`, `UNIT_SPEED`, `SEND_PERCENTAGES`, `BUILDING_CAPACITY_PER_LEVEL`. If you're about to write a magic number in `.py`, stop — put it in YAML.
+- **YAML configs live in `configs/`** — actual files: `training_levels.yaml` (curriculum + level mix), `karpathy_loop.yaml` (sweep axes), `bench_eval.yaml` (champion archive + promo gates), `worker.yaml` (worker tunables). Splitting by lifecycle, not by domain.
+- **Game constants live in `sim/config.py`.** `MAX_BUILDING_SLOTS`, `SEND_PERCENTAGES`, `DECISION_INTERVAL_TICKS`, the reward tables — Python module, not YAML, because they're shape-defining and any change is a model-version bump (referenced from sim+training+JAX simultaneously). YAML is for *runtime* tunables, not invariants.
 - `**.env` for secrets only.** Not for game balance, not for hyperparams.
 - **Every run's config is stored in Postgres** (`runs.hyperparams` jsonb). Reproducing any past run = re-read its stored config.
-- **Defaults work out of the box.** Clone repo → `python cli/smoke_train.py` → training runs. No flag-flipping dance.
+- **Defaults work out of the box.** Clone repo → `python scripts/smoke_train.py` → training runs. No flag-flipping dance.
 
 ---
 
