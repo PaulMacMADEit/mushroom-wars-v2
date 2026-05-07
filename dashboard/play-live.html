@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Play Live - Mushroom Wars v2</title>
+  <link rel="stylesheet" href="lib/style.css">
+  <style>
+    .launch-card { display: flex; flex-direction: column; gap: 18px; }
+    .launch-step { display: flex; flex-direction: column; gap: 6px; }
+    .launch-step strong { color: var(--fg); }
+    .cmd-block {
+      display: flex; gap: 8px;
+      background: #11141b;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-family: var(--mono); font-size: 13px;
+      align-items: center;
+    }
+    .cmd-block code {
+      flex: 1; color: var(--fg); background: transparent;
+      padding: 0; white-space: pre;
+    }
+    .copy-btn {
+      background: #1f2433; color: var(--fg);
+      border: 1px solid var(--border);
+      padding: 4px 10px; border-radius: 4px;
+      cursor: pointer; font: inherit; font-size: 12px;
+    }
+    .copy-btn:hover  { background: #262c3d; }
+    .copy-btn.copied { background: #34d399; color: #0b0d12; border-color: #34d399; }
+    .open-btn {
+      display: inline-block;
+      background: var(--accent); color: #0b0d12;
+      border: 0; padding: 12px 20px; border-radius: 6px;
+      cursor: pointer; font-weight: 600; font-size: 14px;
+      font-family: inherit; text-decoration: none;
+    }
+    .open-btn:hover { background: #82b8fc; }
+    .why { color: var(--fg-muted); font-size: 12px; line-height: 1.6; }
+    .why strong { color: var(--fg); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Mushroom Wars v2</h1>
+    <nav>
+      <a href="./index.html">Overview</a>
+      <a href="./runs.html">Runs</a>
+      <a href="./models.html">Models</a>
+      <a href="./elo.html">Leaderboard</a>
+      <a href="./training.html">Training</a>
+      <a href="./replays.html">Replays</a>
+      <a href="./play.html">Play</a>
+      <a href="./play-live.html">Play Live</a>
+      <a href="./process.html">Process</a>
+    </nav>
+  </header>
+
+  <main>
+    <h2>Play live vs a trained agent</h2>
+    <div class="card">
+      <div class="launch-card">
+        <div class="muted small">
+          You play P1 by clicking buildings; the trained agent plays P2.
+          Pick the model to face from a dropdown in the top-left — first switch
+          downloads weights from Supabase (~1–3s), subsequent switches use the
+          cached file. <a href="./play.html">Play</a> queues batch AI-vs-AI matches;
+          this page is local human-vs-AI.
+        </div>
+
+        <div class="launch-step">
+          <strong>1. Start the local server</strong>
+          <div class="cmd-block">
+            <code id="cmd">python scripts/play_live.py</code>
+            <button class="copy-btn" id="copy-btn">copy</button>
+          </div>
+          <div class="muted small">
+            Run from the <span class="mono">mushroom-wars-v2/</span> repo root.
+            Uses CPU so it won't steal GPU time from the training loop.
+          </div>
+        </div>
+
+        <div class="launch-step">
+          <strong>2. Open it</strong>
+          <div>
+            <a class="open-btn" href="http://localhost:8765" target="_blank" rel="noopener">
+              Open localhost:8765 →
+            </a>
+          </div>
+          <div class="muted small">
+            Opens in a new tab. If you see "connection refused", go back to step 1.
+          </div>
+        </div>
+
+        <div class="why">
+          <strong>Why local-only:</strong> live click-to-click play needs the
+          Python sim and a torch model loader running together — neither exists
+          in a static GitHub Pages site. The server runs the sim, the browser
+          paints it.
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const $btn = document.getElementById('copy-btn');
+    const $cmd = document.getElementById('cmd');
+    $btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText($cmd.textContent);
+        $btn.textContent = 'copied';
+        $btn.classList.add('copied');
+        setTimeout(() => {
+          $btn.textContent = 'copy';
+          $btn.classList.remove('copied');
+        }, 1200);
+      } catch {
+        $btn.textContent = 'failed';
+      }
+    });
+  </script>
+</body>
+</html>
