@@ -117,6 +117,7 @@ class _Session:
             "phase":       int(st.phase),
             "level":       self.level_name,
             "opponent":    self.opponent_label,
+            "champion_run_id": self.champion_run_id,
             "buildings":   buildings,
             "groups":      groups,
             # Action mask is huge (4097 bools) — only ship the legal indices.
@@ -180,6 +181,36 @@ def _resolve_champion(run_id_prefix: str) -> tuple[str, str | None, str]:
         n_local = work / "obs_norm.pt"
         _download(n_url, n_local)
     return str(w_local), (str(n_local) if n_local else None), f"{label} ({rid[:8]})"
+
+
+def _list_champions() -> list[dict]:
+    """Return the same list of finished, weights-bearing runs that play.html shows.
+
+    Mirror's the dashboard query so the in-browser picker matches what's on
+    the deployed page. Synthesises a "random_legal" entry at the top so the
+    user can switch back to the baseline opponent without restarting.
+    """
+    from cli.db import connect
+
+    with connect() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id::text, label, result
+              FROM runs
+             WHERE weights_url IS NOT NULL
+               AND id::text != '00000000-0000-0000-0000-000000000001'
+               AND status = 'done'
+             ORDER BY finished_at DESC NULLS LAST
+             LIMIT 100
+            """
+        )
+        rows = cur.fetchall()
+    out: list[dict] = [{"run_id": "random_legal", "label": "random_legal (baseline)"}]
+    for rid, label, result in rows:
+        rate = result.get("rate") if isinstance(result, dict) else None
+        suffix = f" ({rate * 100:.0f}%)" if isinstance(rate, (int, float)) else ""
+        out.append({"run_id": rid, "label": f"{label}{suffix}"})
+    return out
 
 
 def _download(url_relpath: str, dst: Path) -> None:
@@ -255,7 +286,11 @@ _HTML = r"""<!doctype html>
 <body>
 <header>
   <h1>🍄 mushroom wars — live</h1>
-  <span class="opp">vs <span class="mono" id="opp-label">—</span></span>
+  <span class="opp">vs
+    <select id="opp-picker" class="mono" style="margin-left:4px; max-width:360px;">
+      <option value="">loading...</option>
+    </select>
+  </span>
   <span class="opp">on <span class="mono" id="level-label">—</span></span>
   <div class="actions">
     <button id="btn-reset">New game</button>
@@ -312,7 +347,7 @@ _HTML = r"""<!doctype html>
 // Canvas-only state. The server is the source of truth; we just paint.
 const CV  = document.getElementById('board');
 const CTX = CV.getContext('2d');
-const $opp = document.getElementById('opp-label');
+const $opp = document.getElementById('opp-picker');
 const $lvl = document.getElementById('level-label');
 const $toast = document.getElementById('toast');
 const $banner = document.getElementById('phase-banner');
@@ -431,7 +466,15 @@ function updateSidebar(state) {
   document.getElementById('s-enemy-units').textContent   = enemyU;
   document.getElementById('s-mine-flight').textContent   = mineF;
   document.getElementById('s-enemy-flight').textContent  = enemyF;
-  $opp.textContent = state.opponent ?? '—';
+  // Sync dropdown to backend without clobbering the user's mid-pick state:
+  // only update if the user isn't actively focused on the select.
+  const targetVal = state.champion_run_id ?? 'random_legal';
+  if (document.activeElement !== $opp && $opp.value !== targetVal) {
+    // Only set if the option actually exists (champions list might still be loading).
+    if ([...$opp.options].some(o => o.value === targetVal)) {
+      $opp.value = targetVal;
+    }
+  }
   $lvl.textContent = state.level ?? '—';
 
   if (state.phase === 1)      showBanner("YOU WIN",   'win');
@@ -617,6 +660,52 @@ document.getElementById('btn-reset').addEventListener('click', async () => {
   hideBanner();
 });
 
+// ----- Opponent picker ------------------------------------------------------
+// Loads the same champion list the deployed play.html shows, plus a synthetic
+// "random_legal" baseline. Selecting an option starts a new game vs that
+// opponent — first switch may take a few seconds while the worker downloads
+// the weights from Supabase storage.
+async function loadChampions() {
+  try {
+    const r = await fetch('/api/champions');
+    const j = await r.json();
+    if (j.error) { showToast('couldn\'t load models: ' + j.error); return; }
+    const champs = j.champions || [];
+    const opts = champs.map(c =>
+      `<option value="${c.run_id}">${c.label.replace(/</g, '&lt;')}</option>`
+    ).join('');
+    $opp.innerHTML = opts;
+    // Sync to whatever the server currently has loaded.
+    const target = lastState?.champion_run_id ?? 'random_legal';
+    if ([...$opp.options].some(o => o.value === target)) $opp.value = target;
+  } catch (err) {
+    showToast('net error loading models: ' + err.message);
+  }
+}
+$opp.addEventListener('change', async () => {
+  const champ = $opp.value;
+  if (!champ) return;
+  const shortLabel = $opp.options[$opp.selectedIndex]?.text ?? champ;
+  showToast('Loading ' + shortLabel + '...');
+  $opp.disabled = true;
+  try {
+    const r = await fetch('/api/reset', {
+      method:  'POST',
+      headers: {'content-type': 'application/json'},
+      body:    JSON.stringify({champion: champ}),
+    });
+    const j = await r.json();
+    if (j.error) { showToast('⚠ ' + j.error); return; }
+    selectedSrc = null;
+    hideBanner();
+    showToast('Now playing vs ' + (j.opponent || shortLabel));
+  } catch (err) {
+    showToast('net error: ' + err.message);
+  } finally {
+    $opp.disabled = false;
+  }
+});
+
 // ----- Polling --------------------------------------------------------------
 async function poll() {
   try {
@@ -631,6 +720,7 @@ async function poll() {
 
 (async () => {
   await fetchConsts();
+  await loadChampions();
   pollHandle = setInterval(poll, 150);  // 150ms ≈ smooth without flooding
   poll();
 })();
@@ -679,6 +769,15 @@ class _Handler(BaseHTTPRequestHandler):
             with self.session.lock:
                 self._json(self.session.state_json())
             return
+        if self.path == "/api/champions":
+            try:
+                champs = _list_champions()
+            except Exception as exc:
+                traceback.print_exc()
+                self._json({"error": str(exc)}, status=500)
+                return
+            self._json({"champions": champs})
+            return
         if self.path == "/api/constants":
             from sim.actions import ACTION_SPACE_SIZE, NOOP_INDEX, SLOTS_SQ
             from sim import config as C
@@ -708,9 +807,14 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/reset":
             try:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length).decode("utf-8") or "{}") if length > 0 else {}
+                # `champion` key absent → preserve current; explicit string → swap.
+                champion = body.get("champion")
                 with self.session.lock:
-                    self.session.reset()
-                self._json({"ok": True})
+                    self.session.reset(champion_run_id=champion)
+                    label = self.session.opponent_label
+                self._json({"ok": True, "opponent": label})
             except Exception as exc:
                 traceback.print_exc()
                 self._json({"error": str(exc)}, status=500)
