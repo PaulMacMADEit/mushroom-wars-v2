@@ -1,11 +1,13 @@
 """
 Action encoding + validation + masking.
 
-Action space (matches ARCHITECTURE §9.3):
-  action = type_idx * MAX_SLOTS * MAX_SLOTS + src * MAX_SLOTS + tgt   (send)
-  action = NOOP_INDEX                                                 (no-op)
+Action space:
+  action = type_idx * SLOTS_SQ + src * MAX_BUILDING_SLOTS + tgt   (send)
+  action = NOOP_INDEX                                              (no-op)
 
-Total size = 4 × 32 × 32 + 1 = 4097.
+Total size = NUM_TYPES * MAX_BUILDING_SLOTS² + 1.
+v12 shape (current): 2 × 8 × 8 + 1 = 129. SEND_PERCENTAGES was cut from
+4 → 2 (50/100) and MAX_BUILDING_SLOTS from 32 → 8.
 
 One action per decision. A "decision" happens every DECISION_INTERVAL_TICKS ticks.
 An action can only be issued for a player who owns the source building AND
