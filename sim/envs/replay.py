@@ -184,6 +184,12 @@ class Recorder:
             ranked = sorted(valid_idx, key=lambda i: -float(probs[i]))[:k]
             return [[int(i), float(probs[i])] for i in ranked]
 
+        # v12 schema names the army-percent head "type"; v13 renames it "pct"
+        # but it's the same semantic head and TYPE_LABELS in the dashboard
+        # ("25%/50%/75%/100%/noop") already matches the bucket meaning.
+        # Alias either flavor into the "type_*" slot the dashboard expects.
+        pct_key = "type" if "type_picked" in diag else "pct"
+
         self._decisions.append({
             "t":       int(tick),
             "player":  int(player),
@@ -191,12 +197,12 @@ class Recorder:
             "entropy": float(diag["entropy"]),
             "picked": {
                 "src":  int(diag["src_picked"]),
-                "type": int(diag["type_picked"]),
+                "type": int(diag[f"{pct_key}_picked"]),
                 "tgt":  int(diag["tgt_picked"]),
             },
-            "src_top":  _top_k(diag["src_probs"],  diag.get("src_mask"),  top_k),
-            "type_top": _top_k(diag["type_probs"], diag.get("type_mask"), top_k),
-            "tgt_top":  _top_k(diag["tgt_probs"],  diag.get("tgt_mask"),  top_k),
+            "src_top":  _top_k(diag["src_probs"],            diag.get("src_mask"),            top_k),
+            "type_top": _top_k(diag[f"{pct_key}_probs"],     diag.get(f"{pct_key}_mask"),     top_k),
+            "tgt_top":  _top_k(diag["tgt_probs"],            diag.get("tgt_mask"),            top_k),
         })
 
     def to_dict(self) -> dict[str, Any]:
