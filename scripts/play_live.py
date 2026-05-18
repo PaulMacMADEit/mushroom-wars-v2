@@ -752,6 +752,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Max-Age", "86400")
+        # Chrome's Private Network Access — HTTPS pages need this to fetch
+        # http://localhost without being blocked by PNA preflight rules.
+        self.send_header("Access-Control-Allow-Private-Network", "true")
 
     def _json(self, payload, status=200):
         body = json.dumps(payload).encode("utf-8")
