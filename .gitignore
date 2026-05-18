@@ -42,3 +42,6 @@ logs/
 /tmp/
 .cache/
 experiments/
+
+# Local art scratch (rejected attempts, throwaway gens)
+.context/art/
