@@ -349,21 +349,19 @@ _HTML = r"""<!doctype html>
              backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
   .top-hud .opp-label { color: #93a3b8; font-size: 12px; }
   .top-hud .opp-label .mono { color: #e6e8ef; }
-  /* Right-side overlay panel — send size + session + state. */
-  aside { position: fixed; top: 80px; right: 16px; bottom: 60px;
-          width: 240px; padding: 16px; z-index: 4; overflow-y: auto;
-          background: rgba(14, 17, 23, 0.55); border: 1px solid rgba(96, 165, 250, 0.12);
-          border-radius: 10px;
-          backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
-  aside h3 { margin: 0 0 6px; font-size: 11px; color: #93a3b8;
-             text-transform: uppercase; letter-spacing: 0.06em; }
-  aside h3:not(:first-child) { margin-top: 18px; }
-  .stat { display: flex; justify-content: space-between; padding: 3px 0;
-          border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 12px; }
-  .stat .k { color: #93a3b8; }
-  .stat .v { font-family: ui-monospace, monospace; }
-  .pct-row { display: flex; gap: 6px; margin-top: 6px; }
-  .pct-row button { flex: 1; padding: 8px 4px; font-size: 13px; font-weight: 500; }
+  /* Compact floating Send-size widget at top-right. The full sidebar was
+     too much real estate; this keeps just the gameplay-critical control. */
+  .send-size { position: fixed; top: 12px; right: 16px; z-index: 6;
+               display: flex; align-items: center; gap: 8px;
+               padding: 8px 12px;
+               background: rgba(14, 17, 23, 0.55);
+               border: 1px solid rgba(96, 165, 250, 0.12);
+               border-radius: 999px;
+               backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .send-size .send-label { color: #93a3b8; font-size: 11px;
+                           text-transform: uppercase; letter-spacing: 0.06em; }
+  .send-size .pct-row { display: flex; gap: 4px; margin: 0; }
+  .pct-row button { padding: 6px 12px; font-size: 12px; font-weight: 500; min-width: 48px; }
   .pct-row button.active { background: #f59e0b; border-color: #f59e0b; color: #11141b; }
   /* Bottom unit-balance bar. Two flex divs, widths proportional to unit %. */
   .balance-bar { position: fixed; bottom: 16px; left: 16px; right: 16px;
@@ -428,27 +426,16 @@ _HTML = r"""<!doctype html>
     <button id="btn-reset">New game</button>
   </div>
 
-  <!-- Side panel — minimal stats (no how-to-play). -->
-  <aside>
-    <h3>Send size</h3>
+  <!-- Floating Send-size widget. The rest of the sidebar (Session / State
+       counters) was removed per feedback — they were noise during play.
+       Session win/loss tracking still happens in localStorage; we just
+       don't surface it on the game screen. -->
+  <div class="send-size">
+    <span class="send-label">Send</span>
     <div class="pct-row" id="pct-row">
       <!-- buttons inserted at runtime from SEND_PERCENTAGES (25/50/75/100) -->
     </div>
-
-    <h3>Session</h3>
-    <div class="stat"><span class="k">games</span><span class="v" id="s-sess-games">0</span></div>
-    <div class="stat"><span class="k">wins</span><span class="v" id="s-sess-wins" style="color:#34d399">0</span></div>
-    <div class="stat"><span class="k">losses</span><span class="v" id="s-sess-losses" style="color:#f87171">0</span></div>
-    <div class="stat"><span class="k">draws</span><span class="v" id="s-sess-draws">0</span></div>
-    <div class="stat"><span class="k">win rate</span><span class="v" id="s-sess-rate">—</span></div>
-
-    <h3>State</h3>
-    <div class="stat"><span class="k">tick</span><span class="v" id="s-tick">—</span></div>
-    <div class="stat"><span class="k">your worlds</span><span class="v" id="s-mine" style="color:#ef4444">—</span></div>
-    <div class="stat"><span class="k">enemy worlds</span><span class="v" id="s-enemy" style="color:#3b82f6">—</span></div>
-    <div class="stat"><span class="k">your units</span><span class="v" id="s-mine-units" style="color:#ef4444">—</span></div>
-    <div class="stat"><span class="k">enemy units</span><span class="v" id="s-enemy-units" style="color:#3b82f6">—</span></div>
-  </aside>
+  </div>
 
   <!-- Bottom unit-balance bar — proportional to YOUR vs ENEMY units only
        (neutral excluded; the bar represents the war between you two). -->
@@ -676,20 +663,21 @@ function render(state) {
   }
 
   // Groups (in-flight squads) — ship sprite rotated along travel direction.
-  // Position is INTERPOLATED between server polls so the ship moves smoothly
-  // on every animation frame, not only when /api/state returns. The server
-  // ticks at TICK_HZ=1 (× DECISION_INTERVAL=2 = 2 sim ticks per second),
-  // so progress grows 2 units per wall-clock second between polls.
-  const TICKS_PER_SEC_WALL = 2;
-  const elapsedSec = (performance.now() - lastStateTime) / 1000;
+  // Position is interpolated PER FIGHTER from its first-seen moment so the
+  // ship walks continuously from src → tgt regardless of server tick rate.
+  // The previous implementation tied interpolation to time-since-last-poll;
+  // that gave a "step then pause" look because state polls (every 100ms)
+  // reset the clock while the server only ticked every 1 sec — fighters
+  // sat in place for ~10 frames then snapped to the next tick's progress.
+  // The fighterTracker now records firstSeen + initial-progress per group
+  // and interpolates from there at a fixed 2 ticks/sec wall-clock rate.
   const buildingByIdx = {};
   for (const b of state.buildings) buildingByIdx[b.slot] = b;
   for (const g of state.groups) {
     const src = buildingByIdx[g.src];
     const tgt = buildingByIdx[g.tgt];
     if (!src || !tgt) continue;
-    const interpProgress = Math.min(g.travel, g.progress + elapsedSec * TICKS_PER_SEC_WALL);
-    const frac = g.travel > 0 ? Math.min(1, interpProgress / g.travel) : 0;
+    const frac = fighterFrac(g);
     const x = src.x + (tgt.x - src.x) * frac;
     const y = src.y + (tgt.y - src.y) * frac;
     const [cx, cy] = simToCanvas(x, y);
@@ -727,25 +715,54 @@ function render(state) {
 }
 let lastStateTime = 0;   // performance.now() at last poll — used to interpolate fighter position between polls
 
+// Continuous per-fighter animation tracker. Key = owner-src-tgt (one group
+// is the natural unit; collisions are unlikely because the sim merges
+// concurrent groups going the same way). Value = { firstSeen, progress0,
+// travel }. resetFighterTracker() runs on /api/reset.
+const TICKS_PER_SEC_WALL = 2;
+const fighterTracker = new Map();
+function resetFighterTracker() { fighterTracker.clear(); }
+function fighterKey(g) { return `${g.owner}-${g.src}-${g.tgt}`; }
+function trackFighters(state) {
+  if (!state || !state.groups) return;
+  const now = performance.now();
+  const seen = new Set();
+  for (const g of state.groups) {
+    const k = fighterKey(g);
+    seen.add(k);
+    if (!fighterTracker.has(k)) {
+      fighterTracker.set(k, { firstSeen: now, progress0: g.progress, travel: g.travel });
+    }
+  }
+  // Forget groups that have landed (no longer in state.groups).
+  for (const k of [...fighterTracker.keys()]) {
+    if (!seen.has(k)) fighterTracker.delete(k);
+  }
+}
+function fighterFrac(g) {
+  const tr = fighterTracker.get(fighterKey(g));
+  if (!tr) {
+    // Hasn't been ingested by trackFighters yet (first-render race) —
+    // fall back to the server-reported progress.
+    return g.travel > 0 ? Math.min(1, g.progress / g.travel) : 0;
+  }
+  const elapsedSec = (performance.now() - tr.firstSeen) / 1000;
+  const interpProgress = tr.progress0 + elapsedSec * TICKS_PER_SEC_WALL;
+  return tr.travel > 0 ? Math.min(1, interpProgress / tr.travel) : 0;
+}
+
 function updateSidebar(state) {
   if (!state || !state.ready) return;
-  document.getElementById('s-tick').textContent  = state.tick;
-  let mine = 0, enemy = 0, mineU = 0, enemyU = 0;
+  let mineU = 0, enemyU = 0;
   for (const b of state.buildings) {
-    if (b.owner === 1) { mine++;  mineU  += b.garrison; }
-    if (b.owner === 2) { enemy++; enemyU += b.garrison; }
+    if (b.owner === 1) mineU  += b.garrison;
+    if (b.owner === 2) enemyU += b.garrison;
   }
   let mineF = 0, enemyF = 0;
   for (const g of state.groups) {
     if (g.owner === 1) mineF  += g.count;
     if (g.owner === 2) enemyF += g.count;
   }
-  // Sidebar counts — display values divided by 10 to match the canvas
-  // garrison/fighter numbers (Mushroom-Wars-style condensed scale).
-  document.getElementById('s-mine').textContent        = mine;
-  document.getElementById('s-enemy').textContent       = enemy;
-  document.getElementById('s-mine-units').textContent  = Math.round((mineU + mineF) / 10);
-  document.getElementById('s-enemy-units').textContent = Math.round((enemyU + enemyF) / 10);
   $oppDisplay.textContent = state.opponent ?? '—';
   $lvl.textContent = state.level ?? '—';
 
@@ -780,28 +797,18 @@ function updateSidebar(state) {
 // localStorage so reloading the page or restarting the server doesn't reset
 // your streak. Increments exactly once per game-end (tracks last seen phase
 // per session+game so a polled state at phase=1 doesn't bump twice).
+// Session win/loss tracking — still persists to localStorage so the
+// count survives reloads, but with the sidebar removed there's no DOM
+// surface for it. Kept in case we want to surface a 'streak' somewhere
+// later. To reset, use the browser console:
+//     localStorage.removeItem('mw2_play_live_session_v1'); location.reload();
 const SESSION_KEY = 'mw2_play_live_session_v1';
 let session = JSON.parse(localStorage.getItem(SESSION_KEY) || '{"games":0,"wins":0,"losses":0,"draws":0,"counted_for":null}');
 function persistSession() {
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  document.getElementById('s-sess-games').textContent  = session.games;
-  document.getElementById('s-sess-wins').textContent   = session.wins;
-  document.getElementById('s-sess-losses').textContent = session.losses;
-  document.getElementById('s-sess-draws').textContent  = session.draws;
-  // Decimal precision: 99.99% mastery target needs 2 decimals to read.
-  const decided = session.wins + session.losses + session.draws;
-  if (decided > 0) {
-    const rate = (session.wins + 0.5 * session.draws) / decided;
-    document.getElementById('s-sess-rate').textContent = `${(rate * 100).toFixed(2)}%`;
-  } else {
-    document.getElementById('s-sess-rate').textContent = '—';
-  }
 }
 function maybeCountGameEnd(state) {
   if (!state || state.phase === 0 || state.phase === undefined) return;
-  // game_id = (level + opponent + first-seen-tick of this terminal). Identifies
-  // a single game-end so polling repeatedly doesn't double-count it. Reset
-  // clears it because session.counted_for is set per-game.
   const gid = `${state.level}::${state.opponent}::${state.tick}::${state.phase}`;
   if (session.counted_for === gid) return;
   session.counted_for = gid;
@@ -811,14 +818,6 @@ function maybeCountGameEnd(state) {
   if (state.phase === 3) session.draws  += 1;
   persistSession();
 }
-document.getElementById('s-sess-games').addEventListener('dblclick', () => {
-  // Hidden reset: double-click "games" stat to wipe session counters.
-  if (confirm('Reset session counters?')) {
-    session = {games:0, wins:0, losses:0, draws:0, counted_for:null};
-    persistSession();
-  }
-});
-persistSession();  // initial render from localStorage
 
 // ----- Click handling -------------------------------------------------------
 // Action encoding mirrors sim/actions.py:
@@ -1006,6 +1005,7 @@ $playBtn.addEventListener('click', async () => {
     updateSidebar._prevPhase = 0;
     lastState = null;
     resetBbox();
+    resetFighterTracker();
     hideOverlay();
   } catch (err) {
     showToast('net error: ' + err.message);
@@ -1024,6 +1024,7 @@ async function poll() {
     const j = await r.json();
     lastState = j;
     lastStateTime = performance.now();
+    trackFighters(j);   // first-seen bookkeeping for smooth client-side fighter animation
     updateSidebar(j);
     maybeCountGameEnd(j);
   } catch (err) { /* server might be restarting */ }
