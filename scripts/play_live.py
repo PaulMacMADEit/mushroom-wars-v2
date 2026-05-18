@@ -420,8 +420,6 @@ _HTML = r"""<!doctype html>
 <body>
   <!-- Game canvas fills the viewport; everything else floats on top. -->
   <canvas id="board"></canvas>
-  <img class="emblem-corner tl" id="emblem-tl" src="/assets/emblem-human.png" alt="">
-  <img class="emblem-corner tr" id="emblem-tr" src="/assets/emblem-alien.png" alt="">
 
   <!-- Minimal top HUD: shows current opponent + map. New-game returns to overlay. -->
   <div class="top-hud">
@@ -452,11 +450,11 @@ _HTML = r"""<!doctype html>
     <div class="stat"><span class="k">enemy units</span><span class="v" id="s-enemy-units" style="color:#3b82f6">—</span></div>
   </aside>
 
-  <!-- Bottom unit-balance bar — fills proportional to total unit count per side. -->
+  <!-- Bottom unit-balance bar — proportional to YOUR vs ENEMY units only
+       (neutral excluded; the bar represents the war between you two). -->
   <div class="balance-bar" id="balance-bar">
-    <div class="balance-fill p1" id="balance-p1" style="width: 33%">—</div>
-    <div class="balance-fill neutral" id="balance-neutral" style="width: 34%">—</div>
-    <div class="balance-fill p2" id="balance-p2" style="width: 33%">—</div>
+    <div class="balance-fill p1" id="balance-p1" style="width: 50%">—</div>
+    <div class="balance-fill p2" id="balance-p2" style="width: 50%">—</div>
   </div>
 
   <!-- Toast for transient messages. -->
@@ -508,19 +506,35 @@ let selectedSrc = null;
 let lastState = null;
 let pollHandle = null;
 
-// Sim coordinate → canvas pixel. Maps the sim space (max extent inferred
-// from current state) into a square in the centre of the viewport — keeps
-// aspect square so circular planets don't look stretched on wide screens.
-const CANVAS_PAD = 80;
+// Sim coordinate → canvas pixel. Auto-fits the bounding box of all live
+// buildings into the viewport so the play area always fills the screen
+// — fixed-extent rendering left small maps clustered in a corner.
+// The bbox is frozen at game start (resetBbox()) to avoid planets
+// jumping around as buildings get captured / destroyed.
+const CANVAS_PAD = 120;
+let bbox = null;  // {minX, maxX, minY, maxY}
+function resetBbox() { bbox = null; }
+function ensureBbox() {
+  if (bbox) return;
+  const bs = lastState?.buildings ?? [];
+  if (!bs.length) return;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const b of bs) {
+    minX = Math.min(minX, b.x); maxX = Math.max(maxX, b.x);
+    minY = Math.min(minY, b.y); maxY = Math.max(maxY, b.y);
+  }
+  bbox = { minX, maxX, minY, maxY };
+}
 function simToCanvas(x, y) {
+  ensureBbox();
   const w = window.innerWidth, h = window.innerHeight;
-  const ext = (lastState?.buildings ?? []).reduce(
-    (m, b) => Math.max(m, b.x, b.y), 700);
-  // Use the shorter axis so the play-area stays square.
-  const side = Math.min(w, h) - 2 * CANVAS_PAD;
-  const cx0 = (w - side) / 2;
-  const cy0 = (h - side) / 2;
-  return [cx0 + (x / ext) * side, cy0 + (y / ext) * side];
+  if (!bbox) return [w / 2, h / 2];
+  const bbW = (bbox.maxX - bbox.minX) || 1;
+  const bbH = (bbox.maxY - bbox.minY) || 1;
+  const scale = Math.min((w - 2 * CANVAS_PAD) / bbW, (h - 2 * CANVAS_PAD) / bbH);
+  const offsetX = (w - bbW * scale) / 2;
+  const offsetY = (h - bbH * scale) / 2;
+  return [offsetX + (x - bbox.minX) * scale, offsetY + (y - bbox.minY) * scale];
 }
 
 function ownerColor(owner) {
@@ -529,10 +543,11 @@ function ownerColor(owner) {
 }
 
 function radiusFor(building) {
-  // Bigger capacity → larger sprite. Scale to viewport so planets stay
-  // proportional on big and small screens.
+  // Bigger capacity → larger sprite. Scaled to viewport so planets stay
+  // proportional on big and small screens; with the auto-fit bbox the
+  // base radius can be larger because each planet has room to breathe.
   const scale = Math.min(window.innerWidth, window.innerHeight) / 720;
-  return Math.min(56, 18 + building.capacity * 0.4) * scale;
+  return Math.min(72, 28 + building.capacity * 0.4) * scale;
 }
 
 // ── Asset preloader ──────────────────────────────────────────────────────
@@ -648,24 +663,33 @@ function render(state) {
       CTX.stroke();
       CTX.restore();
     }
-    // Garrison count — readable on any background.
-    CTX.font = `bold ${Math.max(13, r * 0.5)}px ui-monospace, monospace`;
+    // Garrison count — divided by 10 (Mushroom-Wars-style condensed unit
+    // count; the underlying sim still uses 0..300 internally).
+    const garrisonDisplay = Math.round(b.garrison / 10);
+    CTX.font = `bold ${Math.max(14, r * 0.55)}px ui-monospace, monospace`;
     CTX.textAlign = 'center';
     CTX.textBaseline = 'middle';
     CTX.fillStyle = 'rgba(0,0,0,0.85)';
-    CTX.fillText(String(b.garrison), cx + 1, cy + 1);
+    CTX.fillText(String(garrisonDisplay), cx + 1, cy + 1);
     CTX.fillStyle = '#fff';
-    CTX.fillText(String(b.garrison), cx, cy);
+    CTX.fillText(String(garrisonDisplay), cx, cy);
   }
 
   // Groups (in-flight squads) — ship sprite rotated along travel direction.
+  // Position is INTERPOLATED between server polls so the ship moves smoothly
+  // on every animation frame, not only when /api/state returns. The server
+  // ticks at TICK_HZ=1 (× DECISION_INTERVAL=2 = 2 sim ticks per second),
+  // so progress grows 2 units per wall-clock second between polls.
+  const TICKS_PER_SEC_WALL = 2;
+  const elapsedSec = (performance.now() - lastStateTime) / 1000;
   const buildingByIdx = {};
   for (const b of state.buildings) buildingByIdx[b.slot] = b;
   for (const g of state.groups) {
     const src = buildingByIdx[g.src];
     const tgt = buildingByIdx[g.tgt];
     if (!src || !tgt) continue;
-    const frac = g.travel > 0 ? Math.min(1, g.progress / g.travel) : 0;
+    const interpProgress = Math.min(g.travel, g.progress + elapsedSec * TICKS_PER_SEC_WALL);
+    const frac = g.travel > 0 ? Math.min(1, interpProgress / g.travel) : 0;
     const x = src.x + (tgt.x - src.x) * frac;
     const y = src.y + (tgt.y - src.y) * frac;
     const [cx, cy] = simToCanvas(x, y);
@@ -690,16 +714,18 @@ function render(state) {
       CTX.fillStyle = ownerColor(g.owner);
       CTX.fill();
     }
-    // Unit count behind the ship.
+    // Unit count behind the ship — divided by 10 to match planets.
+    const countDisplay = Math.round(g.count / 10);
     CTX.font = 'bold 12px ui-monospace, monospace';
     CTX.textAlign = 'center';
     CTX.textBaseline = 'middle';
     CTX.fillStyle = 'rgba(0,0,0,0.85)';
-    CTX.fillText(String(g.count), cx + 1, cy + size / 2 + 9);
+    CTX.fillText(String(countDisplay), cx + 1, cy + size / 2 + 9);
     CTX.fillStyle = ownerColor(g.owner);
-    CTX.fillText(String(g.count), cx, cy + size / 2 + 8);
+    CTX.fillText(String(countDisplay), cx, cy + size / 2 + 8);
   }
 }
+let lastStateTime = 0;   // performance.now() at last poll — used to interpolate fighter position between polls
 
 function updateSidebar(state) {
   if (!state || !state.ready) return;
@@ -714,31 +740,28 @@ function updateSidebar(state) {
     if (g.owner === 1) mineF  += g.count;
     if (g.owner === 2) enemyF += g.count;
   }
-  document.getElementById('s-mine').textContent       = mine;
-  document.getElementById('s-enemy').textContent      = enemy;
-  document.getElementById('s-mine-units').textContent  = mineU + mineF;
-  document.getElementById('s-enemy-units').textContent = enemyU + enemyF;
+  // Sidebar counts — display values divided by 10 to match the canvas
+  // garrison/fighter numbers (Mushroom-Wars-style condensed scale).
+  document.getElementById('s-mine').textContent        = mine;
+  document.getElementById('s-enemy').textContent       = enemy;
+  document.getElementById('s-mine-units').textContent  = Math.round((mineU + mineF) / 10);
+  document.getElementById('s-enemy-units').textContent = Math.round((enemyU + enemyF) / 10);
   $oppDisplay.textContent = state.opponent ?? '—';
   $lvl.textContent = state.level ?? '—';
 
-  // Bottom balance bar: total units (garrison + in-flight) per side, as %.
+  // Bottom balance bar: P1 vs P2 only (neutral excluded — this represents
+  // the war between you and the agent, not the wider system).
   const totMine  = mineU + mineF;
   const totEnemy = enemyU + enemyF;
-  let totNeutral = 0;
-  for (const b of state.buildings) if (b.owner === 0) totNeutral += b.garrison;
-  const total = totMine + totEnemy + totNeutral || 1;
+  const total = totMine + totEnemy || 1;
   const pctP1 = Math.round(100 * totMine / total);
-  const pctP2 = Math.round(100 * totEnemy / total);
-  const pctN  = 100 - pctP1 - pctP2;
+  const pctP2 = 100 - pctP1;
   const $p1 = document.getElementById('balance-p1');
   const $p2 = document.getElementById('balance-p2');
-  const $nu = document.getElementById('balance-neutral');
   $p1.style.width = pctP1 + '%';
   $p2.style.width = pctP2 + '%';
-  $nu.style.width = pctN  + '%';
   $p1.textContent = pctP1 > 6 ? `${pctP1}%` : '';
   $p2.textContent = pctP2 > 6 ? `${pctP2}%` : '';
-  $nu.textContent = pctN  > 8 ? `neutral ${pctN}%` : '';
 
   // Game-over → show the overlay on the RISING EDGE (phase transitioning
   // from 0 → non-0). Using rising-edge avoids the race where a stale poll
@@ -875,9 +898,13 @@ function buildingAt(canvasX, canvasY) {
 
 CV.addEventListener('click', async (e) => {
   if (!lastState || lastState.phase !== 0) return;  // only during play
+  // CSS pixels — fitCanvas() uses ctx.setTransform(dpr,...) so drawing
+  // coordinates are CSS pixels, not device pixels. The old `* CV.width
+  // / rect.width` math gave device pixels and broke clicks on Retina
+  // displays where rect.width != CV.width.
   const rect = CV.getBoundingClientRect();
-  const cx = (e.clientX - rect.left) * (CV.width / rect.width);
-  const cy = (e.clientY - rect.top)  * (CV.height / rect.height);
+  const cx = e.clientX - rect.left;
+  const cy = e.clientY - rect.top;
   const b = buildingAt(cx, cy);
   if (!b) { selectedSrc = null; render(lastState); return; }
 
@@ -974,9 +1001,11 @@ $playBtn.addEventListener('click', async () => {
     selectedSrc = null;
     // Reset rising-edge state so the next game's end can re-open the
     // overlay. Also clear lastState so a stale render doesn't show old
-    // ownership/balance for one frame.
+    // ownership/balance for one frame. Reset the play-area bbox so the
+    // camera re-fits to the new game's building layout.
     updateSidebar._prevPhase = 0;
     lastState = null;
+    resetBbox();
     hideOverlay();
   } catch (err) {
     showToast('net error: ' + err.message);
@@ -985,16 +1014,24 @@ $playBtn.addEventListener('click', async () => {
   }
 });
 
-// ----- Polling --------------------------------------------------------------
+// ----- Polling + animation loop ---------------------------------------------
+// Polling pulls state; rendering runs on requestAnimationFrame so fighter
+// motion stays smooth between polls (state lives at 2 ticks/sec wall clock;
+// rAF runs at the display refresh rate, typically 60-120 Hz).
 async function poll() {
   try {
     const r = await fetch('/api/state');
     const j = await r.json();
     lastState = j;
-    render(j);
+    lastStateTime = performance.now();
     updateSidebar(j);
     maybeCountGameEnd(j);
   } catch (err) { /* server might be restarting */ }
+}
+
+function rafLoop() {
+  if (lastState) render(lastState);
+  requestAnimationFrame(rafLoop);
 }
 
 (async () => {
@@ -1014,8 +1051,9 @@ async function poll() {
   $playBtn.innerHTML = '';
   $playBtn.textContent = 'Play';
   $playBtn.disabled = false;
-  pollHandle = setInterval(poll, 50);   // 20 Hz client (matches 10 Hz server ×2 margin)
+  pollHandle = setInterval(poll, 100);   // state poll every 100ms; rAF renders every frame in between for smooth motion
   poll();
+  requestAnimationFrame(rafLoop);
 })();
 </script>
 </body>
