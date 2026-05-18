@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Launch run — Mushroom Wars v2</title>
+  <link rel="stylesheet" href="lib/style.css">
+  <style>
+    .launch-form { max-width: 720px; }
+    .field { display: grid; grid-template-columns: 160px 1fr; gap: 12px; align-items: center; margin: 10px 0; }
+    .field label { color: var(--fg-muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; }
+    .field input, .field select, .field textarea {
+      background: #0b0d12; color: var(--fg);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 8px 10px; font: inherit; width: 100%;
+    }
+    .field input:focus, .field select:focus, .field textarea:focus {
+      outline: none; border-color: var(--accent);
+    }
+    .preset-row { display: flex; flex-wrap: wrap; gap: 6px; }
+    .preset {
+      background: #1f2433; color: var(--fg); border: 1px solid var(--border);
+      padding: 6px 12px; border-radius: 4px; cursor: pointer; font: inherit; font-size: 13px;
+    }
+    .preset:hover { background: #262c3d; }
+    .preset.active { background: var(--accent); color: #0b0d12; border-color: var(--accent); }
+    .submit-btn {
+      background: var(--accent-2); color: #0b0d12; border: 0;
+      padding: 12px 28px; border-radius: 6px; cursor: pointer; font: inherit;
+      font-weight: 600; font-size: 14px; margin-top: 8px;
+    }
+    .submit-btn:hover { background: #5eead4; }
+    .submit-btn:disabled { background: #444; color: #888; cursor: not-allowed; }
+    details.advanced { margin: 16px 0; }
+    details.advanced summary {
+      cursor: pointer; color: var(--fg-muted); font-size: 12px;
+      text-transform: uppercase; letter-spacing: .6px; padding: 8px 0;
+    }
+    .status-msg { margin: 12px 0; padding: 10px 14px; border-radius: 6px; font-size: 13px; }
+    .status-msg.ok    { background: rgba(52,211,153,0.1);  border: 1px solid var(--accent-2); }
+    .status-msg.err   { background: rgba(248,113,113,0.1); border: 1px solid var(--danger); color: var(--danger); }
+    .status-msg.warn  { background: rgba(250,200,80,0.08); border: 1px solid #d4a73a; color: #fcd34d; }
+    .helper { font-size: 11px; color: var(--fg-muted); margin-top: 2px; grid-column: 2; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Mushroom Wars v2</h1>
+    <nav>
+      <a href="./index.html">Overview</a>
+      <a href="./runs.html">Runs</a>
+      <a href="./models.html">Models</a>
+      <a href="./elo.html">Leaderboard</a>
+      <a href="./training.html">Training</a>
+      <a href="./launch.html">Launch</a>
+      <a href="./replays.html">Replays</a>
+      <a href="./play.html">Play</a>
+      <a href="./play-live.html">Play Live</a>
+      <a href="./process.html">Process</a>
+    </nav>
+  </header>
+
+  <main>
+    <h2>Launch a new training run</h2>
+
+    <div class="status-msg warn" style="max-width:720px; margin-bottom:16px;">
+      ⚠ Submitting queues the run. It runs whenever a worker is online and idle.
+      Check <a href="./index.html">Overview → Workers</a> if you're not sure who's up.
+    </div>
+
+    <div class="card launch-form">
+      <form id="launch-form">
+
+        <div class="field">
+          <label for="label">Run label</label>
+          <div>
+            <input type="text" id="label" required>
+            <div class="helper">Auto-filled with model version + timestamp. Edit freely.</div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Duration</label>
+          <div>
+            <div class="preset-row" id="duration-presets">
+              <button type="button" class="preset" data-min="5">5 min</button>
+              <button type="button" class="preset" data-min="15">15 min</button>
+              <button type="button" class="preset active" data-min="30">30 min</button>
+              <button type="button" class="preset" data-min="60">1 hr</button>
+              <button type="button" class="preset" data-min="180">3 hr</button>
+            </div>
+            <div class="helper">Custom: <input type="number" id="duration-min" value="30" min="1" max="720" style="width:80px; display:inline-block; margin-left:8px;"> min</div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="model">Base model</label>
+          <div>
+            <select id="model" required></select>
+            <div class="helper">Latest registered models. Selecting one sets the net architecture for the run.</div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="level">Level / map</label>
+          <div>
+            <select id="level">
+              <option value="random_close_4_8">random_close_4_8  (350×350, 4-8 buildings)</option>
+              <option value="random_4_8">random_4_8  (700×700, 4-8 buildings)</option>
+              <option value="phase1_full_mix_4_8" selected>phase1_full_mix_4_8  (50/50 close + full)</option>
+              <option value="random_close_4_5">random_close_4_5  (350×350, 4-5 buildings)</option>
+              <option value="random_close_4_6">random_close_4_6  (350×350, 4-6 buildings)</option>
+            </select>
+            <div class="helper">Single level or named mix. Match what the worker's <code>configs/training_levels.yaml</code> understands.</div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="opponent">Opponent</label>
+          <div>
+            <select id="opponent">
+              <option value="random_legal" selected>random_legal</option>
+              <option value="pfsp_champion">pfsp_champion  (rotates archive)</option>
+              <option value="neural">neural  (specific run, pick below)</option>
+            </select>
+            <div class="helper">PFSP only useful once you have done runs in the archive.</div>
+          </div>
+        </div>
+
+        <div class="field" id="opponent-run-row" style="display:none;">
+          <label for="opponent-run">Opponent run</label>
+          <div>
+            <select id="opponent-run"></select>
+            <div class="helper">Pick which past run plays as P2.</div>
+          </div>
+        </div>
+
+        <details class="advanced">
+          <summary>Advanced hyperparameters</summary>
+
+          <div class="field"><label for="n_envs">n_envs</label><div><input type="number" id="n_envs" value="1024" min="1"></div></div>
+          <div class="field"><label for="rollout_steps">rollout_steps</label><div><input type="number" id="rollout_steps" value="64" min="1"></div></div>
+          <div class="field"><label for="action_repeat">action_repeat</label><div><input type="number" id="action_repeat" value="4" min="1"></div></div>
+          <div class="field"><label for="gamma">gamma</label><div><input type="number" id="gamma" value="0.97" min="0" max="1" step="0.001"></div></div>
+          <div class="field"><label for="lr">lr</label><div><input type="number" id="lr" value="0.003" min="0" step="0.0001"></div></div>
+          <div class="field"><label for="entropy_coef">entropy_coef</label><div><input type="number" id="entropy_coef" value="0.01" min="0" step="0.001"></div></div>
+          <div class="field"><label for="reward_v13">reward_v13</label><div><input type="checkbox" id="reward_v13" checked></div></div>
+          <div class="field"><label for="fused_rollout">fused_rollout</label><div><input type="checkbox" id="fused_rollout" checked></div></div>
+          <div class="field"><label for="sim_backend">sim_backend</label><div>
+            <select id="sim_backend">
+              <option value="jax" selected>jax</option>
+              <option value="numpy">numpy</option>
+            </select>
+          </div></div>
+
+          <div class="field">
+            <label for="description">Description</label>
+            <div>
+              <textarea id="description" rows="2" placeholder="Optional notes about what this run is testing"></textarea>
+            </div>
+          </div>
+        </details>
+
+        <button type="submit" class="submit-btn" id="submit-btn">Queue run</button>
+      </form>
+
+      <div id="status"></div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { sb } from './lib/supabase.js';
+
+    const $ = (id) => document.getElementById(id);
+    const status = $('status');
+
+    function setStatus(msg, kind = 'ok') {
+      status.innerHTML = msg ? `<div class="status-msg ${kind}">${msg}</div>` : '';
+    }
+
+    function ymd() {
+      const d = new Date();
+      const p = (n) => String(n).padStart(2, '0');
+      return `${String(d.getFullYear()).slice(2)}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+    }
+
+    function autoLabel(modelId) {
+      const v = (modelId || 'v?').replace(/^model[-_]?/i, '');
+      return `${v}-manual-${ymd()}`;
+    }
+
+    // ── Duration presets ──
+    let durationMin = 30;
+    document.querySelectorAll('#duration-presets .preset').forEach(b => {
+      b.addEventListener('click', () => {
+        document.querySelectorAll('#duration-presets .preset').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        durationMin = Number(b.dataset.min);
+        $('duration-min').value = durationMin;
+      });
+    });
+    $('duration-min').addEventListener('input', (e) => {
+      durationMin = Number(e.target.value) || 30;
+      document.querySelectorAll('#duration-presets .preset').forEach(x => x.classList.remove('active'));
+    });
+
+    // ── Opponent visibility ──
+    $('opponent').addEventListener('change', () => {
+      $('opponent-run-row').style.display = $('opponent').value === 'neural' ? 'grid' : 'none';
+    });
+
+    // ── Populate model + opponent-run dropdowns ──
+    async function loadModels() {
+      const { data, error } = await sb
+        .from('models')
+        .select('id, name, total_params')
+        .eq('project', 'mushroom-wars')
+        .order('created_at', { ascending: false });
+      if (error) { setStatus(`Failed to load models: ${error.message}`, 'err'); return; }
+      const sel = $('model');
+      sel.innerHTML = '';
+      for (const m of (data || [])) {
+        if (m.id === 'baseline') continue;  // hide pseudo-baseline
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = `${m.id}  —  ${m.name || ''}`;
+        sel.appendChild(opt);
+      }
+      if (!sel.options.length) {
+        const opt = document.createElement('option');
+        opt.value = ''; opt.textContent = '(no models registered — run cli/register_model.py)';
+        sel.appendChild(opt);
+      }
+      sel.addEventListener('change', () => { $('label').value = autoLabel(sel.value); });
+      $('label').value = autoLabel(sel.value);
+    }
+
+    async function loadOpponentRuns() {
+      const { data, error } = await sb
+        .from('runs')
+        .select('id, label, result')
+        .eq('project', 'mushroom-wars')
+        .eq('status', 'done')
+        .not('weights_url', 'is', null)
+        .order('queued_at', { ascending: false })
+        .limit(30);
+      if (error) { console.warn('opponent-runs load failed:', error.message); return; }
+      const sel = $('opponent-run');
+      sel.innerHTML = '';
+      for (const r of (data || [])) {
+        const rate = r.result?.rate;
+        const opt = document.createElement('option');
+        opt.value = r.id;
+        opt.textContent = `${(r.label || r.id).slice(0, 50)}${rate != null ? `  (rate=${rate.toFixed(3)})` : ''}`;
+        sel.appendChild(opt);
+      }
+      if (!sel.options.length) {
+        const opt = document.createElement('option');
+        opt.value = ''; opt.textContent = '(no done runs with weights yet)';
+        sel.appendChild(opt);
+      }
+    }
+
+    // ── Submit ──
+    $('launch-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = $('submit-btn');
+      btn.disabled = true;
+      setStatus('Submitting…', 'ok');
+
+      const modelId = $('model').value;
+      if (!modelId) { setStatus('Pick a model first.', 'err'); btn.disabled = false; return; }
+
+      const hyperparams = {
+        n_envs:         Number($('n_envs').value),
+        rollout_steps:  Number($('rollout_steps').value),
+        action_repeat:  Number($('action_repeat').value),
+        gamma:          Number($('gamma').value),
+        lr:             Number($('lr').value),
+        entropy_coef:   Number($('entropy_coef').value),
+        reward_v13:     $('reward_v13').checked,
+        fused_rollout:  $('fused_rollout').checked,
+        sim_backend:    $('sim_backend').value,
+        vec_mode:       'sync',
+        level_name:     $('level').value,
+        opponent_name:  $('opponent').value,
+      };
+      if (hyperparams.opponent_name === 'neural') {
+        const oppRun = $('opponent-run').value;
+        if (!oppRun) { setStatus('Pick a specific opponent run.', 'err'); btn.disabled = false; return; }
+        hyperparams.opponent_kwargs = { opponent_run_id: oppRun };
+      }
+
+      const row = {
+        model_id:     modelId,
+        simulator_id: 'sim-v1.0',
+        project:      'mushroom-wars',
+        label:        $('label').value.trim(),
+        description:  $('description').value.trim() || null,
+        status:       'queued',
+        budget_ms:    Math.max(1, durationMin) * 60 * 1000,
+        seed:         String(Math.floor(Math.random() * 1_000_000)),
+        hyperparams,
+        machine:      'unassigned',
+        launch_at:    Date.now(),
+      };
+
+      const { data, error } = await sb.from('runs').insert(row).select('id').single();
+      btn.disabled = false;
+      if (error) {
+        setStatus(`Insert failed: ${error.message}`, 'err');
+        return;
+      }
+      setStatus(`Queued run <code>${data.id}</code>. Redirecting…`, 'ok');
+      setTimeout(() => { window.location.href = `./run.html?id=${data.id}`; }, 900);
+    });
+
+    // ── Init ──
+    loadModels();
+    loadOpponentRuns();
+  </script>
+</body>
+</html>
