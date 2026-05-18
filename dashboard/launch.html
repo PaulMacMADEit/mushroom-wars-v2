@@ -104,13 +104,13 @@
           <label for="level">Level / map</label>
           <div>
             <select id="level">
-              <option value="random_close_4_8">random_close_4_8  (350×350, 4-8 buildings)</option>
+              <option value="random_close_4_8" selected>random_close_4_8  (350×350, 4-8 buildings)</option>
               <option value="random_4_8">random_4_8  (700×700, 4-8 buildings)</option>
-              <option value="phase1_full_mix_4_8" selected>phase1_full_mix_4_8  (50/50 close + full)</option>
               <option value="random_close_4_5">random_close_4_5  (350×350, 4-5 buildings)</option>
               <option value="random_close_4_6">random_close_4_6  (350×350, 4-6 buildings)</option>
+              <option value="crossroads_6">crossroads_6  (fixed map)</option>
             </select>
-            <div class="helper">Single level or named mix. Match what the worker's <code>configs/training_levels.yaml</code> understands.</div>
+            <div class="helper">Single-level names that <code>sim/levels.py</code> recognises directly. Named mixes (<code>phase1_full_mix_*</code>) live in <code>configs/training_levels.yaml</code> and aren't usable from this form yet.</div>
           </div>
         </div>
 
