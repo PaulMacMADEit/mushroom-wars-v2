@@ -5,9 +5,10 @@
   <title>Play Live - Mushroom Wars v2</title>
   <link rel="stylesheet" href="lib/style.css">
   <style>
-    .launch-card { display: flex; flex-direction: column; gap: 18px; }
-    .launch-step { display: flex; flex-direction: column; gap: 6px; }
-    .launch-step strong { color: var(--fg); }
+    #game-frame { width: 100%; height: calc(100vh - 80px); border: 0; background: #0a0c10; border-radius: 6px; }
+    #fallback { max-width: 720px; }
+    .fb-step { display: flex; flex-direction: column; gap: 6px; margin: 18px 0; }
+    .fb-step strong { color: var(--fg); }
     .cmd-block {
       display: flex; gap: 8px;
       background: #11141b;
@@ -29,16 +30,9 @@
     }
     .copy-btn:hover  { background: #262c3d; }
     .copy-btn.copied { background: #34d399; color: #0b0d12; border-color: #34d399; }
-    .open-btn {
-      display: inline-block;
-      background: var(--accent); color: #0b0d12;
-      border: 0; padding: 12px 20px; border-radius: 6px;
-      cursor: pointer; font-weight: 600; font-size: 14px;
-      font-family: inherit; text-decoration: none;
-    }
-    .open-btn:hover { background: #82b8fc; }
-    .why { color: var(--fg-muted); font-size: 12px; line-height: 1.6; }
+    .why  { color: var(--fg-muted); font-size: 12px; line-height: 1.6; }
     .why strong { color: var(--fg); }
+    .probing { color: var(--fg-muted); padding: 32px; text-align: center; }
   </style>
 </head>
 <body>
@@ -59,65 +53,87 @@
   </header>
 
   <main>
-    <h2>Play live vs a trained agent</h2>
-    <div class="card">
-      <div class="launch-card">
+    <div id="probing" class="probing">Checking for local play server…</div>
+
+    <iframe id="game-frame" style="display:none"
+            src="http://localhost:8765/" title="Mushroom Wars live"></iframe>
+
+    <div id="fallback" class="card" style="display:none">
+      <h2 style="margin-top:0;">Local play server isn't running</h2>
+      <div class="muted small">
+        Live click-to-click play needs the Python sim + torch model loader
+        running on this machine. The Mac launchd service should auto-start it,
+        but if it's not up, run it manually:
+      </div>
+
+      <div class="fb-step">
+        <strong>1. Start the local server</strong>
+        <div class="cmd-block">
+          <code id="cmd">python scripts/play_live.py</code>
+          <button class="copy-btn" id="copy-btn">copy</button>
+        </div>
         <div class="muted small">
-          You play P1 by clicking buildings; the trained agent plays P2.
-          Pick the model to face from a dropdown in the top-left — first switch
-          downloads weights from Supabase (~1–3s), subsequent switches use the
-          cached file. <a href="./play.html">Play</a> queues batch AI-vs-AI matches;
-          this page is local human-vs-AI.
+          Run from the <span class="mono">mushroom-wars-v2/</span> repo root.
+          Uses CPU so it won't steal GPU time from the training loop.
         </div>
+      </div>
 
-        <div class="launch-step">
-          <strong>1. Start the local server</strong>
-          <div class="cmd-block">
-            <code id="cmd">python scripts/play_live.py</code>
-            <button class="copy-btn" id="copy-btn">copy</button>
-          </div>
-          <div class="muted small">
-            Run from the <span class="mono">mushroom-wars-v2/</span> repo root.
-            Uses CPU so it won't steal GPU time from the training loop.
-          </div>
+      <div class="fb-step">
+        <strong>2. Reload this page</strong>
+        <div class="muted small">
+          The page will auto-detect the server on <span class="mono">localhost:8765</span>
+          and embed the game here.
         </div>
+      </div>
 
-        <div class="launch-step">
-          <strong>2. Open it</strong>
-          <div>
-            <a class="open-btn" href="http://localhost:8765" target="_blank" rel="noopener">
-              Open localhost:8765 →
-            </a>
-          </div>
-          <div class="muted small">
-            Opens in a new tab. If you see "connection refused", go back to step 1.
-          </div>
-        </div>
-
-        <div class="why">
-          <strong>Why local-only:</strong> live click-to-click play needs the
-          Python sim and a torch model loader running together — neither exists
-          in a static GitHub Pages site. The server runs the sim, the browser
-          paints it.
-        </div>
+      <div class="why" style="margin-top:18px;">
+        <strong>Why not pure browser:</strong> the v13 model is only ~7.5 MB
+        (trivial in the browser), but the sim engine — building physics,
+        capture rules, fighter motion — is ~1,500 lines of Python validated
+        against a numpy reference. Porting it to JS without parity drift is
+        days of work, vs the localhost setup which runs the canonical sim
+        unchanged.
       </div>
     </div>
   </main>
 
   <script>
-    const $btn = document.getElementById('copy-btn');
-    const $cmd = document.getElementById('cmd');
-    $btn.addEventListener('click', async () => {
+    const $probing = document.getElementById('probing');
+    const $frame   = document.getElementById('game-frame');
+    const $fb      = document.getElementById('fallback');
+
+    async function probe() {
       try {
-        await navigator.clipboard.writeText($cmd.textContent);
-        $btn.textContent = 'copied';
-        $btn.classList.add('copied');
-        setTimeout(() => {
-          $btn.textContent = 'copy';
-          $btn.classList.remove('copied');
-        }, 1200);
+        const r = await fetch('http://localhost:8765/api/state', { cache: 'no-store', signal: AbortSignal.timeout(2000) });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json();
+        if (!j.ready) throw new Error('not ready');
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    (async () => {
+      const ok = await probe();
+      $probing.style.display = 'none';
+      if (ok) {
+        $frame.style.display = 'block';
+      } else {
+        $fb.style.display = 'block';
+      }
+    })();
+
+    document.getElementById('copy-btn').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const cmd = document.getElementById('cmd').textContent;
+      try {
+        await navigator.clipboard.writeText(cmd);
+        btn.textContent = 'copied';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 1200);
       } catch {
-        $btn.textContent = 'failed';
+        btn.textContent = 'failed';
       }
     });
   </script>
