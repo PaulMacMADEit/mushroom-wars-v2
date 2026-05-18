@@ -103,8 +103,11 @@
     const $fb      = document.getElementById('fallback');
 
     async function probe() {
+      // 5s — first-load timing includes a CORS preflight against a Python
+      // BaseHTTPServer that's single-threaded for OPTIONS. Subsequent loads
+      // hit the cached preflight (Max-Age=86400) and resolve in <5 ms.
       try {
-        const r = await fetch('http://localhost:8765/api/state', { cache: 'no-store', signal: AbortSignal.timeout(2000) });
+        const r = await fetch('http://localhost:8765/api/state', { cache: 'no-store', signal: AbortSignal.timeout(5000) });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const j = await r.json();
         if (!j.ready) throw new Error('not ready');
