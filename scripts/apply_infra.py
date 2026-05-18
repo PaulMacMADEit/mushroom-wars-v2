@@ -1,13 +1,14 @@
-"""Apply all infra/*.sql files to the Supabase Postgres in dependency order.
+"""Apply all infra/*.sql files + cli/migrate_*.py migrations in dependency order.
 
 Idempotent — every file uses CREATE ... IF NOT EXISTS / DROP ... IF EXISTS.
-Used for bringing up a fresh Supabase project.
+Used for bringing up a fresh Supabase project end-to-end.
 
 Run:
     .venv/bin/python scripts/apply_infra.py
 """
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -18,7 +19,7 @@ import psycopg
 from cli.db import db_url
 
 
-ORDER = [
+SQL_ORDER = [
     "schema.sql",
     "worker_state.sql",
     "jobs.sql",
@@ -29,13 +30,21 @@ ORDER = [
     "rls.sql",
 ]
 
+# Order matters: migrate_v13 creates kv + elo_n_matches that the others need.
+MIGRATIONS = [
+    "cli/migrate_v13.py",
+    "cli/migrate_champion_archive.py",
+    "cli/migrate_elo_anchor_1000.py",
+    "cli/migrate_elo_status.py",
+    "cli/migrate_play_rpc.py",
+]
+
 
 def main() -> None:
     infra = ROOT / "infra"
-    # autocommit=True because each SQL file has its own BEGIN/COMMIT
     with psycopg.connect(db_url(), autocommit=True) as conn:
         conn.prepare_threshold = None
-        for name in ORDER:
+        for name in SQL_ORDER:
             path = infra / name
             if not path.exists():
                 print(f"  SKIP {name} (missing)")
@@ -45,7 +54,20 @@ def main() -> None:
             with conn.cursor() as cur:
                 cur.execute(sql)
             print("✓")
-    print("\nAll infra applied.")
+
+    print()
+    for script in MIGRATIONS:
+        print(f"  RUN   {script}...", end=" ", flush=True)
+        r = subprocess.run([sys.executable, str(ROOT / script)],
+                           capture_output=True, text=True, cwd=ROOT)
+        if r.returncode != 0:
+            print("✗")
+            print(r.stdout)
+            print(r.stderr, file=sys.stderr)
+            sys.exit(1)
+        print("✓")
+
+    print("\nAll infra + migrations applied.")
 
 
 if __name__ == "__main__":
