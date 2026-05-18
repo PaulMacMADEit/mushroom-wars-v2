@@ -72,5 +72,5 @@ starts a new game.
 
 ## Quick links
 
-- [Supabase project](https://supabase.com/dashboard/project/lwkljcyspyqklyoagnmo)
+- [Supabase project](https://supabase.com/dashboard/project/zbqujavkizijhiveqoxv)
 - [.env.example](./.env.example) — copy to `.env`, fill in Supabase keys

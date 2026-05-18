@@ -34,6 +34,7 @@ DROP POLICY IF EXISTS anon_read_games           ON games;
 DROP POLICY IF EXISTS anon_read_host_telemetry  ON host_telemetry;
 DROP POLICY IF EXISTS anon_delete_queued_runs   ON runs;
 DROP POLICY IF EXISTS anon_delete_runs          ON runs;
+DROP POLICY IF EXISTS anon_insert_queued_runs   ON runs;
 
 CREATE POLICY anon_read_models         ON models         FOR SELECT TO anon, authenticated USING (true);
 CREATE POLICY anon_read_simulators     ON simulators     FOR SELECT TO anon, authenticated USING (true);
@@ -63,6 +64,21 @@ CREATE POLICY anon_delete_runs ON runs
   USING (status IN ('queued', 'running', 'failed'));
 
 -- ---------------------------------------------------------------------------
+-- Insert policy — anon may queue a new run from the dashboard launch form.
+-- The WITH CHECK constraints prevent abuse: only 'queued' status, only for
+-- this project. Worst-case blast radius if anon key is scraped: someone
+-- queues bogus runs. Workers will fail to load them and mark 'failed' —
+-- annoying, not catastrophic.
+-- ---------------------------------------------------------------------------
+
+CREATE POLICY anon_insert_queued_runs ON runs
+  FOR INSERT TO anon, authenticated
+  WITH CHECK (
+    status  = 'queued'
+    AND project = 'mushroom-wars'
+  );
+
+-- ---------------------------------------------------------------------------
 -- Revoke the dangerous default grants on the anon role.
 --
 -- Supabase's default is to grant all operations to anon + authenticated on
@@ -74,10 +90,11 @@ CREATE POLICY anon_delete_runs ON runs
 
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON models         FROM anon, authenticated;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON simulators     FROM anon, authenticated;
--- runs: keep INSERT/UPDATE/TRUNCATE revoked, but leave DELETE granted so the
--- anon_delete_queued_runs RLS policy above can actually fire.
-REVOKE INSERT, UPDATE, TRUNCATE         ON runs           FROM anon, authenticated;
-GRANT  DELETE                           ON runs           TO   anon, authenticated;
+-- runs: keep UPDATE/TRUNCATE revoked, but leave DELETE + INSERT granted so
+-- the anon_delete_queued_runs + anon_insert_queued_runs RLS policies above
+-- can actually fire.
+REVOKE UPDATE, TRUNCATE                 ON runs           FROM anon, authenticated;
+GRANT  DELETE, INSERT                   ON runs           TO   anon, authenticated;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON matches        FROM anon, authenticated;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON games          FROM anon, authenticated;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON host_telemetry FROM anon, authenticated;
