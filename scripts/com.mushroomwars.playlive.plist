@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Mac-side launchd plist for the Play Live HTTP server.
+
+    Install:
+        cp scripts/com.mushroomwars.playlive.plist ~/Library/LaunchAgents/
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mushroomwars.playlive.plist
+
+    Reload after a code change:
+        launchctl kickstart -k gui/$(id -u)/com.mushroomwars.playlive
+
+    Uninstall:
+        launchctl bootout gui/$(id -u)/com.mushroomwars.playlive
+        rm ~/Library/LaunchAgents/com.mushroomwars.playlive.plist
+
+    Logs:
+        ~/Library/Logs/mushroom-playlive/playlive.out.log
+        ~/Library/Logs/mushroom-playlive/playlive.err.log
+
+    The server binds to 127.0.0.1:8765 only (no LAN/WAN exposure). The
+    dashboard at paulmacmadeit.github.io/mushroom-wars-v2/play-live.html
+    talks to it from the same machine via the HTTPS→localhost loopback
+    exception. CORS headers are emitted by play_live.py so the cross-
+    origin fetch succeeds.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mushroomwars.playlive</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/paul/Documents/Projects/Personal/Games/mushroom-wars-v2/.venv/bin/python</string>
+        <string>-u</string>
+        <string>/Users/paul/Documents/Projects/Personal/Games/mushroom-wars-v2/scripts/play_live.py</string>
+        <string>--port</string>
+        <string>8765</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/paul/Documents/Projects/Personal/Games/mushroom-wars-v2</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>15</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/paul/Library/Logs/mushroom-playlive/playlive.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/paul/Library/Logs/mushroom-playlive/playlive.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/paul/Documents/Projects/Personal/Games/mushroom-wars-v2/.venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
