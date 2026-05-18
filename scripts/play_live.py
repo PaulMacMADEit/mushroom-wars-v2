@@ -662,32 +662,24 @@ function render(state) {
     CTX.fillText(String(garrisonDisplay), cx, cy);
   }
 
-  // Groups (in-flight squads) — ship sprite rotated along travel direction.
-  // Position is interpolated PER FIGHTER from its first-seen moment so the
-  // ship walks continuously from src → tgt regardless of server tick rate.
-  // The previous implementation tied interpolation to time-since-last-poll;
-  // that gave a "step then pause" look because state polls (every 100ms)
-  // reset the clock while the server only ticked every 1 sec — fighters
-  // sat in place for ~10 frames then snapped to the next tick's progress.
-  // The fighterTracker now records firstSeen + initial-progress per group
-  // and interpolates from there at a fixed 2 ticks/sec wall-clock rate.
-  const buildingByIdx = {};
-  for (const b of state.buildings) buildingByIdx[b.slot] = b;
-  for (const g of state.groups) {
-    const src = buildingByIdx[g.src];
-    const tgt = buildingByIdx[g.tgt];
-    if (!src || !tgt) continue;
-    const frac = fighterFrac(g);
-    const x = src.x + (tgt.x - src.x) * frac;
-    const y = src.y + (tgt.y - src.y) * frac;
+  // Fighters — driven entirely by fighterTracker, NOT state.groups. The
+  // tracker holds one entry per live (or recently-landed) ship. Each
+  // frame we compute (frac = elapsedSec / durationSec) and lerp position
+  // between cached src/tgt. Once frac >= 1 the entry is reaped + an
+  // impact flash spawned.
+  const nowMs = performance.now();
+  for (const [, tr] of fighterTracker) {
+    const elapsedSec = (nowMs - tr.startTime) / 1000;
+    const frac = Math.min(1, elapsedSec / tr.durationSec);
+    const x = tr.srcX + (tr.tgtX - tr.srcX) * frac;
+    const y = tr.srcY + (tr.tgtY - tr.srcY) * frac;
     const [cx, cy] = simToCanvas(x, y);
-    const [tcx, tcy] = simToCanvas(tgt.x, tgt.y);
+    const [tcx, tcy] = simToCanvas(tr.tgtX, tr.tgtY);
     const angle = Math.atan2(tcy - cy, tcx - cx);
-    const spriteName = FIGHTER_BY_OWNER[g.owner];
+    const spriteName = FIGHTER_BY_OWNER[tr.owner];
     const img = ASSETS[spriteName];
     const size = Math.max(22, radiusFor({capacity: 0}) * 0.7);
     if (img) {
-      // Circular clip masks the fighter sprite's black PNG background.
       CTX.save();
       CTX.translate(cx, cy);
       CTX.rotate(angle + Math.PI / 2);
@@ -699,56 +691,119 @@ function render(state) {
     } else {
       CTX.beginPath();
       CTX.arc(cx, cy, 8, 0, Math.PI * 2);
-      CTX.fillStyle = ownerColor(g.owner);
+      CTX.fillStyle = ownerColor(tr.owner);
       CTX.fill();
     }
-    // Unit count behind the ship — divided by 10 to match planets.
-    const countDisplay = Math.round(g.count / 10);
+    const countDisplay = Math.round(tr.count / 10);
     CTX.font = 'bold 12px ui-monospace, monospace';
     CTX.textAlign = 'center';
     CTX.textBaseline = 'middle';
     CTX.fillStyle = 'rgba(0,0,0,0.85)';
     CTX.fillText(String(countDisplay), cx + 1, cy + size / 2 + 9);
-    CTX.fillStyle = ownerColor(g.owner);
+    CTX.fillStyle = ownerColor(tr.owner);
     CTX.fillText(String(countDisplay), cx, cy + size / 2 + 8);
   }
-}
-let lastStateTime = 0;   // performance.now() at last poll — used to interpolate fighter position between polls
 
-// Continuous per-fighter animation tracker. Key = owner-src-tgt (one group
-// is the natural unit; collisions are unlikely because the sim merges
-// concurrent groups going the same way). Value = { firstSeen, progress0,
-// travel }. resetFighterTracker() runs on /api/reset.
+  // Impact flashes — short-lived expanding ring at the target.
+  for (const fx of impactEffects) {
+    const t = (nowMs - fx.startedAt) / IMPACT_LIFE_MS;
+    if (t > 1) continue;
+    const [cx, cy] = simToCanvas(fx.x, fx.y);
+    const baseR = radiusFor({capacity: 100});
+    const r = baseR * (1 + 0.6 * t);
+    CTX.save();
+    CTX.globalAlpha = 1 - t;
+    CTX.beginPath();
+    CTX.arc(cx, cy, r, 0, Math.PI * 2);
+    CTX.strokeStyle = ownerColor(fx.owner);
+    CTX.lineWidth = 3;
+    CTX.stroke();
+    CTX.restore();
+  }
+}
+let lastStateTime = 0;   // performance.now() at last poll
+
+// ── Pure-UI fighter animation layer ────────────────────────────────────
+// The sim is the source of truth for *game logic*. The UI animation here
+// is decoupled — its only job is to draw fighter motion in a way that
+// reads naturally to a human (full journey from source to target,
+// regardless of how short the sim makes it).
+//
+// Two important UX choices:
+//   1) Animation starts at the SOURCE planet, not at the sim's reported
+//      current progress. The server ticks every ~1s; by the time we poll
+//      a fighter has often already moved ~7% in sim — if we started
+//      rendering at that progress the user would see the ship "teleport"
+//      partway. Starting fresh at src is correct visually.
+//   2) Animation duration is clamped to a minimum so very short journeys
+//      still show motion. Otherwise short hops (travel=2 ticks = 1s sim)
+//      would be over too fast to see.
+//
+// Cost: the UI fighter may visually arrive slightly later than the sim
+// actually applies impact. We let the UI animation finish + then play a
+// brief impact flash at the target — the user perceives the journey end
+// as the moment of landing, not the sim's silent damage application.
 const TICKS_PER_SEC_WALL = 2;
+const MIN_ANIM_SEC       = 0.9;   // shortest visible fighter journey
+const IMPACT_LIFE_MS     = 500;   // arrival-flash duration
 const fighterTracker = new Map();
-function resetFighterTracker() { fighterTracker.clear(); }
+const impactEffects  = [];        // [{x, y, owner, startedAt}]
+function resetFighterTracker() {
+  fighterTracker.clear();
+  impactEffects.length = 0;
+}
 function fighterKey(g) { return `${g.owner}-${g.src}-${g.tgt}`; }
 function trackFighters(state) {
-  if (!state || !state.groups) return;
+  if (!state) return;
   const now = performance.now();
-  const seen = new Set();
-  for (const g of state.groups) {
+  const bById = {};
+  for (const b of state.buildings) bById[b.slot] = b;
+
+  // 1. Ingest new groups — snapshot src/tgt positions + start animation.
+  const seenKeys = new Set();
+  for (const g of state.groups || []) {
     const k = fighterKey(g);
-    seen.add(k);
-    if (!fighterTracker.has(k)) {
-      fighterTracker.set(k, { firstSeen: now, progress0: g.progress, travel: g.travel });
+    seenKeys.add(k);
+    if (fighterTracker.has(k)) continue;
+    const src = bById[g.src], tgt = bById[g.tgt];
+    if (!src || !tgt) continue;
+    const durationSec = Math.max(g.travel / TICKS_PER_SEC_WALL, MIN_ANIM_SEC);
+    fighterTracker.set(k, {
+      owner: g.owner, count: g.count,
+      srcSlot: g.src, tgtSlot: g.tgt,
+      srcX: src.x, srcY: src.y, tgtX: tgt.x, tgtY: tgt.y,
+      startTime: now,
+      durationSec,
+      landed: false,
+    });
+  }
+
+  // 2. Mark groups that vanished as landed (sim already applied impact).
+  //    They keep animating in the UI until they reach frac=1, then we
+  //    spawn an impact effect at the target and delete the entry.
+  for (const [k, tr] of fighterTracker) {
+    if (!seenKeys.has(k) && !tr.landed) {
+      tr.landed = true;
     }
   }
-  // Forget groups that have landed (no longer in state.groups).
-  for (const k of [...fighterTracker.keys()]) {
-    if (!seen.has(k)) fighterTracker.delete(k);
-  }
 }
-function fighterFrac(g) {
-  const tr = fighterTracker.get(fighterKey(g));
-  if (!tr) {
-    // Hasn't been ingested by trackFighters yet (first-render race) —
-    // fall back to the server-reported progress.
-    return g.travel > 0 ? Math.min(1, g.progress / g.travel) : 0;
+function reapFinishedFighters() {
+  const now = performance.now();
+  for (const [k, tr] of [...fighterTracker]) {
+    const elapsedSec = (now - tr.startTime) / 1000;
+    const frac = elapsedSec / tr.durationSec;
+    if (frac >= 1.0) {
+      // Spawn impact flash + drop the tracker entry.
+      impactEffects.push({ x: tr.tgtX, y: tr.tgtY, owner: tr.owner, startedAt: now });
+      fighterTracker.delete(k);
+    }
   }
-  const elapsedSec = (performance.now() - tr.firstSeen) / 1000;
-  const interpProgress = tr.progress0 + elapsedSec * TICKS_PER_SEC_WALL;
-  return tr.travel > 0 ? Math.min(1, interpProgress / tr.travel) : 0;
+  // Cull expired impact flashes.
+  for (let i = impactEffects.length - 1; i >= 0; i--) {
+    if (now - impactEffects[i].startedAt > IMPACT_LIFE_MS) {
+      impactEffects.splice(i, 1);
+    }
+  }
 }
 
 function updateSidebar(state) {
@@ -1031,6 +1086,10 @@ async function poll() {
 }
 
 function rafLoop() {
+  // Reaping fighters on the rAF tick (not on poll) ensures a fighter that
+  // lands BETWEEN polls still gets its arrival flash on the very next
+  // frame, not delayed until the next state poll.
+  reapFinishedFighters();
   if (lastState) render(lastState);
   requestAnimationFrame(rafLoop);
 }
