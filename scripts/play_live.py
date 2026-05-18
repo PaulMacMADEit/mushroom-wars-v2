@@ -49,10 +49,11 @@ class _Session:
     # Real-time pacing. The sim advances on its own clock; the user's clicks
     # queue up and apply on the next decision tick. The agent (P2) picks its
     # action every decision tick too — so this is fully real-time, not turn-
-    # based. 10 Hz feels responsive; the trained net was trained against an
-    # env stepping at this same decision-interval cadence (so cadence-wise
-    # the net is happy at any TICK_HZ — only wall-time changes).
-    TICK_HZ = 10
+    # based. 1 Hz gives time to actually look + react; the trained net was
+    # trained against an env stepping at this same decision-interval cadence
+    # (so cadence-wise the net is happy at any TICK_HZ — only wall-time
+    # changes between training and live play).
+    TICK_HZ = 1
 
     def __init__(self, level_name: str, champion_run_id: str | None):
         self.level_name = level_name
@@ -65,7 +66,14 @@ class _Session:
         # unbounded.
         self._action_queue: collections.deque[int] = collections.deque(maxlen=4)
         self._ticker_thread: threading.Thread | None = None
-        self._ticker_running = False
+        # Per-thread stop signal. The previous "single bool on the session"
+        # design leaked ticker threads on reset: if the old ticker was mid-
+        # sleep when reset() set running=False then immediately set it back
+        # to True for the new ticker, the OLD thread woke up, saw True, and
+        # kept ticking alongside the new one → double-rate sim. A per-thread
+        # Event sidesteps that — the old thread's Event stays set, the new
+        # thread has its own fresh Event.
+        self._ticker_stop: threading.Event | None = None
 
     def reset(self, level_name: str | None = None, champion_run_id: str | None = None) -> None:
         # Stop the old ticker before re-initializing the env. The old thread
@@ -104,48 +112,57 @@ class _Session:
     # ------------------------------------------------------------------
 
     def _start_ticker(self) -> None:
-        self._ticker_running = True
-        t = threading.Thread(target=self._tick_loop, daemon=True, name="mw-ticker")
+        stop = threading.Event()
+        self._ticker_stop = stop
+        t = threading.Thread(target=self._tick_loop, args=(stop,),
+                             daemon=True, name="mw-ticker")
         self._ticker_thread = t
         t.start()
 
     def _stop_ticker(self) -> None:
-        self._ticker_running = False
+        stop = self._ticker_stop
+        if stop is not None:
+            stop.set()
         t = self._ticker_thread
         if t and t.is_alive():
-            # Brief wait — the ticker's max iteration time is ~1/TICK_HZ.
-            t.join(timeout=2.0 / self.TICK_HZ)
+            # Wait up to one full tick — long enough for a sleeping ticker
+            # to wake up and notice its stop Event.
+            t.join(timeout=1.5 / self.TICK_HZ)
         self._ticker_thread = None
+        self._ticker_stop = None
 
-    def _tick_loop(self) -> None:
+    def _tick_loop(self, stop: threading.Event) -> None:
         """Background loop: advance the sim once per TICK_HZ regardless of
         whether the user has clicked. Each tick consumes one queued user
-        action (or noop) and lets the agent take its turn via env.step()."""
+        action (or noop) and lets the agent take its turn via env.step().
+
+        `stop` is this thread's own Event — _stop_ticker() sets it; we
+        check before AND after sleep so a reset can interrupt us mid-wait
+        rather than producing one ghost step on the way out."""
         from sim.actions import NOOP_INDEX
         from sim import config as C
 
         dt = 1.0 / self.TICK_HZ
         next_t = time.time()
-        while self._ticker_running:
-            now = time.time()
-            wait = next_t - now
-            if wait > 0:
-                time.sleep(wait)
+        while not stop.is_set():
+            # Sleep until our next tick boundary. Event.wait returns True if
+            # the stop was signalled mid-sleep — bail immediately.
+            wait = next_t - time.time()
+            if wait > 0 and stop.wait(timeout=wait):
+                return
             next_t += dt
 
             with self.lock:
+                if stop.is_set():
+                    return
                 if self.env is None or self.env.state.phase != C.PHASE_PLAYING:
-                    # Game ended (or env was torn down) — stop ticking. A
-                    # /api/reset will restart us with a fresh game.
-                    self._ticker_running = False
-                    break
+                    return
                 a_idx = self._action_queue.popleft() if self._action_queue else NOOP_INDEX
                 try:
                     self.env.step(int(a_idx))
                 except Exception:
                     traceback.print_exc()
-                    self._ticker_running = False
-                    break
+                    return
 
     def state_json(self) -> dict:
         if self.env is None:
@@ -558,12 +575,19 @@ function showOverlay(opts) {
     $resultLine.style.display = 'block';
   }
   $playBtn.textContent = opts?.playLabel ?? 'Play';
+  // Re-enable the button. Previous click handler leaves it disabled on
+  // success (intentionally — we don't want a double-click queueing a
+  // second reset); resetting state here means the next time the overlay
+  // appears, Play actually works.
+  $playBtn.disabled = false;
   $overlay.style.display = 'flex';
 }
 function hideOverlay() { $overlay.style.display = 'none'; }
 
-// Map owner code → planet sprite name. 0=neutral, 1=P1 (human), 2=P2 (alien).
-const PLANET_BY_OWNER = ['planet-neutral', 'planet-human', 'planet-alien'];
+// Single planet sprite for all owners — ownership is conveyed by the
+// colour tint, not by swapping the planet icon. Keeps the world coherent
+// (the planet doesn't morph when captured, only changes flag).
+const PLANET_SPRITE = 'planet-neutral';
 const FIGHTER_BY_OWNER = ['fighter-human', 'fighter-human', 'fighter-alien'];  // owner 0 never moves
 
 // Strong color tint so P1/P2 read at a glance even at small sizes. Applied
@@ -586,28 +610,25 @@ function render(state) {
   }
   if (!state || !state.ready) return;
 
-  // Buildings — planet sprite, tinted in owner color, with selected halo.
+  // Buildings — single planet sprite, tinted in owner colour, with selected
+  // halo. We draw inside a circular clip so the sprite's black square
+  // background is masked away (the PNGs aren't actually transparent).
   for (const b of state.buildings) {
     const [cx, cy] = simToCanvas(b.x, b.y);
     const r = radiusFor(b);
-    const spriteName = PLANET_BY_OWNER[b.owner] || 'planet-neutral';
-    const img = ASSETS[spriteName];
-    // Draw into an offscreen sub-canvas so the source-atop tint is
-    // clipped to just the sprite's opaque pixels (the planet disc),
-    // not the canvas square behind it.
+    const img = ASSETS[PLANET_SPRITE];
     if (img) {
+      CTX.save();
+      CTX.beginPath();
+      CTX.arc(cx, cy, r, 0, Math.PI * 2);
+      CTX.clip();
       CTX.drawImage(img, cx - r, cy - r, r * 2, r * 2);
       const tint = TINT_BY_OWNER[b.owner];
       if (tint) {
-        CTX.save();
-        // Mask the tint to the planet by drawing it inside a circular clip.
-        CTX.beginPath();
-        CTX.arc(cx, cy, r, 0, Math.PI * 2);
-        CTX.clip();
         CTX.fillStyle = tint;
         CTX.fillRect(cx - r, cy - r, r * 2, r * 2);
-        CTX.restore();
       }
+      CTX.restore();
     } else {
       // Fallback: colored disc.
       CTX.beginPath();
@@ -654,9 +675,13 @@ function render(state) {
     const img = ASSETS[spriteName];
     const size = Math.max(22, radiusFor({capacity: 0}) * 0.7);
     if (img) {
+      // Circular clip masks the fighter sprite's black PNG background.
       CTX.save();
       CTX.translate(cx, cy);
       CTX.rotate(angle + Math.PI / 2);
+      CTX.beginPath();
+      CTX.arc(0, 0, size / 2, 0, Math.PI * 2);
+      CTX.clip();
       CTX.drawImage(img, -size / 2, -size / 2, size, size);
       CTX.restore();
     } else {
@@ -715,13 +740,17 @@ function updateSidebar(state) {
   $p2.textContent = pctP2 > 6 ? `${pctP2}%` : '';
   $nu.textContent = pctN  > 8 ? `neutral ${pctN}%` : '';
 
-  // Game-over → show the overlay with the result + Play again button.
-  if (state.phase !== 0) {
+  // Game-over → show the overlay on the RISING EDGE (phase transitioning
+  // from 0 → non-0). Using rising-edge avoids the race where a stale poll
+  // response (still phase=non-0 because it was generated before the
+  // /api/reset hit the server) re-opens the overlay right after the user
+  // clicked Play Again.
+  const prevPhase = updateSidebar._prevPhase ?? 0;
+  if (prevPhase === 0 && state.phase !== 0) {
     const resultKind = state.phase === 1 ? 'win' : state.phase === 2 ? 'lose' : 'draw';
-    if ($overlay.style.display === 'none') {
-      showOverlay({ result: resultKind, playLabel: 'Play again' });
-    }
+    showOverlay({ result: resultKind, playLabel: 'Play again' });
   }
+  updateSidebar._prevPhase = state.phase;
 }
 
 // Session-stats: how many games this browser session, how many won. Lives in
@@ -943,6 +972,11 @@ $playBtn.addEventListener('click', async () => {
       return;
     }
     selectedSrc = null;
+    // Reset rising-edge state so the next game's end can re-open the
+    // overlay. Also clear lastState so a stale render doesn't show old
+    // ownership/balance for one frame.
+    updateSidebar._prevPhase = 0;
+    lastState = null;
     hideOverlay();
   } catch (err) {
     showToast('net error: ' + err.message);
