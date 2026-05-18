@@ -49,9 +49,10 @@ class _Session:
     # Real-time pacing. The sim advances on its own clock; the user's clicks
     # queue up and apply on the next decision tick. The agent (P2) picks its
     # action every decision tick too — so this is fully real-time, not turn-
-    # based. 5 Hz feels active without spamming; the trained net was trained
-    # against an env stepping at this same decision-interval cadence.
-    TICK_HZ = 5
+    # based. 10 Hz feels responsive; the trained net was trained against an
+    # env stepping at this same decision-interval cadence (so cadence-wise
+    # the net is happy at any TICK_HZ — only wall-time changes).
+    TICK_HZ = 10
 
     def __init__(self, level_name: str, champion_run_id: str | None):
         self.level_name = level_name
@@ -299,162 +300,222 @@ _HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <title>Mushroom Wars — play live</title>
 <style>
-  body { margin: 0; font: 13px/1.4 ui-sans-serif, system-ui, sans-serif;
-         background: #0a0c10; color: #e6e8ef; }
-  header { padding: 8px 16px; display: flex; gap: 16px; align-items: center;
-           background: #11141b; border-bottom: 1px solid #1f2330; }
-  header h1 { margin: 0; font-size: 14px; color: #93a3b8; }
-  header .opp { color: #93a3b8; }
-  header .opp .mono { color: #e6e8ef; }
-  header .actions { margin-left: auto; display: flex; gap: 8px; }
-  button { background: #1f2330; color: #e6e8ef; border: 1px solid #2c3242;
-           padding: 4px 10px; border-radius: 4px; cursor: pointer; font: inherit; }
-  button:hover { background: #2a3042; }
-  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* Full-viewport game shell. Canvas takes the screen; everything else
+     floats over it. */
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
+               font: 13px/1.4 ui-sans-serif, system-ui, sans-serif;
+               background: #050610; color: #e6e8ef; }
   .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
-  .layout { display: grid; grid-template-columns: 1fr 280px; gap: 0; }
-  .canvas-wrap { position: relative; padding: 20px; }
-  canvas { background: #050610; border-radius: 6px; cursor: crosshair; display: block;
-           width: 100%; max-width: 720px; aspect-ratio: 1;
-           box-shadow: 0 0 40px rgba(96, 165, 250, 0.06) inset; }
-  /* Glassmorphism sidebar — translucent dark with backdrop blur. */
-  aside { padding: 16px; background: rgba(14, 17, 23, 0.72); border-left: 1px solid rgba(96, 165, 250, 0.12);
-          min-height: 100vh; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
-  /* Emblem corners on the canvas. */
-  .emblem-corner { position: absolute; width: 56px; height: 56px; opacity: 0.75;
-                   pointer-events: none; filter: drop-shadow(0 0 8px rgba(0,0,0,0.6)); }
-  .emblem-corner.tl { top: 32px;    left: 32px; }
-  .emblem-corner.tr { top: 32px;    right: 32px; }
-  aside h3 { margin: 0 0 8px; font-size: 12px; color: #93a3b8; text-transform: uppercase;
-             letter-spacing: 0.05em; }
-  .stat { display: flex; justify-content: space-between; padding: 4px 0;
-          border-bottom: 1px solid #1f2330; }
+  button { background: rgba(31, 36, 51, 0.85); color: #e6e8ef;
+           border: 1px solid #2c3242; padding: 6px 12px; border-radius: 5px;
+           cursor: pointer; font: inherit; }
+  button:hover { background: rgba(48, 56, 78, 0.95); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  select { background: #1f2330; color: #e6e8ef; border: 1px solid #2c3242;
+           padding: 6px 10px; border-radius: 5px; font: inherit; }
+  canvas { display: block; position: fixed; top: 0; left: 0;
+           width: 100vw; height: 100vh; background: #050610;
+           cursor: crosshair; }
+  /* Faction emblems pinned to canvas corners. */
+  .emblem-corner { position: fixed; width: 52px; height: 52px; opacity: 0.85;
+                   pointer-events: none; filter: drop-shadow(0 0 10px rgba(0,0,0,0.7));
+                   z-index: 5; }
+  .emblem-corner.tl { top: 16px;    left: 16px;  }
+  .emblem-corner.tr { top: 16px;    right: 16px; }
+  /* Top HUD strip — minimal: opponent label + new-game button. */
+  .top-hud { position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+             display: flex; gap: 16px; align-items: center; z-index: 6;
+             padding: 8px 16px;
+             background: rgba(14, 17, 23, 0.55);
+             border: 1px solid rgba(96, 165, 250, 0.12);
+             border-radius: 999px;
+             backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .top-hud .opp-label { color: #93a3b8; font-size: 12px; }
+  .top-hud .opp-label .mono { color: #e6e8ef; }
+  /* Right-side overlay panel — send size + session + state. */
+  aside { position: fixed; top: 80px; right: 16px; bottom: 60px;
+          width: 240px; padding: 16px; z-index: 4; overflow-y: auto;
+          background: rgba(14, 17, 23, 0.55); border: 1px solid rgba(96, 165, 250, 0.12);
+          border-radius: 10px;
+          backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  aside h3 { margin: 0 0 6px; font-size: 11px; color: #93a3b8;
+             text-transform: uppercase; letter-spacing: 0.06em; }
+  aside h3:not(:first-child) { margin-top: 18px; }
+  .stat { display: flex; justify-content: space-between; padding: 3px 0;
+          border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 12px; }
   .stat .k { color: #93a3b8; }
   .stat .v { font-family: ui-monospace, monospace; }
-  .legend { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
-  .legend span { display: inline-flex; align-items: center; gap: 6px; }
-  .swatch { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
-  .help { color: #93a3b8; font-size: 12px; margin-top: 12px; line-height: 1.5; }
-  .help kbd { background: #1f2330; border: 1px solid #2c3242; border-radius: 3px;
-              padding: 1px 5px; font-family: ui-monospace, monospace; font-size: 11px; }
-  .pct-row { display: flex; gap: 6px; margin-top: 8px; }
+  .pct-row { display: flex; gap: 6px; margin-top: 6px; }
   .pct-row button { flex: 1; padding: 8px 4px; font-size: 13px; font-weight: 500; }
   .pct-row button.active { background: #f59e0b; border-color: #f59e0b; color: #11141b; }
-  .toast { position: absolute; top: 24px; left: 50%; transform: translateX(-50%);
-           background: #1f2330; padding: 6px 14px; border-radius: 4px;
+  /* Bottom unit-balance bar. Two flex divs, widths proportional to unit %. */
+  .balance-bar { position: fixed; bottom: 16px; left: 16px; right: 16px;
+                 height: 28px; display: flex; z-index: 4;
+                 border-radius: 999px; overflow: hidden;
+                 background: rgba(14, 17, 23, 0.55);
+                 border: 1px solid rgba(96, 165, 250, 0.12);
+                 backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+                 font-size: 12px; font-weight: 600;
+                 box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+  .balance-fill { display: flex; align-items: center; justify-content: center;
+                  white-space: nowrap; transition: width 0.3s ease;
+                  text-shadow: 0 1px 2px rgba(0,0,0,0.7); }
+  .balance-fill.p1 { background: linear-gradient(90deg, #ef4444, #b91c1c); color: #fff;
+                     padding-left: 12px; justify-content: flex-start; }
+  .balance-fill.p2 { background: linear-gradient(90deg, #1e40af, #3b82f6); color: #fff;
+                     padding-right: 12px; justify-content: flex-end; }
+  .balance-fill.neutral { background: rgba(107, 114, 128, 0.3); color: #93a3b8; }
+  /* Toast (transient notification). */
+  .toast { position: fixed; top: 80px; left: 50%; transform: translateX(-50%);
+           background: rgba(31, 36, 51, 0.95); padding: 8px 16px; border-radius: 5px;
            border: 1px solid #2c3242; opacity: 0; transition: opacity 0.2s;
-           pointer-events: none; }
+           pointer-events: none; z-index: 10; }
   .toast.show { opacity: 1; }
-  .phase-banner { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
-                  font-size: 36px; font-weight: 600; padding: 16px 32px;
-                  background: rgba(17,20,27,0.92); border: 2px solid #2c3242;
-                  border-radius: 8px; pointer-events: none; }
-  .phase-banner.win { color: #34d399; border-color: #34d399; }
-  .phase-banner.lose { color: #f87171; border-color: #f87171; }
-  .phase-banner.draw { color: #93a3b8; }
-  select { background: #1f2330; color: #e6e8ef; border: 1px solid #2c3242;
-           padding: 4px 8px; border-radius: 4px; font: inherit; }
+  /* Start / game-over overlay — modal-like, covers the canvas. */
+  .overlay { position: fixed; inset: 0; z-index: 20;
+             display: flex; align-items: center; justify-content: center;
+             background: rgba(5, 6, 16, 0.78);
+             backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  .overlay-card { background: rgba(17, 20, 27, 0.95); border: 1px solid rgba(96, 165, 250, 0.2);
+                  border-radius: 12px; padding: 32px 36px; min-width: 360px; max-width: 480px;
+                  box-shadow: 0 12px 60px rgba(0,0,0,0.6); }
+  .overlay-card h1 { margin: 0 0 4px; font-size: 24px; color: #e6e8ef; font-weight: 600; }
+  .overlay-card .subtitle { color: #93a3b8; font-size: 13px; margin-bottom: 24px; }
+  .overlay-card .result { font-size: 28px; font-weight: 700; margin-bottom: 12px; }
+  .overlay-card .result.win  { color: #34d399; }
+  .overlay-card .result.lose { color: #f87171; }
+  .overlay-card .result.draw { color: #93a3b8; }
+  .overlay-card label { display: block; color: #93a3b8; font-size: 11px;
+                        text-transform: uppercase; letter-spacing: 0.06em; margin: 14px 0 6px; }
+  .overlay-card select { width: 100%; }
+  .overlay-card .play-btn { width: 100%; padding: 12px; font-size: 15px; font-weight: 600;
+                            background: #f59e0b; color: #11141b; border-color: #f59e0b;
+                            margin-top: 24px; }
+  .overlay-card .play-btn:hover { background: #fbbf24; }
+  .overlay-card .loading { color: #93a3b8; text-align: center; padding: 20px; font-size: 13px; }
+  .overlay-card .loading .spinner { display: inline-block; width: 14px; height: 14px;
+                                    border: 2px solid #2c3242; border-top-color: #60a5fa;
+                                    border-radius: 50%; animation: spin 1s linear infinite;
+                                    vertical-align: middle; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
-<header>
-  <h1>🍄 mushroom wars — live</h1>
-  <span class="opp">vs
-    <select id="opp-picker" class="mono" style="margin-left:4px; max-width:360px;">
-      <option value="">loading...</option>
-    </select>
-  </span>
-  <span class="opp">on <span class="mono" id="level-label">—</span></span>
-  <div class="actions">
+  <!-- Game canvas fills the viewport; everything else floats on top. -->
+  <canvas id="board"></canvas>
+  <img class="emblem-corner tl" id="emblem-tl" src="/assets/emblem-human.png" alt="">
+  <img class="emblem-corner tr" id="emblem-tr" src="/assets/emblem-alien.png" alt="">
+
+  <!-- Minimal top HUD: shows current opponent + map. New-game returns to overlay. -->
+  <div class="top-hud">
+    <span class="opp-label">vs <span class="mono" id="opp-display">—</span></span>
+    <span class="opp-label">on <span class="mono" id="level-label">—</span></span>
     <button id="btn-reset">New game</button>
   </div>
-</header>
-<div class="layout">
-  <div class="canvas-wrap">
-    <canvas id="board" width="720" height="720"></canvas>
-    <img class="emblem-corner tl" id="emblem-tl" src="/assets/emblem-human.png" alt="">
-    <img class="emblem-corner tr" id="emblem-tr" src="/assets/emblem-alien.png" alt="">
-    <div id="toast" class="toast"></div>
-    <div id="phase-banner" class="phase-banner" style="display:none"></div>
-  </div>
+
+  <!-- Side panel — minimal stats (no how-to-play). -->
   <aside>
     <h3>Send size</h3>
     <div class="pct-row" id="pct-row">
       <!-- buttons inserted at runtime from SEND_PERCENTAGES (25/50/75/100) -->
     </div>
-    <div class="muted small" style="margin-top:6px;">How much of the source garrison to send. Press <kbd>space</kbd> to pass this turn.</div>
 
-    <h3 style="margin-top:18px">Session</h3>
+    <h3>Session</h3>
     <div class="stat"><span class="k">games</span><span class="v" id="s-sess-games">0</span></div>
     <div class="stat"><span class="k">wins</span><span class="v" id="s-sess-wins" style="color:#34d399">0</span></div>
     <div class="stat"><span class="k">losses</span><span class="v" id="s-sess-losses" style="color:#f87171">0</span></div>
     <div class="stat"><span class="k">draws</span><span class="v" id="s-sess-draws">0</span></div>
     <div class="stat"><span class="k">win rate</span><span class="v" id="s-sess-rate">—</span></div>
 
-    <h3 style="margin-top:18px">State</h3>
-    <div class="legend">
-      <span><span class="swatch" style="background:#f87171"></span>You (P1)</span>
-      <span><span class="swatch" style="background:#60a5fa"></span>Agent (P2)</span>
-      <span><span class="swatch" style="background:#6b7280"></span>Neutral</span>
-    </div>
+    <h3>State</h3>
     <div class="stat"><span class="k">tick</span><span class="v" id="s-tick">—</span></div>
-    <div class="stat"><span class="k">phase</span><span class="v" id="s-phase">—</span></div>
-    <div class="stat"><span class="k">your buildings</span><span class="v" id="s-mine">—</span></div>
-    <div class="stat"><span class="k">enemy buildings</span><span class="v" id="s-enemy">—</span></div>
-    <div class="stat"><span class="k">your units</span><span class="v" id="s-mine-units">—</span></div>
-    <div class="stat"><span class="k">enemy units</span><span class="v" id="s-enemy-units">—</span></div>
-    <div class="stat"><span class="k">in-flight (yours)</span><span class="v" id="s-mine-flight">—</span></div>
-    <div class="stat"><span class="k">in-flight (theirs)</span><span class="v" id="s-enemy-flight">—</span></div>
-
-    <h3 style="margin-top:24px">How to play</h3>
-    <div class="help">
-      <p><strong>1.</strong> Pick a send size above (or press <kbd>1</kbd>–<kbd>4</kbd>).</p>
-      <p><strong>2.</strong> Click one of your (red) buildings to select a source.</p>
-      <p><strong>3.</strong> Click any building to send that fraction of the garrison there.</p>
-      <p><strong>Esc</strong> or <kbd>right-click</kbd> to deselect.</p>
-      <p><strong>Real-time:</strong> the agent acts on its own clock — don't dawdle.
-         Garrisons regenerate automatically; the game runs until one side has zero
-         buildings or you both run out of units.</p>
-    </div>
+    <div class="stat"><span class="k">your worlds</span><span class="v" id="s-mine" style="color:#ef4444">—</span></div>
+    <div class="stat"><span class="k">enemy worlds</span><span class="v" id="s-enemy" style="color:#3b82f6">—</span></div>
+    <div class="stat"><span class="k">your units</span><span class="v" id="s-mine-units" style="color:#ef4444">—</span></div>
+    <div class="stat"><span class="k">enemy units</span><span class="v" id="s-enemy-units" style="color:#3b82f6">—</span></div>
   </aside>
-</div>
+
+  <!-- Bottom unit-balance bar — fills proportional to total unit count per side. -->
+  <div class="balance-bar" id="balance-bar">
+    <div class="balance-fill p1" id="balance-p1" style="width: 33%">—</div>
+    <div class="balance-fill neutral" id="balance-neutral" style="width: 34%">—</div>
+    <div class="balance-fill p2" id="balance-p2" style="width: 33%">—</div>
+  </div>
+
+  <!-- Toast for transient messages. -->
+  <div id="toast" class="toast"></div>
+
+  <!-- Start / game-over overlay — covers the canvas; user picks opponent + clicks Play. -->
+  <div class="overlay" id="overlay">
+    <div class="overlay-card">
+      <h1>🍄 Mushroom Wars</h1>
+      <div class="subtitle">Real-time space conquest vs a trained agent</div>
+
+      <div id="result-line" style="display:none"></div>
+
+      <label for="overlay-opp">Opponent</label>
+      <select id="overlay-opp" class="mono">
+        <option value="">loading…</option>
+      </select>
+
+      <button class="play-btn" id="play-btn" disabled>
+        <span class="loading"><span class="spinner"></span>Loading…</span>
+      </button>
+    </div>
+  </div>
 
 <script>
 // Canvas-only state. The server is the source of truth; we just paint.
 const CV  = document.getElementById('board');
 const CTX = CV.getContext('2d');
-const $opp = document.getElementById('opp-picker');
+const $opp = document.getElementById('overlay-opp');   // pre-game opponent picker
+const $oppDisplay = document.getElementById('opp-display');  // current opponent label in HUD
 const $lvl = document.getElementById('level-label');
 const $toast = document.getElementById('toast');
-const $banner = document.getElementById('phase-banner');
+const $overlay = document.getElementById('overlay');
+const $resultLine = document.getElementById('result-line');
+const $playBtn = document.getElementById('play-btn');
+
+// Match canvas resolution to viewport (hi-DPI safe). Re-runs on resize.
+function fitCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  CV.width  = Math.floor(window.innerWidth  * dpr);
+  CV.height = Math.floor(window.innerHeight * dpr);
+  CTX.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+fitCanvas();
+window.addEventListener('resize', () => { fitCanvas(); if (lastState) render(lastState); });
 
 // Selected source building slot (null = nothing picked).
 let selectedSrc = null;
 let lastState = null;
 let pollHandle = null;
 
-// Sim coordinate → canvas pixel. Maps the ~700×700 sim space to the canvas
-// minus a margin so building circles aren't clipped at the edges.
-const CANVAS_PAD = 40;
+// Sim coordinate → canvas pixel. Maps the sim space (max extent inferred
+// from current state) into a square in the centre of the viewport — keeps
+// aspect square so circular planets don't look stretched on wide screens.
+const CANVAS_PAD = 80;
 function simToCanvas(x, y) {
-  const w = CV.clientWidth;
-  const h = CV.clientHeight;
-  // sim coords run 0..700 (full) or 0..350 (close); auto-fit by inferring max
-  // observed extent from current state.
+  const w = window.innerWidth, h = window.innerHeight;
   const ext = (lastState?.buildings ?? []).reduce(
     (m, b) => Math.max(m, b.x, b.y), 700);
-  const sx = CANVAS_PAD + (x / ext) * (w - 2*CANVAS_PAD);
-  const sy = CANVAS_PAD + (y / ext) * (h - 2*CANVAS_PAD);
-  return [sx, sy];
+  // Use the shorter axis so the play-area stays square.
+  const side = Math.min(w, h) - 2 * CANVAS_PAD;
+  const cx0 = (w - side) / 2;
+  const cy0 = (h - side) / 2;
+  return [cx0 + (x / ext) * side, cy0 + (y / ext) * side];
 }
 
 function ownerColor(owner) {
-  return ['#6b7280', '#f87171', '#60a5fa'][owner] || '#6b7280';
+  // Saturated red P1 / saturated blue P2 / dim gray neutral.
+  return ['#6b7280', '#ef4444', '#3b82f6'][owner] || '#6b7280';
 }
 
 function radiusFor(building) {
-  // Bigger capacity → larger sprite. Cap at 38 px so big planets don't blow up.
-  return Math.min(38, 16 + building.capacity * 0.3);
+  // Bigger capacity → larger sprite. Scale to viewport so planets stay
+  // proportional on big and small screens.
+  const scale = Math.min(window.innerWidth, window.innerHeight) / 720;
+  return Math.min(56, 18 + building.capacity * 0.4) * scale;
 }
 
 // ── Asset preloader ──────────────────────────────────────────────────────
@@ -477,47 +538,7 @@ function loadAssets() {
   })));
 }
 
-// ── Capture-FX state ────────────────────────────────────────────────────
-// When a building's owner flips between renders, spawn a short-lived burst
-// that gets composited on top of that building for ~600 ms. Each fx entry:
-// {x, y, r, startedAt}.
-const captureFx = [];
-let lastOwners = {};   // slot → owner, used to detect flips
-
-function spawnCaptureFx(state) {
-  if (!state || !state.buildings) return;
-  for (const b of state.buildings) {
-    const prev = lastOwners[b.slot];
-    if (prev !== undefined && prev !== b.owner) {
-      captureFx.push({ x: b.x, y: b.y, r: radiusFor(b), startedAt: performance.now() });
-    }
-    lastOwners[b.slot] = b.owner;
-  }
-}
-function drawCaptureFx() {
-  const now = performance.now();
-  const lifeMs = 600;
-  for (let i = captureFx.length - 1; i >= 0; i--) {
-    const fx = captureFx[i];
-    const t = (now - fx.startedAt) / lifeMs;
-    if (t > 1) { captureFx.splice(i, 1); continue; }
-    const [cx, cy] = simToCanvas(fx.x, fx.y);
-    // Burst grows + fades over the lifetime.
-    const r = fx.r * (1.2 + 1.6 * t);
-    CTX.save();
-    CTX.globalAlpha = 1 - t;
-    if (ASSETS['capture-fx']) {
-      CTX.drawImage(ASSETS['capture-fx'], cx - r, cy - r, r * 2, r * 2);
-    } else {
-      CTX.beginPath();
-      CTX.arc(cx, cy, r, 0, Math.PI * 2);
-      CTX.strokeStyle = '#fde047';
-      CTX.lineWidth = 3;
-      CTX.stroke();
-    }
-    CTX.restore();
-  }
-}
+// (Capture FX removed in favour of cleaner visuals.)
 
 function showToast(msg) {
   $toast.textContent = msg;
@@ -526,63 +547,88 @@ function showToast(msg) {
   showToast._t = setTimeout(() => $toast.classList.remove('show'), 1500);
 }
 
-function showBanner(text, kind) {
-  $banner.textContent = text;
-  $banner.className = `phase-banner ${kind}`;
-  $banner.style.display = 'block';
+// (Old in-canvas phase banner replaced by the start/game-over overlay below.)
+function showOverlay(opts) {
+  // opts: { result: 'win'|'lose'|'draw'|null, playLabel: string }
+  $resultLine.style.display = 'none';
+  if (opts?.result) {
+    const txt = { win: 'YOU WIN', lose: 'AGENT WINS', draw: 'DRAW' }[opts.result] || '';
+    $resultLine.textContent = txt;
+    $resultLine.className = `result ${opts.result}`;
+    $resultLine.style.display = 'block';
+  }
+  $playBtn.textContent = opts?.playLabel ?? 'Play';
+  $overlay.style.display = 'flex';
 }
-function hideBanner() { $banner.style.display = 'none'; }
+function hideOverlay() { $overlay.style.display = 'none'; }
 
 // Map owner code → planet sprite name. 0=neutral, 1=P1 (human), 2=P2 (alien).
 const PLANET_BY_OWNER = ['planet-neutral', 'planet-human', 'planet-alien'];
 const FIGHTER_BY_OWNER = ['fighter-human', 'fighter-human', 'fighter-alien'];  // owner 0 never moves
 
+// Strong color tint so P1/P2 read at a glance even at small sizes. Applied
+// with source-atop blend so it stays clipped to the sprite pixels (the
+// circular planet shape) rather than bleeding into the surrounding canvas.
+const TINT_BY_OWNER = [
+  null,                       // neutral — no tint
+  'rgba(239, 68, 68, 0.40)',  // P1 red
+  'rgba(59, 130, 246, 0.40)', // P2 blue
+];
+
 function render(state) {
-  // Background — full-canvas sprite, falls back to solid black.
+  // Background fills the entire viewport.
+  const W = window.innerWidth, H = window.innerHeight;
   if (ASSETS['background']) {
-    CTX.drawImage(ASSETS['background'], 0, 0, CV.width, CV.height);
+    CTX.drawImage(ASSETS['background'], 0, 0, W, H);
   } else {
     CTX.fillStyle = '#050610';
-    CTX.fillRect(0, 0, CV.width, CV.height);
+    CTX.fillRect(0, 0, W, H);
   }
   if (!state || !state.ready) return;
 
-  // Buildings — planet sprites by owner, with selected-source highlight ring.
+  // Buildings — planet sprite, tinted in owner color, with selected halo.
   for (const b of state.buildings) {
     const [cx, cy] = simToCanvas(b.x, b.y);
     const r = radiusFor(b);
     const spriteName = PLANET_BY_OWNER[b.owner] || 'planet-neutral';
     const img = ASSETS[spriteName];
+    // Draw into an offscreen sub-canvas so the source-atop tint is
+    // clipped to just the sprite's opaque pixels (the planet disc),
+    // not the canvas square behind it.
     if (img) {
       CTX.drawImage(img, cx - r, cy - r, r * 2, r * 2);
+      const tint = TINT_BY_OWNER[b.owner];
+      if (tint) {
+        CTX.save();
+        // Mask the tint to the planet by drawing it inside a circular clip.
+        CTX.beginPath();
+        CTX.arc(cx, cy, r, 0, Math.PI * 2);
+        CTX.clip();
+        CTX.fillStyle = tint;
+        CTX.fillRect(cx - r, cy - r, r * 2, r * 2);
+        CTX.restore();
+      }
     } else {
-      // Fallback: colored circle until sprite loads.
+      // Fallback: colored disc.
       CTX.beginPath();
       CTX.arc(cx, cy, r, 0, Math.PI * 2);
       CTX.fillStyle = ownerColor(b.owner);
-      CTX.globalAlpha = 0.85;
       CTX.fill();
-      CTX.globalAlpha = 1;
     }
-    // Owner ring — thin colored stroke so red/blue/gray reads at a glance
-    // even with the realistic planet textures.
-    CTX.beginPath();
-    CTX.arc(cx, cy, r + 1, 0, Math.PI * 2);
-    CTX.strokeStyle = ownerColor(b.owner);
-    CTX.lineWidth = 2.5;
-    CTX.globalAlpha = 0.7;
-    CTX.stroke();
-    CTX.globalAlpha = 1;
-    // Selected-source highlight.
+    // Selected-source halo — yellow glow ring outside the planet.
     if (b.slot === selectedSrc) {
+      CTX.save();
+      CTX.shadowColor = '#facc15';
+      CTX.shadowBlur = 18;
       CTX.beginPath();
       CTX.arc(cx, cy, r + 5, 0, Math.PI * 2);
       CTX.strokeStyle = '#facc15';
       CTX.lineWidth = 3;
       CTX.stroke();
+      CTX.restore();
     }
-    // Garrison number — bold + glow so it pops against the planet.
-    CTX.font = 'bold 14px ui-monospace, monospace';
+    // Garrison count — readable on any background.
+    CTX.font = `bold ${Math.max(13, r * 0.5)}px ui-monospace, monospace`;
     CTX.textAlign = 'center';
     CTX.textBaseline = 'middle';
     CTX.fillStyle = 'rgba(0,0,0,0.85)';
@@ -603,25 +649,24 @@ function render(state) {
     const y = src.y + (tgt.y - src.y) * frac;
     const [cx, cy] = simToCanvas(x, y);
     const [tcx, tcy] = simToCanvas(tgt.x, tgt.y);
-    const angle = Math.atan2(tcy - cy, tcx - cx);  // 0 rad = +x (right)
+    const angle = Math.atan2(tcy - cy, tcx - cx);
     const spriteName = FIGHTER_BY_OWNER[g.owner];
     const img = ASSETS[spriteName];
-    const size = 18;
+    const size = Math.max(22, radiusFor({capacity: 0}) * 0.7);
     if (img) {
       CTX.save();
       CTX.translate(cx, cy);
-      // Sprite is drawn nose-up (-y); rotate so nose points along travel.
       CTX.rotate(angle + Math.PI / 2);
       CTX.drawImage(img, -size / 2, -size / 2, size, size);
       CTX.restore();
     } else {
       CTX.beginPath();
-      CTX.arc(cx, cy, 6, 0, Math.PI * 2);
+      CTX.arc(cx, cy, 8, 0, Math.PI * 2);
       CTX.fillStyle = ownerColor(g.owner);
       CTX.fill();
     }
-    // Unit count just behind the ship.
-    CTX.font = 'bold 11px ui-monospace, monospace';
+    // Unit count behind the ship.
+    CTX.font = 'bold 12px ui-monospace, monospace';
     CTX.textAlign = 'center';
     CTX.textBaseline = 'middle';
     CTX.fillStyle = 'rgba(0,0,0,0.85)';
@@ -629,16 +674,11 @@ function render(state) {
     CTX.fillStyle = ownerColor(g.owner);
     CTX.fillText(String(g.count), cx, cy + size / 2 + 8);
   }
-
-  // Capture FX last — overlays sit on top of buildings.
-  drawCaptureFx();
 }
 
 function updateSidebar(state) {
   if (!state || !state.ready) return;
   document.getElementById('s-tick').textContent  = state.tick;
-  const phaseStr = ['playing', 'P1 wins', 'P2 wins', 'draw'][state.phase] || `phase ${state.phase}`;
-  document.getElementById('s-phase').textContent = phaseStr;
   let mine = 0, enemy = 0, mineU = 0, enemyU = 0;
   for (const b of state.buildings) {
     if (b.owner === 1) { mine++;  mineU  += b.garrison; }
@@ -649,27 +689,39 @@ function updateSidebar(state) {
     if (g.owner === 1) mineF  += g.count;
     if (g.owner === 2) enemyF += g.count;
   }
-  document.getElementById('s-mine').textContent          = mine;
-  document.getElementById('s-enemy').textContent         = enemy;
-  document.getElementById('s-mine-units').textContent    = mineU;
-  document.getElementById('s-enemy-units').textContent   = enemyU;
-  document.getElementById('s-mine-flight').textContent   = mineF;
-  document.getElementById('s-enemy-flight').textContent  = enemyF;
-  // Sync dropdown to backend without clobbering the user's mid-pick state:
-  // only update if the user isn't actively focused on the select.
-  const targetVal = state.champion_run_id ?? 'random_legal';
-  if (document.activeElement !== $opp && $opp.value !== targetVal) {
-    // Only set if the option actually exists (champions list might still be loading).
-    if ([...$opp.options].some(o => o.value === targetVal)) {
-      $opp.value = targetVal;
-    }
-  }
+  document.getElementById('s-mine').textContent       = mine;
+  document.getElementById('s-enemy').textContent      = enemy;
+  document.getElementById('s-mine-units').textContent  = mineU + mineF;
+  document.getElementById('s-enemy-units').textContent = enemyU + enemyF;
+  $oppDisplay.textContent = state.opponent ?? '—';
   $lvl.textContent = state.level ?? '—';
 
-  if (state.phase === 1)      showBanner("YOU WIN",   'win');
-  else if (state.phase === 2) showBanner("AGENT WINS",'lose');
-  else if (state.phase === 3) showBanner("DRAW",      'draw');
-  else                        hideBanner();
+  // Bottom balance bar: total units (garrison + in-flight) per side, as %.
+  const totMine  = mineU + mineF;
+  const totEnemy = enemyU + enemyF;
+  let totNeutral = 0;
+  for (const b of state.buildings) if (b.owner === 0) totNeutral += b.garrison;
+  const total = totMine + totEnemy + totNeutral || 1;
+  const pctP1 = Math.round(100 * totMine / total);
+  const pctP2 = Math.round(100 * totEnemy / total);
+  const pctN  = 100 - pctP1 - pctP2;
+  const $p1 = document.getElementById('balance-p1');
+  const $p2 = document.getElementById('balance-p2');
+  const $nu = document.getElementById('balance-neutral');
+  $p1.style.width = pctP1 + '%';
+  $p2.style.width = pctP2 + '%';
+  $nu.style.width = pctN  + '%';
+  $p1.textContent = pctP1 > 6 ? `${pctP1}%` : '';
+  $p2.textContent = pctP2 > 6 ? `${pctP2}%` : '';
+  $nu.textContent = pctN  > 8 ? `neutral ${pctN}%` : '';
+
+  // Game-over → show the overlay with the result + Play again button.
+  if (state.phase !== 0) {
+    const resultKind = state.phase === 1 ? 'win' : state.phase === 2 ? 'lose' : 'draw';
+    if ($overlay.style.display === 'none') {
+      showOverlay({ result: resultKind, playLabel: 'Play again' });
+    }
+  }
 }
 
 // Session-stats: how many games this browser session, how many won. Lives in
@@ -843,10 +895,10 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { selectedSrc = null; render(lastState); }
 });
 
-document.getElementById('btn-reset').addEventListener('click', async () => {
-  await fetch('/api/reset', { method: 'POST' });
-  selectedSrc = null;
-  hideBanner();
+document.getElementById('btn-reset').addEventListener('click', () => {
+  // Don't reset immediately — open the overlay so the user can switch
+  // opponents if they want, then Play kicks off the actual reset.
+  showOverlay({ result: null, playLabel: 'Play' });
 });
 
 // ----- Opponent picker ------------------------------------------------------
@@ -871,27 +923,31 @@ async function loadChampions() {
     showToast('net error loading models: ' + err.message);
   }
 }
-$opp.addEventListener('change', async () => {
-  const champ = $opp.value;
-  if (!champ) return;
-  const shortLabel = $opp.options[$opp.selectedIndex]?.text ?? champ;
-  showToast('Loading ' + shortLabel + '...');
-  $opp.disabled = true;
+// Play button on the start/game-over overlay — applies the picked opponent
+// (if changed) then resets the sim and hides the overlay.
+$playBtn.addEventListener('click', async () => {
+  $playBtn.disabled = true;
+  $playBtn.textContent = 'Loading…';
+  const champ = $opp.value || null;
   try {
     const r = await fetch('/api/reset', {
-      method:  'POST',
+      method: 'POST',
       headers: {'content-type': 'application/json'},
-      body:    JSON.stringify({champion: champ}),
+      body: JSON.stringify(champ ? { champion: champ } : {}),
     });
     const j = await r.json();
-    if (j.error) { showToast('⚠ ' + j.error); return; }
+    if (j.error) {
+      showToast('⚠ ' + j.error);
+      $playBtn.textContent = 'Try again';
+      $playBtn.disabled = false;
+      return;
+    }
     selectedSrc = null;
-    hideBanner();
-    showToast('Now playing vs ' + (j.opponent || shortLabel));
+    hideOverlay();
   } catch (err) {
     showToast('net error: ' + err.message);
-  } finally {
-    $opp.disabled = false;
+    $playBtn.textContent = 'Try again';
+    $playBtn.disabled = false;
   }
 });
 
@@ -901,7 +957,6 @@ async function poll() {
     const r = await fetch('/api/state');
     const j = await r.json();
     lastState = j;
-    spawnCaptureFx(j);   // before render, so the burst paints on this frame
     render(j);
     updateSidebar(j);
     maybeCountGameEnd(j);
@@ -909,12 +964,23 @@ async function poll() {
 }
 
 (async () => {
-  // Kick off asset loading in parallel with the API setup — render falls
-  // back to colored circles until the sprites land, so don't block.
-  loadAssets();
-  await fetchConsts();
-  await loadChampions();
-  pollHandle = setInterval(poll, 100);  // 100ms = 10 Hz — server ticks at 5 Hz, this gives ~2× margin
+  // Show start overlay immediately with a loading state — Play button is
+  // disabled until assets + champion list are loaded.
+  showOverlay({ result: null, playLabel: 'Play' });
+  $playBtn.disabled = true;
+  $playBtn.innerHTML = '<span class="loading"><span class="spinner"></span>Loading…</span>';
+
+  // Load assets + API setup in parallel.
+  await Promise.all([
+    loadAssets(),
+    fetchConsts(),
+    loadChampions(),
+  ]);
+
+  $playBtn.innerHTML = '';
+  $playBtn.textContent = 'Play';
+  $playBtn.disabled = false;
+  pollHandle = setInterval(poll, 50);   // 20 Hz client (matches 10 Hz server ×2 margin)
   poll();
 })();
 </script>
