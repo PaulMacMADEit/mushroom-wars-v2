@@ -21,6 +21,7 @@ one game in this process so clicks get an immediate sim response.
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import os
 import sys
@@ -45,14 +46,31 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 # ---------------------------------------------------------------------------
 
 class _Session:
+    # Real-time pacing. The sim advances on its own clock; the user's clicks
+    # queue up and apply on the next decision tick. The agent (P2) picks its
+    # action every decision tick too — so this is fully real-time, not turn-
+    # based. 5 Hz feels active without spamming; the trained net was trained
+    # against an env stepping at this same decision-interval cadence.
+    TICK_HZ = 5
+
     def __init__(self, level_name: str, champion_run_id: str | None):
         self.level_name = level_name
         self.champion_run_id = champion_run_id
         self.env = None
         self.opponent_label = "(unloaded)"
         self.lock = threading.Lock()
+        # Thread-safe inbox of latest user actions. Each tick consumes up to
+        # one. maxlen=4 buffers small bursts (rapid clicks) without going
+        # unbounded.
+        self._action_queue: collections.deque[int] = collections.deque(maxlen=4)
+        self._ticker_thread: threading.Thread | None = None
+        self._ticker_running = False
 
     def reset(self, level_name: str | None = None, champion_run_id: str | None = None) -> None:
+        # Stop the old ticker before re-initializing the env. The old thread
+        # might still be holding self.lock — _stop_ticker waits for it.
+        self._stop_ticker()
+
         if level_name is not None:
             self.level_name = level_name
         if champion_run_id is not None:
@@ -75,6 +93,58 @@ class _Session:
 
         self.env = MushroomEnv(level_name=self.level_name, opponent=opponent, seed=int(time.time()) & 0xFFFF)
         self.env.reset()
+
+        # Drain any stale clicks queued before the reset.
+        self._action_queue.clear()
+        self._start_ticker()
+
+    # ------------------------------------------------------------------
+    # Real-time ticker
+    # ------------------------------------------------------------------
+
+    def _start_ticker(self) -> None:
+        self._ticker_running = True
+        t = threading.Thread(target=self._tick_loop, daemon=True, name="mw-ticker")
+        self._ticker_thread = t
+        t.start()
+
+    def _stop_ticker(self) -> None:
+        self._ticker_running = False
+        t = self._ticker_thread
+        if t and t.is_alive():
+            # Brief wait — the ticker's max iteration time is ~1/TICK_HZ.
+            t.join(timeout=2.0 / self.TICK_HZ)
+        self._ticker_thread = None
+
+    def _tick_loop(self) -> None:
+        """Background loop: advance the sim once per TICK_HZ regardless of
+        whether the user has clicked. Each tick consumes one queued user
+        action (or noop) and lets the agent take its turn via env.step()."""
+        from sim.actions import NOOP_INDEX
+        from sim import config as C
+
+        dt = 1.0 / self.TICK_HZ
+        next_t = time.time()
+        while self._ticker_running:
+            now = time.time()
+            wait = next_t - now
+            if wait > 0:
+                time.sleep(wait)
+            next_t += dt
+
+            with self.lock:
+                if self.env is None or self.env.state.phase != C.PHASE_PLAYING:
+                    # Game ended (or env was torn down) — stop ticking. A
+                    # /api/reset will restart us with a fresh game.
+                    self._ticker_running = False
+                    break
+                a_idx = self._action_queue.popleft() if self._action_queue else NOOP_INDEX
+                try:
+                    self.env.step(int(a_idx))
+                except Exception:
+                    traceback.print_exc()
+                    self._ticker_running = False
+                    break
 
     def state_json(self) -> dict:
         if self.env is None:
@@ -124,22 +194,18 @@ class _Session:
             "legal_actions": [int(i) for i in range(mask.shape[0]) if mask[i]],
         }
 
-    def step(self, action_idx: int) -> dict:
+    def enqueue_action(self, action_idx: int) -> dict:
+        """Buffer the user's click for the ticker to consume on the next
+        decision tick. Returns immediately — the actual sim step happens
+        in the background thread within ~200 ms."""
         from sim import config as C
         if self.env is None:
             return {"error": "not initialized"}
         if self.env.state.phase != C.PHASE_PLAYING:
             return {"error": f"game already ended (phase={int(self.env.state.phase)})"}
-        try:
-            obs, reward, terminated, truncated, info = self.env.step(int(action_idx))
-        except Exception as exc:
-            return {"error": f"{type(exc).__name__}: {exc}"}
-        return {
-            "ok":         True,
-            "reward":     float(reward),
-            "terminated": bool(terminated),
-            "truncated":  bool(truncated),
-        }
+        with self.lock:
+            self._action_queue.append(int(action_idx))
+        return {"ok": True, "queued": True, "queue_size": len(self._action_queue)}
 
 
 def _resolve_champion(run_id_prefix: str) -> tuple[str, str | None, str]:
@@ -248,10 +314,17 @@ _HTML = r"""<!doctype html>
   .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
   .layout { display: grid; grid-template-columns: 1fr 280px; gap: 0; }
   .canvas-wrap { position: relative; padding: 20px; }
-  canvas { background: #11141b; border-radius: 6px; cursor: crosshair; display: block;
-           width: 100%; max-width: 720px; aspect-ratio: 1; }
-  aside { padding: 16px; background: #0e1117; border-left: 1px solid #1f2330;
-          min-height: 100vh; }
+  canvas { background: #050610; border-radius: 6px; cursor: crosshair; display: block;
+           width: 100%; max-width: 720px; aspect-ratio: 1;
+           box-shadow: 0 0 40px rgba(96, 165, 250, 0.06) inset; }
+  /* Glassmorphism sidebar — translucent dark with backdrop blur. */
+  aside { padding: 16px; background: rgba(14, 17, 23, 0.72); border-left: 1px solid rgba(96, 165, 250, 0.12);
+          min-height: 100vh; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  /* Emblem corners on the canvas. */
+  .emblem-corner { position: absolute; width: 56px; height: 56px; opacity: 0.75;
+                   pointer-events: none; filter: drop-shadow(0 0 8px rgba(0,0,0,0.6)); }
+  .emblem-corner.tl { top: 32px;    left: 32px; }
+  .emblem-corner.tr { top: 32px;    right: 32px; }
   aside h3 { margin: 0 0 8px; font-size: 12px; color: #93a3b8; text-transform: uppercase;
              letter-spacing: 0.05em; }
   .stat { display: flex; justify-content: space-between; padding: 4px 0;
@@ -299,6 +372,8 @@ _HTML = r"""<!doctype html>
 <div class="layout">
   <div class="canvas-wrap">
     <canvas id="board" width="720" height="720"></canvas>
+    <img class="emblem-corner tl" id="emblem-tl" src="/assets/emblem-human.png" alt="">
+    <img class="emblem-corner tr" id="emblem-tr" src="/assets/emblem-alien.png" alt="">
     <div id="toast" class="toast"></div>
     <div id="phase-banner" class="phase-banner" style="display:none"></div>
   </div>
@@ -336,9 +411,10 @@ _HTML = r"""<!doctype html>
       <p><strong>1.</strong> Pick a send size above (or press <kbd>1</kbd>–<kbd>4</kbd>).</p>
       <p><strong>2.</strong> Click one of your (red) buildings to select a source.</p>
       <p><strong>3.</strong> Click any building to send that fraction of the garrison there.</p>
-      <p><strong>Esc</strong> or <kbd>right-click</kbd> to deselect. The agent moves on the
-         next decision interval (every 2 ticks). Game ends when one side has zero buildings
-         or you both run out of units.</p>
+      <p><strong>Esc</strong> or <kbd>right-click</kbd> to deselect.</p>
+      <p><strong>Real-time:</strong> the agent acts on its own clock — don't dawdle.
+         Garrisons regenerate automatically; the game runs until one side has zero
+         buildings or you both run out of units.</p>
     </div>
   </aside>
 </div>
@@ -377,8 +453,70 @@ function ownerColor(owner) {
 }
 
 function radiusFor(building) {
-  // Bigger capacity → larger circle. Cap at 30px so big buildings don't blow up.
-  return Math.min(30, 14 + building.capacity * 0.25);
+  // Bigger capacity → larger sprite. Cap at 38 px so big planets don't blow up.
+  return Math.min(38, 16 + building.capacity * 0.3);
+}
+
+// ── Asset preloader ──────────────────────────────────────────────────────
+// Sprite images are served by play_live.py at /assets/<name>.png. Drawn
+// onto the canvas in render() once loaded. Missing assets fall back to
+// solid colored circles so the page still works during a slow first-load.
+const ASSETS = {};
+const ASSET_NAMES = [
+  'background',
+  'planet-human', 'planet-alien', 'planet-neutral',
+  'fighter-human', 'fighter-alien',
+  'capture-fx',
+];
+function loadAssets() {
+  return Promise.all(ASSET_NAMES.map(n => new Promise(res => {
+    const img = new Image();
+    img.onload  = () => { ASSETS[n] = img; res(); };
+    img.onerror = () => { console.warn('asset missing:', n); res(); };
+    img.src = `/assets/${n}.png`;
+  })));
+}
+
+// ── Capture-FX state ────────────────────────────────────────────────────
+// When a building's owner flips between renders, spawn a short-lived burst
+// that gets composited on top of that building for ~600 ms. Each fx entry:
+// {x, y, r, startedAt}.
+const captureFx = [];
+let lastOwners = {};   // slot → owner, used to detect flips
+
+function spawnCaptureFx(state) {
+  if (!state || !state.buildings) return;
+  for (const b of state.buildings) {
+    const prev = lastOwners[b.slot];
+    if (prev !== undefined && prev !== b.owner) {
+      captureFx.push({ x: b.x, y: b.y, r: radiusFor(b), startedAt: performance.now() });
+    }
+    lastOwners[b.slot] = b.owner;
+  }
+}
+function drawCaptureFx() {
+  const now = performance.now();
+  const lifeMs = 600;
+  for (let i = captureFx.length - 1; i >= 0; i--) {
+    const fx = captureFx[i];
+    const t = (now - fx.startedAt) / lifeMs;
+    if (t > 1) { captureFx.splice(i, 1); continue; }
+    const [cx, cy] = simToCanvas(fx.x, fx.y);
+    // Burst grows + fades over the lifetime.
+    const r = fx.r * (1.2 + 1.6 * t);
+    CTX.save();
+    CTX.globalAlpha = 1 - t;
+    if (ASSETS['capture-fx']) {
+      CTX.drawImage(ASSETS['capture-fx'], cx - r, cy - r, r * 2, r * 2);
+    } else {
+      CTX.beginPath();
+      CTX.arc(cx, cy, r, 0, Math.PI * 2);
+      CTX.strokeStyle = '#fde047';
+      CTX.lineWidth = 3;
+      CTX.stroke();
+    }
+    CTX.restore();
+  }
 }
 
 function showToast(msg) {
@@ -395,34 +533,65 @@ function showBanner(text, kind) {
 }
 function hideBanner() { $banner.style.display = 'none'; }
 
+// Map owner code → planet sprite name. 0=neutral, 1=P1 (human), 2=P2 (alien).
+const PLANET_BY_OWNER = ['planet-neutral', 'planet-human', 'planet-alien'];
+const FIGHTER_BY_OWNER = ['fighter-human', 'fighter-human', 'fighter-alien'];  // owner 0 never moves
+
 function render(state) {
-  CTX.clearRect(0, 0, CV.width, CV.height);
+  // Background — full-canvas sprite, falls back to solid black.
+  if (ASSETS['background']) {
+    CTX.drawImage(ASSETS['background'], 0, 0, CV.width, CV.height);
+  } else {
+    CTX.fillStyle = '#050610';
+    CTX.fillRect(0, 0, CV.width, CV.height);
+  }
   if (!state || !state.ready) return;
 
-  // Buildings.
+  // Buildings — planet sprites by owner, with selected-source highlight ring.
   for (const b of state.buildings) {
     const [cx, cy] = simToCanvas(b.x, b.y);
     const r = radiusFor(b);
+    const spriteName = PLANET_BY_OWNER[b.owner] || 'planet-neutral';
+    const img = ASSETS[spriteName];
+    if (img) {
+      CTX.drawImage(img, cx - r, cy - r, r * 2, r * 2);
+    } else {
+      // Fallback: colored circle until sprite loads.
+      CTX.beginPath();
+      CTX.arc(cx, cy, r, 0, Math.PI * 2);
+      CTX.fillStyle = ownerColor(b.owner);
+      CTX.globalAlpha = 0.85;
+      CTX.fill();
+      CTX.globalAlpha = 1;
+    }
+    // Owner ring — thin colored stroke so red/blue/gray reads at a glance
+    // even with the realistic planet textures.
     CTX.beginPath();
-    CTX.arc(cx, cy, r, 0, Math.PI * 2);
-    CTX.fillStyle = ownerColor(b.owner);
-    CTX.globalAlpha = 0.85;
-    CTX.fill();
+    CTX.arc(cx, cy, r + 1, 0, Math.PI * 2);
+    CTX.strokeStyle = ownerColor(b.owner);
+    CTX.lineWidth = 2.5;
+    CTX.globalAlpha = 0.7;
+    CTX.stroke();
     CTX.globalAlpha = 1;
+    // Selected-source highlight.
     if (b.slot === selectedSrc) {
+      CTX.beginPath();
+      CTX.arc(cx, cy, r + 5, 0, Math.PI * 2);
       CTX.strokeStyle = '#facc15';
       CTX.lineWidth = 3;
       CTX.stroke();
     }
-    // Garrison number.
-    CTX.fillStyle = '#fff';
+    // Garrison number — bold + glow so it pops against the planet.
     CTX.font = 'bold 14px ui-monospace, monospace';
     CTX.textAlign = 'center';
     CTX.textBaseline = 'middle';
+    CTX.fillStyle = 'rgba(0,0,0,0.85)';
+    CTX.fillText(String(b.garrison), cx + 1, cy + 1);
+    CTX.fillStyle = '#fff';
     CTX.fillText(String(b.garrison), cx, cy);
   }
 
-  // Groups (in-flight squads).
+  // Groups (in-flight squads) — ship sprite rotated along travel direction.
   const buildingByIdx = {};
   for (const b of state.buildings) buildingByIdx[b.slot] = b;
   for (const g of state.groups) {
@@ -433,16 +602,36 @@ function render(state) {
     const x = src.x + (tgt.x - src.x) * frac;
     const y = src.y + (tgt.y - src.y) * frac;
     const [cx, cy] = simToCanvas(x, y);
-    CTX.beginPath();
-    CTX.arc(cx, cy, 6, 0, Math.PI * 2);
-    CTX.fillStyle = ownerColor(g.owner);
-    CTX.fill();
-    CTX.fillStyle = '#fff';
-    CTX.font = '10px ui-monospace, monospace';
+    const [tcx, tcy] = simToCanvas(tgt.x, tgt.y);
+    const angle = Math.atan2(tcy - cy, tcx - cx);  // 0 rad = +x (right)
+    const spriteName = FIGHTER_BY_OWNER[g.owner];
+    const img = ASSETS[spriteName];
+    const size = 18;
+    if (img) {
+      CTX.save();
+      CTX.translate(cx, cy);
+      // Sprite is drawn nose-up (-y); rotate so nose points along travel.
+      CTX.rotate(angle + Math.PI / 2);
+      CTX.drawImage(img, -size / 2, -size / 2, size, size);
+      CTX.restore();
+    } else {
+      CTX.beginPath();
+      CTX.arc(cx, cy, 6, 0, Math.PI * 2);
+      CTX.fillStyle = ownerColor(g.owner);
+      CTX.fill();
+    }
+    // Unit count just behind the ship.
+    CTX.font = 'bold 11px ui-monospace, monospace';
     CTX.textAlign = 'center';
     CTX.textBaseline = 'middle';
-    CTX.fillText(String(g.count), cx, cy);
+    CTX.fillStyle = 'rgba(0,0,0,0.85)';
+    CTX.fillText(String(g.count), cx + 1, cy + size / 2 + 9);
+    CTX.fillStyle = ownerColor(g.owner);
+    CTX.fillText(String(g.count), cx, cy + size / 2 + 8);
   }
+
+  // Capture FX last — overlays sit on top of buildings.
+  drawCaptureFx();
 }
 
 function updateSidebar(state) {
@@ -712,6 +901,7 @@ async function poll() {
     const r = await fetch('/api/state');
     const j = await r.json();
     lastState = j;
+    spawnCaptureFx(j);   // before render, so the burst paints on this frame
     render(j);
     updateSidebar(j);
     maybeCountGameEnd(j);
@@ -719,9 +909,12 @@ async function poll() {
 }
 
 (async () => {
+  // Kick off asset loading in parallel with the API setup — render falls
+  // back to colored circles until the sprites land, so don't block.
+  loadAssets();
   await fetchConsts();
   await loadChampions();
-  pollHandle = setInterval(poll, 150);  // 150ms ≈ smooth without flooding
+  pollHandle = setInterval(poll, 100);  // 100ms = 10 Hz — server ticks at 5 Hz, this gives ~2× margin
   poll();
 })();
 </script>
@@ -787,6 +980,27 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/" or self.path == "/index.html":
             self._html(_HTML)
             return
+        if self.path.startswith("/assets/"):
+            name = self.path[len("/assets/"):]
+            # Whitelist: only [a-zA-Z0-9._-] allowed, prevents directory escape.
+            if not all(ch.isalnum() or ch in "._-" for ch in name) or "/" in name or ".." in name:
+                self.send_error(400, "bad asset name")
+                return
+            repo = Path(__file__).resolve().parent.parent
+            path = repo / "dashboard" / "lib" / "assets" / name
+            if not path.exists():
+                self.send_error(404)
+                return
+            data = path.read_bytes()
+            self.send_response(200)
+            self._cors()
+            ctype = "image/png" if name.endswith(".png") else "application/octet-stream"
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path == "/api/state":
             with self.session.lock:
                 self._json(self.session.state_json())
@@ -824,8 +1038,10 @@ class _Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._json({"error": f"bad request: {exc}"}, status=400)
                 return
-            with self.session.lock:
-                self._json(self.session.step(idx))
+            # No lock here — enqueue_action manages its own under the hood.
+            # Returning immediately lets the click feel snappy; the actual
+            # sim step happens on the next tick (≤200 ms).
+            self._json(self.session.enqueue_action(idx))
             return
         if self.path == "/api/reset":
             try:
