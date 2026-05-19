@@ -215,6 +215,16 @@
 
       <div id="status" class="status-line" style="display:none"></div>
     </div>
+
+    <!-- Recent-matches drawer. Loaded after the form so users see the
+         player picker first; the history is supplementary. -->
+    <div class="card" style="margin-top:20px;">
+      <h3 style="margin:0 0 12px 0;">Recent matches</h3>
+      <div class="muted small" style="margin-bottom:10px;">
+        Last 20 interactive-play matches. Click a row to expand and see per-game replay links.
+      </div>
+      <div id="recent-matches">Loading…</div>
+    </div>
   </main>
 
   <script type="module">
@@ -603,6 +613,9 @@
           `;
           // Re-enable Play so the user can re-queue the same setup with one click.
           $play.disabled = false;
+          // Refresh the history drawer so the just-finished match shows up
+          // at the top without requiring a page reload.
+          loadRecentMatches();
           return;
         }
         if (m.status === 'failed') {
@@ -617,6 +630,151 @@
 
     $play.addEventListener('click', queueAndWatch);
     populateRuns();
+
+    // ── Recent matches drawer ─────────────────────────────────────────────
+    // Lazy per-match games fetch: on first click of a row we hit the games
+    // table for that match_id and render the per-game replay links inline.
+    // Cache results so toggling the row open/closed doesn't re-query.
+    const $recent = document.getElementById('recent-matches');
+    const _gamesCache = new Map();   // matchId → array of game rows
+
+    function relTime(iso) {
+      const t = new Date(iso).getTime();
+      const diffS = Math.round((Date.now() - t) / 1000);
+      if (diffS < 60)    return `${diffS}s ago`;
+      if (diffS < 3600)  return `${Math.round(diffS/60)}m ago`;
+      if (diffS < 86400) return `${Math.round(diffS/3600)}h ago`;
+      return `${Math.round(diffS/86400)}d ago`;
+    }
+
+    async function loadRecentMatches() {
+      // Get last N interactive-play matches. Include 'queued' / 'running'
+      // so the user can see their just-queued match show up here too — the
+      // page already polls the queueAndWatch flow for live progress, so
+      // surfacing "in flight" matches in the history table is just a
+      // navigation breadcrumb (you can leave the page and come back).
+      const { data: matches, error } = await sb.from('matches')
+        .select('id, model_a_run_id, model_b_run_id, status, created_at, finished_at, summary')
+        .eq('project', 'mushroom-wars')
+        .eq('description', 'interactive-play')
+        .order('created_at', { ascending: false })
+        .limit(20);
+      if (error) {
+        $recent.innerHTML = `<div class="muted small">Couldn't load history: ${esc(error.message)}</div>`;
+        return;
+      }
+      if (!matches || matches.length === 0) {
+        $recent.innerHTML = `<div class="muted small">No interactive-play matches yet — queue one above.</div>`;
+        return;
+      }
+      // Batch-fetch labels for every run id referenced. Some runs may not
+      // have weights anymore (or be the baseline); falls back to a short
+      // id on miss.
+      const ids = [...new Set(matches.flatMap(m => [m.model_a_run_id, m.model_b_run_id]).filter(Boolean))];
+      const { data: runs } = await sb.from('runs')
+        .select('id, label')
+        .in('id', ids);
+      const labelById = Object.fromEntries((runs || []).map(r => [r.id, r.label || r.id.slice(0,8)]));
+      const labelOf = id => labelById[id] || (id ? id.slice(0,8) : '—');
+
+      function renderRow(m) {
+        const s = m.summary || {};
+        const level = s.level_name || '?';
+        const selfPlay = m.model_a_run_id && m.model_a_run_id === m.model_b_run_id;
+        const labelA = labelOf(m.model_a_run_id);
+        const labelB = selfPlay ? '(self)' : labelOf(m.model_b_run_id);
+        const winsA = s.wins_a, winsB = s.wins_b, draws = s.draws;
+        const resultCell = (winsA != null && winsB != null)
+          ? `<span class="winner-bubble win-p1">${winsA}</span>–<span class="winner-bubble win-p2">${winsB}</span>` + (draws ? ` <span class="winner-bubble win-draw">${draws}d</span>` : '')
+          : `<span class="muted small">${esc(m.status)}</span>`;
+        const dropdownIcon = `<span class="mono" data-icon="${m.id}" style="display:inline-block; width:12px;">▸</span>`;
+        return `
+          <tr class="match-row" data-id="${m.id}" style="cursor:pointer;">
+            <td>${dropdownIcon}</td>
+            <td><span class="muted small">${esc(relTime(m.created_at))}</span></td>
+            <td><span class="mono">${esc(labelA)}</span></td>
+            <td><span class="muted">vs</span></td>
+            <td><span class="mono">${esc(labelB)}</span></td>
+            <td><span class="mono">${esc(level)}</span></td>
+            <td>${resultCell}</td>
+          </tr>
+          <tr class="match-games" data-id="${m.id}" style="display:none;">
+            <td colspan="7" style="padding-left:36px; background:rgba(255,255,255,0.02);">
+              <div data-games-for="${m.id}" class="muted small">Loading games…</div>
+            </td>
+          </tr>`;
+      }
+
+      $recent.innerHTML = `
+        <table style="width:100%;">
+          <thead>
+            <tr>
+              <th></th><th>when</th><th>P1</th><th></th><th>P2</th><th>level</th><th>result</th>
+            </tr>
+          </thead>
+          <tbody>${matches.map(renderRow).join('')}</tbody>
+        </table>`;
+
+      // Wire row clicks → toggle the games panel; lazy-fetch on first open.
+      for (const row of $recent.querySelectorAll('tr.match-row')) {
+        row.addEventListener('click', async () => {
+          const id = row.dataset.id;
+          const panel = $recent.querySelector(`tr.match-games[data-id="${id}"]`);
+          const icon = $recent.querySelector(`[data-icon="${id}"]`);
+          const open = panel.style.display !== 'none';
+          panel.style.display = open ? 'none' : 'table-row';
+          if (icon) icon.textContent = open ? '▸' : '▾';
+          if (open) return;
+          if (_gamesCache.has(id)) {
+            renderGamesPanel(id, _gamesCache.get(id));
+            return;
+          }
+          const { data: rows, error: gErr } = await sb.from('games')
+            .select('id, game_index, winner, actions_url, stats, player_1_run_id, player_2_run_id')
+            .eq('match_id', id)
+            .order('game_index', { ascending: true });
+          if (gErr) {
+            renderGamesPanel(id, [], gErr.message);
+            return;
+          }
+          _gamesCache.set(id, rows || []);
+          renderGamesPanel(id, rows || []);
+        });
+      }
+    }
+
+    function renderGamesPanel(matchId, rows, err) {
+      const $panel = $recent.querySelector(`[data-games-for="${matchId}"]`);
+      if (!$panel) return;
+      if (err) {
+        $panel.innerHTML = `<span class="muted small">Couldn't load games: ${esc(err)}</span>`;
+        return;
+      }
+      if (rows.length === 0) {
+        $panel.innerHTML = `<span class="muted small">No games yet (match may still be running).</span>`;
+        return;
+      }
+      const cells = rows.map(g => {
+        const phase = g.stats?.phase;
+        const ticks = g.stats?.ticks ?? '—';
+        const side = phase === 1 ? 'p1' : phase === 2 ? 'p2' : phase === 3 ? 'draw' : null;
+        const cls = side === 'p1' ? 'win-p1' : side === 'p2' ? 'win-p2' : side === 'draw' ? 'win-draw' : '';
+        const label = side === 'p1' ? 'P1' : side === 'p2' ? 'P2' : side === 'draw' ? 'draw' : '?';
+        const url = g.actions_url ? publicUrl(g.actions_url) : null;
+        const link = url
+          ? `<a href="./game.html?url=${encodeURIComponent(url)}&match=${encodeURIComponent(matchId)}">▶ watch</a>`
+          : `<span class="muted small">no replay</span>`;
+        return `<span style="display:inline-block; margin:4px 12px 4px 0;">
+          <span class="mono">#${g.game_index + 1}</span>
+          <span class="winner-bubble ${cls}" style="margin-left:4px;">${label}</span>
+          <span class="muted small">(${esc(String(ticks))}t)</span>
+          ${link}
+        </span>`;
+      }).join('');
+      $panel.innerHTML = cells;
+    }
+
+    loadRecentMatches();
   </script>
 </body>
 </html>
