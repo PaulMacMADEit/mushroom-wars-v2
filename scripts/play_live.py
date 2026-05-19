@@ -714,18 +714,31 @@ function render(state) {
     const spriteName = FIGHTER_BY_OWNER[tr.owner];
     const img = ASSETS[spriteName];
     const ownerCol = ownerColor(tr.owner);
-    // One small ship per "displayed" unit (count÷10), capped at 8 so big
-    // sends don't clutter. Distribute perpendicular to the travel axis
-    // in a tight squadron formation.
-    const numShips = Math.min(8, Math.max(1, Math.round(tr.count / 10)));
-    const baseSize = Math.max(18, radiusFor({capacity: 0}) * 0.55);
-    const spacing  = baseSize * 0.7;
+    // One small ship per "displayed" unit (count÷10), capped at 30 to
+    // match the per-planet capacity. Earlier cap of 8 made a 30-unit
+    // send look identical to an 8-unit one. Lay out in rows of up to
+    // SHIPS_PER_ROW perpendicular to travel, stacking additional rows
+    // BEHIND the lead row so big squadrons read as a deep formation
+    // rather than overflowing horizontally.
+    const numShips = Math.min(30, Math.max(1, Math.round(tr.count / 10)));
+    const baseSize = Math.max(16, radiusFor({capacity: 0}) * 0.5);
+    const SHIPS_PER_ROW = 6;
+    const rowCount = Math.ceil(numShips / SHIPS_PER_ROW);
+    const perpSpacing = baseSize * 0.7;
+    const longSpacing = baseSize * 0.85;
     const perpX = -Math.sin(angle), perpY = Math.cos(angle);
+    const longX =  Math.cos(angle), longY = Math.sin(angle);
     for (let i = 0; i < numShips; i++) {
-      // Centre the formation; offsets are -(N-1)/2 .. +(N-1)/2 * spacing.
-      const offset = (i - (numShips - 1) / 2) * spacing;
-      const cx = cx0 + perpX * offset;
-      const cy = cy0 + perpY * offset;
+      // The last row may be partial — centre it on its own width so it
+      // sits neatly behind the full rows rather than offset to one side.
+      const rowIdx = Math.floor(i / SHIPS_PER_ROW);
+      const colIdx = i % SHIPS_PER_ROW;
+      const inThisRow = (rowIdx === rowCount - 1)
+        ? (numShips - rowIdx * SHIPS_PER_ROW) : SHIPS_PER_ROW;
+      const perpOffset = (colIdx - (inThisRow - 1) / 2) * perpSpacing;
+      const longOffset = -rowIdx * longSpacing;   // negative = behind lead row
+      const cx = cx0 + perpX * perpOffset + longX * longOffset;
+      const cy = cy0 + perpY * perpOffset + longY * longOffset;
       if (img) {
         CTX.save();
         CTX.translate(cx, cy);
