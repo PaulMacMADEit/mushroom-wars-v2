@@ -471,7 +471,14 @@
         setStatus('error', `Queue failed: ${esc(rpcErr.message)}`);
         return;
       }
-      setStatus('working', `Queued ${games}-game match <span class="mono">${esc(matchId.slice(0,8))}...</span> on Mac. Waiting for worker...`);
+      // Progress UX has three live stages — queued / processing / loading —
+      // each with an elapsed-seconds counter so the user can tell the page
+      // is alive (matters most when a Chrome tab gets backgrounded and
+      // setTimeout throttles; coming back to the page should immediately
+      // show meaningful progress, not a stale "queued" message).
+      const matchIdShort = `<span class="mono">${esc(matchId.slice(0,8))}…</span>`;
+      const queuedStart = Date.now();
+      setStatus('working', `Queued ${games}-game match ${matchIdShort} on Mac. Waiting for worker… <span class="mono">0s</span>`);
 
       // Poll for completion. Generous timeout: Mac worker may need to JIT
       // warm up, then N games on top of that. Scale with the games count
@@ -479,17 +486,42 @@
       const started = Date.now();
       const timeoutMs = Math.min(60_000 + games * 10_000, 30 * 60_000);
       let phase = 'queued';
+      let runStart = null;
 
       while (Date.now() - started < timeoutMs) {
-        await new Promise(r => setTimeout(r, 2000));
-        const { data: m } = await sb.from('matches').select('status').eq('id', matchId).single();
+        // 1.5 s when running (we want timely "game N of M" updates), 2.5 s
+        // while queued (the match isn't going anywhere fast — gentler poll).
+        await new Promise(r => setTimeout(r, phase === 'running' ? 1500 : 2500));
+        // Fetch status + a count of finished games in parallel. The games
+        // table is populated incrementally as each game completes, so its
+        // count gives true "game N of M" progress mid-match.
+        const [matchRes, gamesCountRes] = await Promise.all([
+          sb.from('matches').select('status').eq('id', matchId).single(),
+          sb.from('games').select('id', { count: 'exact', head: true }).eq('match_id', matchId),
+        ]);
+        const m = matchRes.data;
+        const gamesDone = gamesCountRes.count ?? 0;
         if (!m) continue;
-        if (m.status === 'running' && phase !== 'running') {
-          phase = 'running';
-          setStatus('working', 'Worker is playing the game...');
+        if (m.status === 'queued') {
+          const qElapsed = Math.floor((Date.now() - queuedStart) / 1000);
+          setStatus('working', `Queued ${games}-game match ${matchIdShort} on Mac. Waiting for worker… <span class="mono">${qElapsed}s</span>`);
+        }
+        if (m.status === 'running') {
+          if (phase !== 'running') {
+            phase = 'running';
+            runStart = Date.now();
+          }
+          const rElapsed = Math.floor((Date.now() - runStart) / 1000);
+          // Current game = games already finished + 1 (the one in flight),
+          // capped at `games` so the display reads "10 of 10" right before
+          // the status flips to done.
+          const currentGame = Math.min(gamesDone + 1, games);
+          setStatus('working',
+            `Processing match ${matchIdShort} — playing game <strong>${currentGame}</strong> of <strong>${games}</strong> ` +
+            `<span class="mono">(${rElapsed}s elapsed, ${gamesDone} done)</span>`);
         }
         if (m.status === 'done') {
-          setStatus('working', 'Loading replays...');
+          setStatus('working', `Match done — loading replays… <span class="mono">${gamesDone}/${games} games</span>`);
           const { data: games } = await sb.from('games')
             .select('id, game_index, winner, duration_ms, actions_url, player_1_run_id, player_2_run_id, stats')
             .eq('match_id', matchId)
