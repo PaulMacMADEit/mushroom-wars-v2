@@ -74,6 +74,37 @@ class _Session:
         # Event sidesteps that — the old thread's Event stays set, the new
         # thread has its own fresh Event.
         self._ticker_stop: threading.Event | None = None
+        # Opponent cache, keyed by champion run_id. The first reset to a
+        # given opponent pays the Supabase round-trip + 7.5 MB weights
+        # download + torch.load (~3-5 s wall clock); every subsequent
+        # reset to the SAME opponent reuses the cached callable, dropping
+        # the New-Game latency to ~100 ms (just env regen). Stateless
+        # torch model in eval mode, so reuse across episodes is the same
+        # contract that training uses across thousands of rollouts.
+        self._opponent_cache: dict[str, tuple] = {}
+
+    def _get_opponent(self, run_id: str | None) -> tuple:
+        """Return (opponent_callable, label) for `run_id`, downloading +
+        building on first call and serving cached results thereafter.
+
+        run_id semantics match the rest of the file:
+          - None or "random_legal" → the cheap baseline opponent
+          - anything else          → champion lookup via Supabase + torch
+        """
+        from sim.envs.opponents import random_legal_opponent, make_neural_opponent
+        if run_id is None or run_id == "random_legal":
+            return random_legal_opponent, "random_legal"
+        cached = self._opponent_cache.get(run_id)
+        if cached is not None:
+            return cached
+        w_path, n_path, label = _resolve_champion(run_id)
+        opponent = make_neural_opponent(
+            weights_path=w_path,
+            obs_norm_path=n_path,
+            device="cpu",
+        )
+        self._opponent_cache[run_id] = (opponent, label)
+        return opponent, label
 
     def reset(self, level_name: str | None = None, champion_run_id: str | None = None) -> None:
         # Stop the old ticker before re-initializing the env. The old thread
@@ -86,19 +117,8 @@ class _Session:
             self.champion_run_id = champion_run_id
 
         from sim.envs.mushroom_env import MushroomEnv
-        from sim.envs.opponents import random_legal_opponent, make_neural_opponent
 
-        if self.champion_run_id is None or self.champion_run_id == "random_legal":
-            opponent = random_legal_opponent
-            self.opponent_label = "random_legal"
-        else:
-            w_path, n_path, label = _resolve_champion(self.champion_run_id)
-            opponent = make_neural_opponent(
-                weights_path=w_path,
-                obs_norm_path=n_path,
-                device="cpu",
-            )
-            self.opponent_label = label
+        opponent, self.opponent_label = self._get_opponent(self.champion_run_id)
 
         self.env = MushroomEnv(level_name=self.level_name, opponent=opponent, seed=int(time.time()) & 0xFFFF)
         self.env.reset()
