@@ -521,12 +521,19 @@
             `<span class="mono">(${rElapsed}s elapsed, ${gamesDone} done)</span>`);
         }
         if (m.status === 'done') {
+          // Rename the games-rows shadow var to `gameRows` so the outer
+          // `games` (game-count int from the dropdown) stays reachable in
+          // this scope. The old code shadowed it with `const { data: games }`
+          // which put the outer binding in the temporal-dead-zone for the
+          // whole block — any reference to `games` before the const line
+          // threw a silent ReferenceError, halting the poll loop on the
+          // last "processing" message.
           setStatus('working', `Match done — loading replays… <span class="mono">${gamesDone}/${games} games</span>`);
-          const { data: games } = await sb.from('games')
+          const { data: gameRows } = await sb.from('games')
             .select('id, game_index, winner, duration_ms, actions_url, player_1_run_id, player_2_run_id, stats')
             .eq('match_id', matchId)
             .order('game_index', { ascending: true });
-          if (!games || games.length === 0) {
+          if (!gameRows || gameRows.length === 0) {
             $play.disabled = false;
             setStatus('error', 'Match finished but no replays were uploaded.');
             return;
@@ -545,12 +552,12 @@
             if (g.winner === g.player_2_run_id) return 'p2';
             return 'draw';
           }
-          const sides = games.map(sideOf);
+          const sides = gameRows.map(sideOf);
           const winsP1 = sides.filter(s => s === 'p1').length;
           const winsP2 = sides.filter(s => s === 'p2').length;
           const draws  = sides.filter(s => s === 'draw').length;
-          const isSelfPlay = games[0]?.player_1_run_id === games[0]?.player_2_run_id;
-          const rows = games.map((g, i) => {
+          const isSelfPlay = gameRows[0]?.player_1_run_id === gameRows[0]?.player_2_run_id;
+          const rows = gameRows.map((g, i) => {
             const url = g.actions_url ? publicUrl(g.actions_url) : null;
             const ticks = g.stats?.ticks;
             const ticksStr = (ticks != null) ? `${ticks} ticks` : '—';
