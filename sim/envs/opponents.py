@@ -191,12 +191,25 @@ def _state_to_obs(state: State, mask_player: int) -> dict:
 
 
 def _mirror_ownership(obs: dict) -> dict:
-    """Swap P1↔P2 in every owner-keyed field. Returns a shallow-copied dict
-    with fresh owner arrays; all other fields reference the originals.
+    """Mirror an observation from P1's perspective to P2's: swap ownership
+    AND 180°-rotate building positions around the alive-buildings bbox
+    centre.
 
-    v10: also swaps `arrivals_p1` ↔ `arrivals_p2`, prev_p*_units_total,
-    last_actions_p1 ↔ p2, and re-codes prev_buildings_owner P1↔P2. So the
-    encoder always sees the active player as "P1" regardless of true side.
+    Why both: a network trained as P1 expects its bases at roughly the
+    coordinates the generator placed P1 at. With ownership-swap alone,
+    when it plays as P2 it sees its (now relabeled "P1") bases sitting
+    at P2's actual coordinates — top-right corner instead of bottom-left
+    on sym levels, right half instead of left on asym. That's out of
+    distribution. The 180° rotation puts those bases back where the
+    network expects them — on sym levels the rotation lands P2's bases
+    EXACTLY on P1's training-time coordinates (bbox centre = map centre
+    for symmetric placement); on asym levels it's approximate but
+    in-distribution. Slot indices, distances, travel matrix, and the
+    action mask are all rotation-invariant, so the only obs fields that
+    need the geometric swap are buildings_x / buildings_y.
+
+    v10: also swaps arrivals_p1 ↔ arrivals_p2, prev_p*_units_total,
+    last_actions_p1 ↔ p2, and re-codes prev_buildings_owner P1↔P2.
     """
     mirrored = dict(obs)
     for key in ("buildings_owner", "groups_owner", "prev_buildings_owner"):
@@ -216,6 +229,22 @@ def _mirror_ownership(obs: dict) -> dict:
         if key_p1 in obs and key_p2 in obs:
             mirrored[key_p1] = obs[key_p2]
             mirrored[key_p2] = obs[key_p1]
+    # 180° rotate building positions around alive-bbox centre.
+    if "buildings_x" in obs and "buildings_y" in obs:
+        bx = obs["buildings_x"]
+        by = obs["buildings_y"]
+        alive = obs.get("buildings_alive")
+        if alive is not None and np.asarray(alive).astype(bool).any():
+            mask = np.asarray(alive).astype(bool)
+            cx = 0.5 * (float(bx[mask].max()) + float(bx[mask].min()))
+            cy = 0.5 * (float(by[mask].max()) + float(by[mask].min()))
+        else:
+            # No alive slots — degenerate; fall back to obs mean. The
+            # opponent won't have legal actions anyway in this case.
+            cx = float(np.asarray(bx).mean())
+            cy = float(np.asarray(by).mean())
+        mirrored["buildings_x"] = (2.0 * cx - bx).astype(bx.dtype)
+        mirrored["buildings_y"] = (2.0 * cy - by).astype(by.dtype)
     return mirrored
 
 
@@ -477,13 +506,28 @@ def _build_opponent_callable(agent, obs_norm, recorder, encode_fn=None):
         g_owner_m    = _swap(g_owner)
         prev_owner_m = _swap(prev_owner)
 
+        # 180° rotate positions around alive-bbox centre (per-batch). Same
+        # rationale as _mirror_ownership for the single-state path: the
+        # net was trained on P1 coordinates; without this it sees its
+        # (mirrored) bases at P2's actual coordinates — out of distribution
+        # on asym levels, slightly off on sym levels.
+        alive_mask = b_alive.astype(bool)
+        bx_min = np.where(alive_mask, b_x,  np.inf).min(axis=1)
+        bx_max = np.where(alive_mask, b_x, -np.inf).max(axis=1)
+        by_min = np.where(alive_mask, b_y,  np.inf).min(axis=1)
+        by_max = np.where(alive_mask, b_y, -np.inf).max(axis=1)
+        cx = 0.5 * (bx_min + bx_max)          # (N,)
+        cy = 0.5 * (by_min + by_max)          # (N,)
+        b_x_m = (2.0 * cx[:, None] - b_x).astype(b_x.dtype)
+        b_y_m = (2.0 * cy[:, None] - b_y).astype(b_y.dtype)
+
         batched = {
             "buildings_alive":      b_alive,
             "buildings_owner":      b_owner_m,
             "buildings_garrison":   b_garrison,
             "buildings_capacity":   b_capacity,
-            "buildings_x":          b_x,
-            "buildings_y":          b_y,
+            "buildings_x":          b_x_m,
+            "buildings_y":          b_y_m,
             "groups_alive":         g_alive,
             "groups_owner":         g_owner_m,
             "groups_tgt":           g_tgt,
