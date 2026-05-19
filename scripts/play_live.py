@@ -460,6 +460,16 @@ _HTML = r"""<!doctype html>
         <option value="">loading…</option>
       </select>
 
+      <label for="overlay-level">Map</label>
+      <select id="overlay-level" class="mono">
+        <option value="random_close_4_5" selected>random_close_4_5  (small, 4–5 worlds)</option>
+        <option value="random_close_4_6">random_close_4_6  (small, 4–6 worlds)</option>
+        <option value="random_close_4_8">random_close_4_8  (small, 4–8 worlds)</option>
+        <option value="random_4_5">random_4_5  (large, 4–5 worlds)</option>
+        <option value="random_4_8">random_4_8  (large, 4–8 worlds)</option>
+        <option value="crossroads_6">crossroads_6  (fixed map)</option>
+      </select>
+
       <button class="play-btn" id="play-btn" disabled>
         <span class="loading"><span class="spinner"></span>Loading…</span>
       </button>
@@ -470,7 +480,8 @@ _HTML = r"""<!doctype html>
 // Canvas-only state. The server is the source of truth; we just paint.
 const CV  = document.getElementById('board');
 const CTX = CV.getContext('2d');
-const $opp = document.getElementById('overlay-opp');   // pre-game opponent picker
+const $opp = document.getElementById('overlay-opp');     // pre-game opponent picker
+const $level = document.getElementById('overlay-level'); // pre-game map picker
 const $oppDisplay = document.getElementById('opp-display');  // current opponent label in HUD
 const $lvl = document.getElementById('level-label');
 const $toast = document.getElementById('toast');
@@ -671,37 +682,49 @@ function render(state) {
   for (const [, tr] of fighterTracker) {
     const elapsedSec = (nowMs - tr.startTime) / 1000;
     const frac = Math.min(1, elapsedSec / tr.durationSec);
-    const x = tr.srcX + (tr.tgtX - tr.srcX) * frac;
-    const y = tr.srcY + (tr.tgtY - tr.srcY) * frac;
-    const [cx, cy] = simToCanvas(x, y);
+    const cx0_sim = tr.srcX + (tr.tgtX - tr.srcX) * frac;
+    const cy0_sim = tr.srcY + (tr.tgtY - tr.srcY) * frac;
+    const [cx0, cy0] = simToCanvas(cx0_sim, cy0_sim);
     const [tcx, tcy] = simToCanvas(tr.tgtX, tr.tgtY);
-    const angle = Math.atan2(tcy - cy, tcx - cx);
+    const angle = Math.atan2(tcy - cy0, tcx - cx0);
     const spriteName = FIGHTER_BY_OWNER[tr.owner];
     const img = ASSETS[spriteName];
-    const size = Math.max(22, radiusFor({capacity: 0}) * 0.7);
-    if (img) {
-      CTX.save();
-      CTX.translate(cx, cy);
-      CTX.rotate(angle + Math.PI / 2);
-      CTX.beginPath();
-      CTX.arc(0, 0, size / 2, 0, Math.PI * 2);
-      CTX.clip();
-      CTX.drawImage(img, -size / 2, -size / 2, size, size);
-      CTX.restore();
-    } else {
-      CTX.beginPath();
-      CTX.arc(cx, cy, 8, 0, Math.PI * 2);
-      CTX.fillStyle = ownerColor(tr.owner);
-      CTX.fill();
+    const ownerCol = ownerColor(tr.owner);
+    // One small ship per "displayed" unit (count÷10), capped at 8 so big
+    // sends don't clutter. Distribute perpendicular to the travel axis
+    // in a tight squadron formation.
+    const numShips = Math.min(8, Math.max(1, Math.round(tr.count / 10)));
+    const baseSize = Math.max(18, radiusFor({capacity: 0}) * 0.55);
+    const spacing  = baseSize * 0.7;
+    const perpX = -Math.sin(angle), perpY = Math.cos(angle);
+    for (let i = 0; i < numShips; i++) {
+      // Centre the formation; offsets are -(N-1)/2 .. +(N-1)/2 * spacing.
+      const offset = (i - (numShips - 1) / 2) * spacing;
+      const cx = cx0 + perpX * offset;
+      const cy = cy0 + perpY * offset;
+      if (img) {
+        CTX.save();
+        CTX.translate(cx, cy);
+        CTX.rotate(angle + Math.PI / 2);
+        CTX.beginPath();
+        CTX.arc(0, 0, baseSize / 2, 0, Math.PI * 2);
+        CTX.clip();
+        CTX.drawImage(img, -baseSize / 2, -baseSize / 2, baseSize, baseSize);
+        // Owner-color tint on top of the sprite — same source-atop trick
+        // we use on planets. Without this the human ship reads as
+        // metallic-gray at small sizes; users can't tell P1 from P2.
+        CTX.fillStyle = ownerCol;
+        CTX.globalAlpha = 0.55;
+        CTX.fillRect(-baseSize / 2, -baseSize / 2, baseSize, baseSize);
+        CTX.globalAlpha = 1;
+        CTX.restore();
+      } else {
+        CTX.beginPath();
+        CTX.arc(cx, cy, baseSize / 3, 0, Math.PI * 2);
+        CTX.fillStyle = ownerCol;
+        CTX.fill();
+      }
     }
-    const countDisplay = Math.round(tr.count / 10);
-    CTX.font = 'bold 12px ui-monospace, monospace';
-    CTX.textAlign = 'center';
-    CTX.textBaseline = 'middle';
-    CTX.fillStyle = 'rgba(0,0,0,0.85)';
-    CTX.fillText(String(countDisplay), cx + 1, cy + size / 2 + 9);
-    CTX.fillStyle = ownerColor(tr.owner);
-    CTX.fillText(String(countDisplay), cx, cy + size / 2 + 8);
   }
 
   // Impact flashes — short-lived expanding ring at the target.
@@ -821,8 +844,9 @@ function updateSidebar(state) {
   $oppDisplay.textContent = state.opponent ?? '—';
   $lvl.textContent = state.level ?? '—';
 
-  // Bottom balance bar: P1 vs P2 only (neutral excluded — this represents
-  // the war between you and the agent, not the wider system).
+  // Bottom balance bar: width is proportional (P1 vs P2 only, neutral
+  // excluded) but the LABEL shows the raw count ÷10 so the user can read
+  // absolute strength, not just relative share.
   const totMine  = mineU + mineF;
   const totEnemy = enemyU + enemyF;
   const total = totMine + totEnemy || 1;
@@ -832,8 +856,10 @@ function updateSidebar(state) {
   const $p2 = document.getElementById('balance-p2');
   $p1.style.width = pctP1 + '%';
   $p2.style.width = pctP2 + '%';
-  $p1.textContent = pctP1 > 6 ? `${pctP1}%` : '';
-  $p2.textContent = pctP2 > 6 ? `${pctP2}%` : '';
+  const p1Display = Math.round(totMine  / 10);
+  const p2Display = Math.round(totEnemy / 10);
+  $p1.textContent = pctP1 > 6 ? `${p1Display}` : '';
+  $p2.textContent = pctP2 > 6 ? `${p2Display}` : '';
 
   // Game-over → show the overlay on the RISING EDGE (phase transitioning
   // from 0 → non-0). Using rising-edge avoids the race where a stale poll
@@ -982,8 +1008,39 @@ CV.addEventListener('click', async (e) => {
     return;
   }
   const actionIdx = buildSendAction(selectedSrc, tgtSlot, selectedTypeIdx);
+  // CLIENT-SIDE SPAWN — record the fighter in the tracker BEFORE the server
+  // confirms it. For very short trips the sim can resolve the whole launch
+  // → land in a single tick that we never poll, so the fighter would
+  // never appear in state.groups and never be tracked. Spawning client-
+  // side guarantees the user always sees the journey. Key uses the same
+  // owner-src-tgt scheme as trackFighters() so when the server-side
+  // confirmation arrives, trackFighters' `if (fighterTracker.has(k)) continue`
+  // de-dupes naturally.
+  const srcBuilding = lastState.buildings.find(b => b.slot === selectedSrc);
+  if (srcBuilding) {
+    const pct = SEND_PERCENTAGES[selectedTypeIdx] / 100;
+    const count = Math.floor(srcBuilding.garrison * pct);
+    if (count > 0) {
+      const dx = b.x - srcBuilding.x, dy = b.y - srcBuilding.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      // Match the sim's apparent travel speed; 200 sim-units/sec is roughly
+      // calibrated against observed sim arrivals on random_close_4_5.
+      const durationSec = Math.max(MIN_ANIM_SEC, dist / 200);
+      const k = `1-${selectedSrc}-${tgtSlot}`;
+      if (!fighterTracker.has(k)) {
+        fighterTracker.set(k, {
+          owner: 1, count,
+          srcSlot: selectedSrc, tgtSlot,
+          srcX: srcBuilding.x, srcY: srcBuilding.y,
+          tgtX: b.x, tgtY: b.y,
+          startTime: performance.now(),
+          durationSec,
+          landed: false,
+        });
+      }
+    }
+  }
   selectedSrc = null;
-  // Fire the action; render will refresh on next poll.
   try {
     const r = await fetch('/api/action', {
       method: 'POST', headers: {'content-type': 'application/json'},
@@ -1039,11 +1096,15 @@ $playBtn.addEventListener('click', async () => {
   $playBtn.disabled = true;
   $playBtn.textContent = 'Loading…';
   const champ = $opp.value || null;
+  const level = $level.value || null;
   try {
+    const body = {};
+    if (champ) body.champion = champ;
+    if (level) body.level_name = level;
     const r = await fetch('/api/reset', {
       method: 'POST',
       headers: {'content-type': 'application/json'},
-      body: JSON.stringify(champ ? { champion: champ } : {}),
+      body: JSON.stringify(body),
     });
     const j = await r.json();
     if (j.error) {
@@ -1245,12 +1306,14 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(length).decode("utf-8") or "{}") if length > 0 else {}
-                # `champion` key absent → preserve current; explicit string → swap.
-                champion = body.get("champion")
+                # `champion` / `level_name` keys absent → preserve current;
+                # explicit string → swap. Both passed through to session.reset.
+                champion   = body.get("champion")
+                level_name = body.get("level_name")
                 with self.session.lock:
-                    self.session.reset(champion_run_id=champion)
+                    self.session.reset(champion_run_id=champion, level_name=level_name)
                     label = self.session.opponent_label
-                self._json({"ok": True, "opponent": label})
+                self._json({"ok": True, "opponent": label, "level": self.session.level_name})
             except Exception as exc:
                 traceback.print_exc()
                 self._json({"error": str(exc)}, status=500)
