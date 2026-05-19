@@ -40,6 +40,9 @@
     .status-msg.err   { background: rgba(248,113,113,0.1); border: 1px solid var(--danger); color: var(--danger); }
     .status-msg.warn  { background: rgba(250,200,80,0.08); border: 1px solid #d4a73a; color: #fcd34d; }
     .helper { font-size: 11px; color: var(--fg-muted); margin-top: 2px; grid-column: 2; }
+    .level-n-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+    .level-n-row input[type="number"] { width: 60px; }
+    .level-n-row .lbl { color: var(--fg-muted); font-size: 12px; }
   </style>
 </head>
 <body>
@@ -93,24 +96,33 @@
         </div>
 
         <div class="field">
-          <label for="model">Base model</label>
+          <label for="model">Architecture</label>
           <div>
             <select id="model" required></select>
-            <div class="helper">Latest registered models. Selecting one sets the net architecture for the run.</div>
+            <div class="helper">Picks the network topology + obs/action shapes. <strong>Every run from this form starts with fresh random weights</strong> — no warm-start from previous checkpoints. (The PFSP champion archive used for opponents is independent of this and controlled by Advanced settings.)</div>
           </div>
         </div>
 
         <div class="field">
-          <label for="level">Level / map</label>
+          <label>Level / map</label>
           <div>
-            <select id="level">
-              <option value="random_close_4_8" selected>random_close_4_8  (350×350, 4-8 buildings)</option>
-              <option value="random_4_8">random_4_8  (700×700, 4-8 buildings)</option>
-              <option value="random_close_4_5">random_close_4_5  (350×350, 4-5 buildings)</option>
-              <option value="random_close_4_6">random_close_4_6  (350×350, 4-6 buildings)</option>
-              <option value="crossroads_6">crossroads_6  (fixed map)</option>
-            </select>
-            <div class="helper">Single-level names that <code>sim/levels.py</code> recognises directly. Named mixes (<code>phase1_full_mix_*</code>) live in <code>configs/training_levels.yaml</code> and aren't usable from this form yet.</div>
+            <div class="preset-row" id="level-sym">
+              <button type="button" data-sym="random" class="preset active">Symmetric</button>
+              <button type="button" data-sym="asym"   class="preset">Asymmetric</button>
+            </div>
+            <div class="preset-row" id="level-size" style="margin-top:6px;">
+              <button type="button" data-size="close"  class="preset">Small  (350)</button>
+              <button type="button" data-size="medium" class="preset">Medium (525)</button>
+              <button type="button" data-size="large"  class="preset active">Large  (700)</button>
+            </div>
+            <div class="level-n-row">
+              <span class="lbl">Planets:</span>
+              <input type="number" id="level-n-min" min="2" max="8" value="4">
+              <span class="lbl">to</span>
+              <input type="number" id="level-n-max" min="2" max="8" value="8">
+              <span class="lbl" id="level-name-preview" style="margin-left:auto; font-family: var(--mono);"></span>
+            </div>
+            <div class="helper">Combined into a level name (e.g. <code>random_medium_4_8</code>) at submit time — see <code>sim/levels.py</code> for the regex patterns. Named mixes (<code>phase1_full_mix_*</code>) from <code>configs/training_levels.yaml</code> aren't reachable from this form yet.</div>
           </div>
         </div>
 
@@ -208,6 +220,36 @@
       $('opponent-run-row').style.display = $('opponent').value === 'neural' ? 'grid' : 'none';
     });
 
+    // ── Level / map picker (parametric: symmetry × size × N range) ──
+    // Builds a level name matching sim/levels.py regex patterns at submit
+    // time, e.g. random_medium_4_8, asym_close_5_5, random_8_8.
+    function wireSegmented(rowId, onChange) {
+      document.querySelectorAll(`#${rowId} .preset`).forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll(`#${rowId} .preset`)
+            .forEach(b => b.classList.toggle('active', b === btn));
+          if (onChange) onChange();
+        });
+      });
+    }
+    function buildLevelName() {
+      const sym  = document.querySelector('#level-sym  .preset.active')?.dataset.sym  || 'random';
+      const size = document.querySelector('#level-size .preset.active')?.dataset.size || 'large';
+      let nMin = Math.max(2, Math.min(8, Number($('level-n-min').value) || 4));
+      let nMax = Math.max(nMin, Math.min(8, Number($('level-n-max').value) || nMin));
+      const sizePart = (size === 'large') ? '' : `_${size}`;
+      return `${sym}${sizePart}_${nMin}_${nMax}`;
+    }
+    function refreshLevelPreview() {
+      const $p = $('level-name-preview');
+      if ($p) $p.textContent = buildLevelName();
+    }
+    wireSegmented('level-sym',  refreshLevelPreview);
+    wireSegmented('level-size', refreshLevelPreview);
+    $('level-n-min').addEventListener('input', refreshLevelPreview);
+    $('level-n-max').addEventListener('input', refreshLevelPreview);
+    refreshLevelPreview();
+
     // ── Populate model + opponent-run dropdowns ──
     async function loadModels() {
       const { data, error } = await sb
@@ -281,7 +323,7 @@
         fused_rollout:  $('fused_rollout').checked,
         sim_backend:    $('sim_backend').value,
         vec_mode:       'sync',
-        level_name:     $('level').value,
+        level_name:     buildLevelName(),
         opponent_name:  $('opponent').value,
       };
       if (hyperparams.opponent_name === 'neural') {
