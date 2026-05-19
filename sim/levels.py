@@ -56,6 +56,8 @@ _RANDOM_CLOSE_SHUFFLE_RE = re.compile(r"^random_close_shuffle_(\d+)_(\d+)$")
 _RANDOM_SHUFFLE_RE       = re.compile(r"^random_shuffle_(\d+)_(\d+)$")
 _ASYM_RE         = re.compile(r"^asym_(\d+)_(\d+)$")
 _ASYM_CLOSE_RE   = re.compile(r"^asym_close_(\d+)_(\d+)$")
+_RANDOM_MEDIUM_RE = re.compile(r"^random_medium_(\d+)_(\d+)$")
+_ASYM_MEDIUM_RE   = re.compile(r"^asym_medium_(\d+)_(\d+)$")
 
 # Placement constraints.
 _MAP_SIZE       = 700
@@ -66,6 +68,14 @@ _CENTER_EXCLUSION = 50      # neutrals mustn't sit on the symmetry axis (too clo
 _CLOSE_BORDER   = 40       # tighter border on close maps so the playable area still fits
 _CLOSE_MIN_SEP  = 50       # close maps allow tighter packing
 _CLOSE_CENTER_EXCLUSION = 30
+# Medium maps sit halfway between close (350) and standard (700). All four
+# constants interpolate roughly linearly so that the playable-area, min-sep
+# and center-exclusion ratios stay similar across sizes — keeps game-feel
+# (travel time vs map crossing) consistent as size scales up.
+_MEDIUM_MAP_SIZE = 525
+_MEDIUM_BORDER   = 60
+_MEDIUM_MIN_SEP  = 65
+_MEDIUM_CENTER_EXCLUSION = 40
 
 
 def _generate_symmetric_level(
@@ -162,6 +172,17 @@ def generate_random_close_level(
     )
 
 
+def generate_random_medium_level(n_buildings: int, rng: np.random.Generator) -> list:
+    """Medium-map symmetric random level on the 525-unit map — halfway
+    between `close` (350) and the default `large` (700). Moderate travel
+    times. Used by `random_medium_<min>_<max>` in the play picker."""
+    return _generate_symmetric_level(
+        n_buildings, rng,
+        map_size=_MEDIUM_MAP_SIZE, border=_MEDIUM_BORDER,
+        min_sep=_MEDIUM_MIN_SEP, center_exclusion=_MEDIUM_CENTER_EXCLUSION,
+    )
+
+
 def _generate_asymmetric_level_param(
     n_buildings: int,
     rng: np.random.Generator,
@@ -223,6 +244,14 @@ def generate_asymmetric_close_level(n_buildings: int, rng: np.random.Generator) 
     )
 
 
+def generate_asymmetric_medium_level(n_buildings: int, rng: np.random.Generator) -> list:
+    """Asymmetric (no-mirror) random level on the 525-unit medium map."""
+    return _generate_asymmetric_level_param(
+        n_buildings, rng,
+        map_size=_MEDIUM_MAP_SIZE, border=_MEDIUM_BORDER, min_sep=_MEDIUM_MIN_SEP,
+    )
+
+
 def _shuffle_level_slots(level: list, rng: np.random.Generator) -> list:
     """Randomize which slot each building lands in.
 
@@ -270,6 +299,14 @@ def _resolve_level(level_name: str, seed: int | None) -> list:
         rng = np.random.default_rng(seed)
         n = int(rng.integers(n_min, n_max + 1))
         return generate_random_close_level(n, rng)
+    m = _RANDOM_MEDIUM_RE.match(level_name)
+    if m:
+        n_min, n_max = int(m.group(1)), int(m.group(2))
+        if not (2 <= n_min <= n_max <= C.MAX_BUILDING_SLOTS):
+            raise ValueError(f"random_medium level bounds out of range: {level_name!r}")
+        rng = np.random.default_rng(seed)
+        n = int(rng.integers(n_min, n_max + 1))
+        return generate_random_medium_level(n, rng)
     m = _RANDOM_RE.match(level_name)
     if m:
         n_min, n_max = int(m.group(1)), int(m.group(2))
@@ -287,6 +324,14 @@ def _resolve_level(level_name: str, seed: int | None) -> list:
         rng = np.random.default_rng(seed)
         n = int(rng.integers(n_min, n_max + 1))
         return generate_asymmetric_close_level(n, rng)
+    m = _ASYM_MEDIUM_RE.match(level_name)
+    if m:
+        n_min, n_max = int(m.group(1)), int(m.group(2))
+        if not (2 <= n_min <= n_max <= C.MAX_BUILDING_SLOTS):
+            raise ValueError(f"asym_medium level bounds out of range: {level_name!r}")
+        rng = np.random.default_rng(seed)
+        n = int(rng.integers(n_min, n_max + 1))
+        return generate_asymmetric_medium_level(n, rng)
     m = _ASYM_RE.match(level_name)
     if m:
         n_min, n_max = int(m.group(1)), int(m.group(2))

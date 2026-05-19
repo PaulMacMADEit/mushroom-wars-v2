@@ -363,6 +363,13 @@ _HTML = r"""<!doctype html>
   .send-size .pct-row { display: flex; gap: 4px; margin: 0; }
   .pct-row button { padding: 6px 12px; font-size: 12px; font-weight: 500; min-width: 48px; }
   .pct-row button.active { background: #f59e0b; border-color: #f59e0b; color: #11141b; }
+  /* Segmented control: row of buttons where exactly one is active. Used
+     in the overlay for layout (symmetric/asymmetric) and map size. */
+  .seg-row { display: flex; gap: 4px; }
+  .seg-row .seg { flex: 1; padding: 8px 0; font-size: 12px; font-weight: 500; }
+  .seg-row .seg.active { background: #f59e0b; border-color: #f59e0b; color: #11141b; }
+  /* Planet-count slider — orange thumb matches the segmented active color. */
+  input[type="range"] { width: 100%; accent-color: #f59e0b; }
   /* Bottom unit-balance bar. Two flex divs, widths proportional to unit %. */
   .balance-bar { position: fixed; bottom: 16px; left: 16px; right: 16px;
                  height: 28px; display: flex; z-index: 4;
@@ -460,15 +467,21 @@ _HTML = r"""<!doctype html>
         <option value="">loading…</option>
       </select>
 
-      <label for="overlay-level">Map</label>
-      <select id="overlay-level" class="mono">
-        <option value="random_close_4_5" selected>random_close_4_5  (small, 4–5 worlds)</option>
-        <option value="random_close_4_6">random_close_4_6  (small, 4–6 worlds)</option>
-        <option value="random_close_4_8">random_close_4_8  (small, 4–8 worlds)</option>
-        <option value="random_4_5">random_4_5  (large, 4–5 worlds)</option>
-        <option value="random_4_8">random_4_8  (large, 4–8 worlds)</option>
-        <option value="crossroads_6">crossroads_6  (fixed map)</option>
-      </select>
+      <label>Layout</label>
+      <div class="seg-row" id="sym-row">
+        <button type="button" data-sym="random" class="seg active">Symmetric</button>
+        <button type="button" data-sym="asym"   class="seg">Asymmetric</button>
+      </div>
+
+      <label>Map size</label>
+      <div class="seg-row" id="size-row">
+        <button type="button" data-size="close"  class="seg">Small</button>
+        <button type="button" data-size="medium" class="seg active">Medium</button>
+        <button type="button" data-size="large"  class="seg">Large</button>
+      </div>
+
+      <label>Planets: <span id="planet-count-label" class="mono">5</span></label>
+      <input type="range" id="planet-slider" min="2" max="8" value="5">
 
       <button class="play-btn" id="play-btn" disabled>
         <span class="loading"><span class="spinner"></span>Loading…</span>
@@ -481,7 +494,45 @@ _HTML = r"""<!doctype html>
 const CV  = document.getElementById('board');
 const CTX = CV.getContext('2d');
 const $opp = document.getElementById('overlay-opp');     // pre-game opponent picker
-const $level = document.getElementById('overlay-level'); // pre-game map picker
+// Map picker state — symmetry × size × planet count. Combined into a
+// level name (matching sim/levels.py regex patterns) at Play-button
+// time via buildLevelName(). The three pieces:
+//   mapSym  ∈ {'random', 'asym'}   — 180°-mirror vs free placement
+//   mapSize ∈ {'close', 'medium', 'large'} — 350 / 525 / 700 unit map
+//   mapN    ∈ [2, MAX_BUILDING_SLOTS=8] — exact planet count
+let mapSym  = 'random';
+let mapSize = 'medium';
+let mapN    = 5;
+function buildLevelName() {
+  // 'close'/'medium' inject an infix; 'large' is the bare pattern
+  // (random_N_N / asym_N_N — the original sim names).
+  const sizePart = (mapSize === 'large') ? '' : `_${mapSize}`;
+  return `${mapSym}${sizePart}_${mapN}_${mapN}`;
+}
+// Wire the segmented controls + slider. Runs immediately because this
+// script is at the bottom of <body>, so all DOM nodes already exist.
+document.querySelectorAll('#sym-row .seg').forEach(btn => {
+  btn.addEventListener('click', () => {
+    mapSym = btn.dataset.sym;
+    document.querySelectorAll('#sym-row .seg').forEach(b =>
+      b.classList.toggle('active', b === btn));
+  });
+});
+document.querySelectorAll('#size-row .seg').forEach(btn => {
+  btn.addEventListener('click', () => {
+    mapSize = btn.dataset.size;
+    document.querySelectorAll('#size-row .seg').forEach(b =>
+      b.classList.toggle('active', b === btn));
+  });
+});
+{
+  const $slider = document.getElementById('planet-slider');
+  const $label  = document.getElementById('planet-count-label');
+  $slider.addEventListener('input', () => {
+    mapN = Number($slider.value);
+    $label.textContent = $slider.value;
+  });
+}
 const $oppDisplay = document.getElementById('opp-display');  // current opponent label in HUD
 const $lvl = document.getElementById('level-label');
 const $toast = document.getElementById('toast');
@@ -1144,7 +1195,7 @@ $playBtn.addEventListener('click', async () => {
   $playBtn.disabled = true;
   $playBtn.textContent = 'Loading…';
   const champ = $opp.value || null;
-  const level = $level.value || null;
+  const level = buildLevelName();
   try {
     const body = {};
     if (champ) body.champion = champ;
