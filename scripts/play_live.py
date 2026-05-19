@@ -608,8 +608,8 @@ const FIGHTER_BY_OWNER = ['fighter-human', 'fighter-human', 'fighter-alien'];  /
 // circular planet shape) rather than bleeding into the surrounding canvas.
 const TINT_BY_OWNER = [
   null,                       // neutral — no tint
-  'rgba(239, 68, 68, 0.40)',  // P1 red
-  'rgba(59, 130, 246, 0.40)', // P2 blue
+  'rgba(239, 68, 68, 0.55)',  // P1 red
+  'rgba(59, 130, 246, 0.55)', // P2 blue
 ];
 
 function render(state) {
@@ -649,6 +649,17 @@ function render(state) {
       CTX.fillStyle = ownerColor(b.owner);
       CTX.fill();
     }
+    // Owner ring — colored outline so ownership reads clearly even when
+    // the 40-55%-alpha tint washes out against the dark planet sprite at
+    // small sizes. Neutrals get no ring — keeps the "yours / theirs /
+    // neutral" trichotomy visually unambiguous.
+    if (b.owner !== 0) {
+      CTX.beginPath();
+      CTX.arc(cx, cy, r + 2, 0, Math.PI * 2);
+      CTX.strokeStyle = ownerColor(b.owner);
+      CTX.lineWidth = 3;
+      CTX.stroke();
+    }
     // Selected-source halo — yellow glow ring outside the planet.
     if (b.slot === selectedSrc) {
       CTX.save();
@@ -663,7 +674,20 @@ function render(state) {
     }
     // Garrison count — divided by 10 (Mushroom-Wars-style condensed unit
     // count; the underlying sim still uses 0..300 internally).
-    const garrisonDisplay = Math.round(b.garrison / 10);
+    // Optimistic decrement: subtract any of our own pending sends from
+    // this slot that the server hasn't confirmed yet. The server ticks
+    // at 1 Hz, so click→server-apply is up to ~1 s; without this the
+    // source planet's count stays at full while the fighter visually
+    // flies away, then snaps down after arrival. Stops once the
+    // tracker entry flips serverConfirmed (server reflected the drop).
+    let displayedInternal = b.garrison;
+    for (const tr of fighterTracker.values()) {
+      if (tr.srcSlot === b.slot && !tr.serverConfirmed) {
+        displayedInternal -= tr.pendingAmount || 0;
+      }
+    }
+    if (displayedInternal < 0) displayedInternal = 0;
+    const garrisonDisplay = Math.round(displayedInternal / 10);
     CTX.font = `bold ${Math.max(14, r * 0.55)}px ui-monospace, monospace`;
     CTX.textAlign = 'center';
     CTX.textBaseline = 'middle';
@@ -787,7 +811,14 @@ function trackFighters(state) {
   for (const g of state.groups || []) {
     const k = fighterKey(g);
     seenKeys.add(k);
-    if (fighterTracker.has(k)) continue;
+    if (fighterTracker.has(k)) {
+      // We already client-spawned this on click; server has now confirmed
+      // it. Flip serverConfirmed so the optimistic source-garrison
+      // decrement stops being applied — b.garrison from the server now
+      // reflects the drop on its own, applying both would double-count.
+      fighterTracker.get(k).serverConfirmed = true;
+      continue;
+    }
     const src = bById[g.src], tgt = bById[g.tgt];
     if (!src || !tgt) continue;
     const durationSec = Math.max(g.travel / TICKS_PER_SEC_WALL, MIN_ANIM_SEC);
@@ -798,6 +829,8 @@ function trackFighters(state) {
       startTime: now,
       durationSec,
       landed: false,
+      pendingAmount: 0,           // server-originated → no optimistic deduction
+      serverConfirmed: true,
     });
   }
 
@@ -1036,6 +1069,8 @@ CV.addEventListener('click', async (e) => {
           startTime: performance.now(),
           durationSec,
           landed: false,
+          pendingAmount: count,    // optimistic source decrement until server confirms
+          serverConfirmed: false,
         });
       }
     }
