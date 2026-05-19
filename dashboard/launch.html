@@ -99,7 +99,17 @@
           <label for="model">Architecture</label>
           <div>
             <select id="model" required></select>
-            <div class="helper">Picks the network topology + obs/action shapes. <strong>Every run from this form starts with fresh random weights</strong> — no warm-start from previous checkpoints. (The PFSP champion archive used for opponents is independent of this and controlled by Advanced settings.)</div>
+            <div class="helper">Picks the network topology + obs/action shapes. Starts with fresh random weights unless a <em>Continue from</em> run is selected below. (PFSP champion archive used for opponents is independent and controlled by Advanced settings.)</div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="parent-run">Continue from</label>
+          <div>
+            <select id="parent-run">
+              <option value="" selected>(None — fresh random init)</option>
+            </select>
+            <div class="helper">Optional warm-start from a past run's checkpoint (weights + optimizer + obs_norm). Selecting a run auto-syncs Architecture above to match — loading weights into a different net would crash at <code>load_state_dict</code>.</div>
           </div>
         </div>
 
@@ -276,6 +286,51 @@
       $('label').value = autoLabel(sel.value);
     }
 
+    // Past runs available as warm-start sources. Same query shape as
+    // loadOpponentRuns but we also pull model_id so picking a parent can
+    // auto-sync the Architecture dropdown — architecture must match or
+    // the worker's load_state_dict will crash.
+    async function loadParentRuns() {
+      const { data, error } = await sb
+        .from('runs')
+        .select('id, label, model_id, result, queued_at')
+        .eq('project', 'mushroom-wars')
+        .eq('status', 'done')
+        .not('weights_url', 'is', null)
+        .order('queued_at', { ascending: false })
+        .limit(40);
+      if (error) { console.warn('parent-runs load failed:', error.message); return; }
+      const sel = $('parent-run');
+      // Keep the "(None)" option at index 0; rebuild everything after.
+      while (sel.options.length > 1) sel.remove(1);
+      for (const r of (data || [])) {
+        const rate = r.result?.rate;
+        const opt = document.createElement('option');
+        opt.value = r.id;
+        opt.dataset.modelId = r.model_id || '';
+        const modelLabel = r.model_id ? `  [${r.model_id}]` : '';
+        const rateLabel  = (rate != null) ? `  (rate=${(rate*100).toFixed(0)}%)` : '';
+        opt.textContent = `${(r.label || r.id).slice(0, 48)}${modelLabel}${rateLabel}`;
+        sel.appendChild(opt);
+      }
+    }
+    // When a parent is picked, force Architecture to match — the worker
+    // builds a net from this run's model_id and then load_state_dicts the
+    // parent's weights into it; arch mismatch ⇒ shape-mismatch crash.
+    $('parent-run').addEventListener('change', () => {
+      const opt = $('parent-run').selectedOptions[0];
+      const parentModelId = opt?.dataset?.modelId;
+      if (!parentModelId) return;
+      const $model = $('model');
+      for (const o of $model.options) {
+        if (o.value === parentModelId) {
+          $model.value = parentModelId;
+          $('label').value = autoLabel(parentModelId) + '-cont';
+          break;
+        }
+      }
+    });
+
     async function loadOpponentRuns() {
       const { data, error } = await sb
         .from('runs')
@@ -345,6 +400,14 @@
         machine:      'unassigned',
         launch_at:    Date.now(),
       };
+      // Warm-start: worker reads parent_run_id, downloads parent's
+      // weights/optimizer/obs_norm, and loads them into the freshly-built
+      // net before training. Architecture was forced to match when the
+      // parent was selected, so the load_state_dict call lines up.
+      const parentRunId = $('parent-run').value || null;
+      if (parentRunId) {
+        row.parent_run_id = parentRunId;
+      }
 
       const { data, error } = await sb.from('runs').insert(row).select('id').single();
       btn.disabled = false;
@@ -359,6 +422,7 @@
     // ── Init ──
     loadModels();
     loadOpponentRuns();
+    loadParentRuns();
   </script>
 </body>
 </html>
