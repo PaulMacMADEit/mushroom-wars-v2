@@ -96,6 +96,22 @@
         </div>
 
         <div class="field">
+          <label>Game timeout</label>
+          <div>
+            <div class="preset-row" id="timeout-presets">
+              <button type="button" class="preset" data-ticks="100">100</button>
+              <button type="button" class="preset active" data-ticks="200">200</button>
+              <button type="button" class="preset" data-ticks="400">400</button>
+              <button type="button" class="preset" data-ticks="600">600</button>
+            </div>
+            <div class="helper">
+              Custom: <input type="number" id="timeout-ticks" value="200" min="20" max="2000" style="width:80px; display:inline-block; margin-left:8px;"> ticks per game
+              &nbsp;·&nbsp; each game ends here if neither player is eliminated; the winner is decided by buildings → units. Default 200 (sim default). Lower = more games per minute of wall time; higher = lets long games actually resolve. Encoder's <code>TIMEOUT_NORM</code> auto-syncs so the policy doesn't see distribution shift.
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
           <label for="model">Architecture</label>
           <div>
             <select id="model" required></select>
@@ -223,6 +239,23 @@
     $('duration-min').addEventListener('input', (e) => {
       durationMin = Number(e.target.value) || 30;
       document.querySelectorAll('#duration-presets .preset').forEach(x => x.classList.remove('active'));
+    });
+
+    // ── Game-timeout presets (per-game tick cap, passed as game_timeout_ticks
+    //    in hyperparams; the worker mutates sim/config.GAME_TIMEOUT_TICKS for
+    //    the run and bumps the encoder's TIMEOUT_NORM in lockstep).
+    let gameTimeoutTicks = 200;
+    document.querySelectorAll('#timeout-presets .preset').forEach(b => {
+      b.addEventListener('click', () => {
+        document.querySelectorAll('#timeout-presets .preset').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        gameTimeoutTicks = Number(b.dataset.ticks);
+        $('timeout-ticks').value = gameTimeoutTicks;
+      });
+    });
+    $('timeout-ticks').addEventListener('input', (e) => {
+      gameTimeoutTicks = Number(e.target.value) || 200;
+      document.querySelectorAll('#timeout-presets .preset').forEach(x => x.classList.remove('active'));
     });
 
     // ── Opponent visibility ──
@@ -380,6 +413,7 @@
         vec_mode:       'sync',
         level_name:     buildLevelName(),
         opponent_name:  $('opponent').value,
+        game_timeout_ticks: Math.max(20, Math.min(2000, gameTimeoutTicks || 200)),
       };
       if (hyperparams.opponent_name === 'neural') {
         const oppRun = $('opponent-run').value;
