@@ -75,7 +75,7 @@ def collect_rollout_fused(
                      (mutated in place):
                         ep_return: (n_envs,) float32
                         ep_length: (n_envs,) int64
-                        completed_episodes: list[(return, length, won_proxy)]
+                        completed_episodes: list[(return, length, terminal_phase_int)]
                         last_obs_dev: jnp.ndarray (n_envs, OBS_DIM) — encoded
                                        obs from end of previous rollout, or None.
                         last_p1_mask: jnp.ndarray (n_envs, ACTION_SPACE_SIZE) bool, or None.
@@ -220,17 +220,26 @@ def collect_rollout_fused(
         rew_buf[t]  = rewards
         done_buf[t] = terminated.astype(np.float32)
 
-        # Per-env episode bookkeeping. Prefer the literal terminal_phase
-        # signal (1 = P1_WINS) over the reward-sum proxy when available.
+        # Per-env episode bookkeeping. The third tuple element is the
+        # terminal PHASE (PHASE_PLAYING=0 / P1_WINS=1 / P2_WINS=2 / DRAW=3),
+        # NOT a boolean "won" — trainer.update() reads `e[2]` directly as
+        # an int and computes win_rate / loss_rate / draw_rate / timeout_rate
+        # via (phases == K).mean(). Storing a bool here silently collapsed
+        # P2_WINS and DRAW into the False bucket, pinning loss_rate and
+        # draw_rate at 0 for every fused-rollout run. Match the non-fused
+        # path in trainer.py:484 byte-for-byte.
         ep_return += rewards
         ep_length += K
         for i in range(N):
             if terminated[i]:
                 if terminal_phase is not None:
-                    won = bool(int(terminal_phase[i]) == 1)
+                    phase = int(terminal_phase[i])
                 else:
-                    won = bool(ep_return[i] > 0.5)
-                completed.append((float(ep_return[i]), int(ep_length[i]), won))
+                    # Reward-sum proxy when env doesn't surface phase
+                    # (matches trainer.py:482-483 v1.3+ reward shape).
+                    r = float(ep_return[i])
+                    phase = 1 if r > 0.5 else (2 if r < -0.5 else 3)
+                completed.append((float(ep_return[i]), int(ep_length[i]), phase))
                 ep_return[i] = 0.0
                 ep_length[i] = 0
 

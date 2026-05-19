@@ -293,7 +293,11 @@ class PPOTrainer:
         self._ep_return = np.zeros(self.cfg.n_envs, dtype=np.float32)
         self._ep_length = np.zeros(self.cfg.n_envs, dtype=np.int64)
         # (return, length, won_proxy)
-        self._completed_episodes: list[tuple[float, int, bool]] = []
+        # Tuples are (return, length, terminal_phase) where phase is the int
+        # 0=PHASE_PLAYING / 1=P1_WINS / 2=P2_WINS / 3=DRAW. The metrics
+        # block downstream reads e[2] as an int and computes win/loss/draw/
+        # timeout rates via `(phases == K).mean()`.
+        self._completed_episodes: list[tuple[float, int, int]] = []
 
     # ------------------------------------------------------------------
     # Vec-env (re)build
