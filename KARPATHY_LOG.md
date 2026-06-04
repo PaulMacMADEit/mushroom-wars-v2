@@ -6001,3 +6001,14 @@ Testing trunk-width-as-ceiling hypothesis. Sizes:
 
 Results indeterminate under legacy axes; rerun once new system has a stable
 archive baseline if capacity is still suspected.
+
+### Fire 17 — 2026-06-04 12:38 PT — STOP: PaulLinux unreachable
+
+**Status:** PaulLinux (100.72.181.32) unreachable — SSH timeout, ping 100% loss. Tailscale daemon not running on Mac (IPNExtension pid 724 but no socket). Machine likely offline or Tailscale mesh down.
+
+**Queue:** empty (no queued/running runs). Last finished run: `v13.0-manual-260528-1621` (rate=0.916, elo=952, finished 2026-05-28).
+
+**No karp-labeled runs since fire 16** (2026-05-03). Intervening runs were all manual v13.0 experiments (May 19–28). Karp loop has been dormant ~32 days.
+
+**Action:** STOP — worker dead. No queueing possible. Next fire should verify PaulLinux is back online before resuming.
+
