@@ -6020,3 +6020,11 @@ archive baseline if capacity is still suspected.
 
 **Action:** STOP — worker dead, consecutive fire (17→18). Loop remains dormant until PaulLinux comes back online.
 
+### Fire 19 — 2026-06-04 1:45 PM PT — STOP: PaulLinux still offline (21d), 3rd consecutive
+
+**Status:** PaulLinux (100.72.181.32) still offline — SSH `Operation timed out`. Down since ~2026-05-14 (21 days). Third consecutive STOP fire (17→18→19).
+
+**Queue:** empty. Last finished run unchanged: `v13.0-manual-260528-1621` (rate=0.916, elo=952). Karp loop dormant ~32 days.
+
+**Action:** STOP — loop dormant. No further fires useful until PaulLinux comes back online.
+
