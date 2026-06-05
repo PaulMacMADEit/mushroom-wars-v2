@@ -6093,6 +6093,14 @@ archive baseline if capacity is still suspected.
 
 **Action:** STOP — loop dormant. No further fires useful until PaulLinux comes back online.
 
+### Fire 29 — 2026-06-05 1:56 PM PT — STOP: PaulLinux still offline (23d), 13th consecutive
+
+**Status:** PaulLinux (100.72.181.32) still offline — SSH `Operation timed out`. Down since ~2026-05-14 (23 days). Thirteenth consecutive STOP fire. Karp loop dormant ~34 days.
+
+**Queue:** empty. Last finished run unchanged: `v13.0-manual-260528-1621` (rate=0.916, elo=952).
+
+**Action:** STOP — loop dormant. No further fires useful until PaulLinux comes back online.
+
 ### Fire 28 — 2026-06-05 10:28 AM PT — STOP: PaulLinux still offline (23d), 12th consecutive
 
 **Status:** PaulLinux (100.72.181.32) still offline — SSH `Operation timed out`. Down since ~2026-05-14 (23 days). Twelfth consecutive STOP fire. Karp loop dormant ~34 days.
