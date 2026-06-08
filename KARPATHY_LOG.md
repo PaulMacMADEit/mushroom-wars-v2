@@ -6574,3 +6574,11 @@ archive baseline if capacity is still suspected.
 **Queue:** N/A — cannot reach Supabase worker or DB from Mac alone.
 
 **Action:** STOP — PaulLinux still offline. No fires useful until it comes back online.
+
+### Fire 88 — 2026-06-08 12:18 PM PT
+
+**Worker:** PaulLinux offline (SSH timeout, 25+ days). 72nd consecutive STOP.
+
+**Queue:** N/A — cannot reach Supabase worker or DB from Mac alone.
+
+**Action:** STOP — PaulLinux still offline (25d), 72nd consecutive fire with no worker.
