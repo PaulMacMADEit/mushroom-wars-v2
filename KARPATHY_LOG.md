@@ -6582,3 +6582,11 @@ archive baseline if capacity is still suspected.
 **Queue:** N/A — cannot reach Supabase worker or DB from Mac alone.
 
 **Action:** STOP — PaulLinux still offline (25d), 72nd consecutive fire with no worker.
+
+### karp fire 89 — 2026-06-08 12:50 PM PT
+
+**Worker:** PaulLinux offline (SSH timeout, 25+ days). 73rd consecutive STOP.
+
+**Queue:** 0 karp runs in Supabase. 0 queued/running. Last run was `v13.0-manual-260528-1621` (rate=0.916, 11 days ago).
+
+**Action:** STOP — PaulLinux still offline (25d), 73rd consecutive fire with no worker.
