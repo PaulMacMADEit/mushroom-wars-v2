@@ -6548,3 +6548,13 @@ archive baseline if capacity is still suspected.
 **Queue:** empty. Last finished run unchanged: `v13.0-manual-260528-1621` (rate=0.916, elo=952).
 
 **Action:** STOP — loop dormant. No further fires useful until PaulLinux comes back online.
+
+### karp fire 85 — 2026-06-08 10:42 AM PT
+
+**Status:** PaulLinux (100.72.181.32) still offline — SSH timed out. Down since ~2026-05-14 (25d). Sixty-ninth consecutive STOP fire. Karp loop dormant ~39 days.
+
+**Queue:** empty. Last finished run unchanged: `v13.0-manual-260528-1621` (rate=0.916, elo=952).
+
+**Action:** STOP — loop dormant. No further fires useful until PaulLinux comes back online.
+
+**Action:** STOP — loop dormant. No further fires useful until PaulLinux comes back online.
