@@ -6558,3 +6558,11 @@ archive baseline if capacity is still suspected.
 **Action:** STOP — loop dormant. No further fires useful until PaulLinux comes back online.
 
 **Action:** STOP — loop dormant. No further fires useful until PaulLinux comes back online.
+
+### Fire 86 — 2026-06-08 11:13 AM PT
+
+**Worker:** PaulLinux offline (SSH timeout, 25+ days). 70th consecutive STOP.
+
+**Queue:** N/A — cannot reach Supabase worker or DB from Mac alone.
+
+**Action:** STOP — PaulLinux still offline. No fires useful until it comes back online.
