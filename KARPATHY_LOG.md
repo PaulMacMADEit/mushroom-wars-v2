@@ -6606,3 +6606,11 @@ archive baseline if capacity is still suspected.
 **Queue:** 0 queued/running. Last finished run: `v13.0-manual-260528-1621` (elo=952, finished 2026-05-28).
 
 **Action:** STOP — PaulLinux still offline (25d), 75th consecutive fire with no worker.
+
+### karp fire 92 — 2026-06-08 2:29 PM PT
+
+**Worker:** PaulLinux offline (SSH timeout, 25+ days). 76th consecutive STOP.
+
+**Queue:** N/A — cannot reach worker or DB.
+
+**Action:** STOP — PaulLinux still offline (25d), 76th consecutive fire with no worker.
