@@ -6702,3 +6702,11 @@ archive baseline if capacity is still suspected.
 **Queue:** 0 queued/running in Supabase. Last finished: `v13.0-manual-260528-1621` (rate=0.916, finished 2026-05-28, 12 days ago).
 
 **Action:** STOP — PaulLinux still offline (26d), 87th consecutive fire with no worker.
+
+### karp fire 104 — 2026-06-09 2:24 PM PT
+
+**Worker:** PaulLinux offline (SSH timeout to 100.72.181.32, 26d). 88th consecutive STOP.
+
+**Queue:** 0 queued/running. Last finished: `v13.0-manual-260528-1621` (rate=0.916, finished 2026-05-28, 12 days ago).
+
+**Action:** STOP — PaulLinux still offline (26d), 88th consecutive fire with no worker.
