@@ -6630,3 +6630,11 @@ archive baseline if capacity is still suspected.
 **Queue:** N/A — cannot reach worker or DB.
 
 **Action:** STOP — PaulLinux still offline (25d), 78th consecutive fire with no worker.
+
+### karp fire 95 — 2026-06-08 6:13 PM PT
+
+**Worker:** PaulLinux offline (100% packet loss to 100.72.181.32). 79th consecutive STOP.
+
+**Queue:** 0 queued/running. Supabase reachable. Last finished: `v13.0-manual-260528-1621` (rate=0.916, elo=952, finished 2026-05-28).
+
+**Action:** STOP — PaulLinux still offline (25d), 79th consecutive fire with no worker.
