@@ -6718,3 +6718,9 @@ archive baseline if capacity is still suspected.
 **Queue:** 0 queued/running. No done karp cells returned from Supabase query.
 
 **Action:** STOP — PaulLinux still offline (26d), 89th consecutive fire with no worker.
+
+### karp fire 106 — 2026-06-09 3:29 PM PT
+
+**Worker:** PaulLinux offline (SSH timeout to 100.72.181.32). 90th consecutive STOP.
+
+**Action:** STOP — PaulLinux still offline, 90th consecutive fire with no worker.
