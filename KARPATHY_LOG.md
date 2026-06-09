@@ -6654,3 +6654,11 @@ archive baseline if capacity is still suspected.
 **Queue:** 0 karp runs in Supabase. Last finished: `v13.0-manual-260528-1621` (rate=0.916, elo=952, finished 2026-05-28, 12 days ago).
 
 **Action:** STOP — PaulLinux still offline (26d), 81st consecutive fire with no worker.
+
+### karp fire 98 — 2026-06-09 10:15 AM PT
+
+**Worker:** PaulLinux offline (SSH timeout to 100.72.181.32, 26d). 82nd consecutive STOP.
+
+**Queue:** N/A — cannot reach worker or DB.
+
+**Action:** STOP — PaulLinux still offline (26d), 82nd consecutive fire with no worker.
