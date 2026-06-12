@@ -6971,4 +6971,8 @@ archive baseline if capacity is still suspected.
 
 **Action:** STOP — PaulLinux still offline, 133rd consecutive fire with no worker.
 
-**Action:** STOP — PaulLinux still offline, 132nd consecutive fire with no worker.
+### karp fire 147 — 2026-06-12 12:20 PM PT
+
+**Worker:** PaulLinux offline (SSH timeout to 100.72.181.32). 134th consecutive STOP.
+
+**Action:** STOP — PaulLinux still offline, 134th consecutive fire with no worker.
