@@ -7196,3 +7196,7 @@ archive baseline if capacity is still suspected.
 
 **Worker check:** SSH to PaulLinux (100.72.181.32) timed out.
 **Action:** STOP — PaulLinux still offline, 171st consecutive fire with no worker.
+
+### Fire 185 — 2026-06-15 22:38 PT — STOP — PaulLinux still offline, 172nd consecutive
+
+Worker unreachable (SSH timeout to 100.72.181.32). No cells to evaluate, no queue action. Next fire will retry.
