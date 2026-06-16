@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 191 — 2026-06-16 11:47 AM PDT — STOP (PaulLinux offline, 178th consecutive)
+
+Worker unreachable (SSH timeout to 100.72.181.32). No cells to evaluate, no queue action. Next fire retries.
+
 ## Continuation chain — kicked off 2026-05-03 00:15 PT (no horizon, until Paul says stop)
 
 **Driver change.** Every cell from this fire onward warm-starts off a parent run via `--from-run-id`. Prior 34-cell `v12.0.X-Bootstrap-*` series ran fresh-init every cell — cluster Elo 850–1137, no compounding. New format: `v12.1.NN-Continue-<axis>-<cell>`.
