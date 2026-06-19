@@ -7416,3 +7416,7 @@ Worker unreachable (SSH network unreachable to 100.72.181.32). No cells to evalu
 ### Fire 221 — 2026-06-18 17:54 PT — STOP — PaulLinux still offline, 210th consecutive
 
 Worker unreachable (SSH network unreachable to 100.72.181.32). No cells to evaluate, no queue action. Next fire will retry.
+
+### Fire 223 — 2026-06-18 18:55 PT — STOP — PaulLinux still offline, 212th consecutive
+
+Worker unreachable (SSH network unreachable to 100.72.181.32). No cells to evaluate, no queue action. Next fire will retry.
