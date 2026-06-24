@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 301 — 2026-06-23 10:10 PM PDT — STOP — PaulLinux still offline, 290th consecutive
+
+Worker unreachable (SSH timeout to 100.72.181.32). No cells to evaluate, no queue action. Next fire will retry.
+
 ### Fire 300 — 2026-06-23 9:36 PM PDT — STOP — PaulLinux still offline, 289th consecutive
 
 Worker unreachable (ping 100% loss to 100.72.181.32). No cells to evaluate, no queue action. Next fire will retry.
