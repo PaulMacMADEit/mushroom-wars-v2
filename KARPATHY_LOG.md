@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 330 — 2026-07-03 2:58 PM PDT — STOP — PaulLinux still offline, 319th consecutive
+
+Worker unreachable (SSH operation timed out to 100.72.181.32). Supabase DNS NXDOMAIN (project zbqujavkizijhiveqoxv). Tailscale not running on Mac. No cells to evaluate, no queue action. Next fire will retry.
+
 ### Fire 329 — 2026-07-03 2:25 PM PDT — STOP — PaulLinux still offline, 318th consecutive
 
 Worker unreachable (SSH operation timed out to 100.72.181.32). No cells to evaluate, no queue action. Next fire will retry.
