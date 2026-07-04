@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 347 — 2026-07-04 11:00 AM PDT — STOP — PaulLinux still offline, 336th consecutive
+
+Worker unreachable (SSH to 100.72.181.32 timed out). Supabase pooler also rejecting (tenant not found, project likely paused). No cells to evaluate, no queue action. Next fire will retry.
+
 ### Fire 346 — 2026-07-04 9:55 AM PDT — STOP — PaulLinux still offline, 335th consecutive
 
 Worker unreachable (SSH to 100.72.181.32 timed out). No cells to evaluate, no queue action. Next fire will retry.
