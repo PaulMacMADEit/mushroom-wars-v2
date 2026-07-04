@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 342 — 2026-07-03 9:54 PM PDT — STOP — PaulLinux still offline, 331st consecutive
+
+Worker unreachable (SSH to 100.72.181.32 returns no output). Supabase DNS NXDOMAIN (project zbqujavkizijhiveqoxv paused/gone). No cells to evaluate, no queue action. Next fire will retry.
+
 ### Fire 339 — 2026-07-03 8:19 PM PDT — STOP — PaulLinux still offline, 328th consecutive
 
 Worker unreachable (SSH operation timed out to 100.72.181.32). No cells to evaluate, no queue action. Next fire will retry.
