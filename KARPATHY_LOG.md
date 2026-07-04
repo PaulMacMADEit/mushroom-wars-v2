@@ -7912,3 +7912,7 @@ Worker unreachable (SSH operation timed out to 100.72.181.32). No cells to evalu
 ### Fire 336 — 2026-07-03 18:11 PT — STOP — PaulLinux still offline, 325th consecutive
 
 Worker unreachable (SSH operation timed out to 100.72.181.32). No cells to evaluate, no queue action. Next fire will retry.
+
+### Fire 340 — 2026-07-03 20:50 PT — STOP — PaulLinux still offline, 329th consecutive
+
+Worker unreachable (SSH timeout to 100.72.181.32). Supabase DNS also NXDOMAIN from Mac — network issue broader than just Tailscale. No cells to evaluate, no queue action. Next fire will retry.
