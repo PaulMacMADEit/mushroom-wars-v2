@@ -8104,3 +8104,7 @@ Worker unreachable (SSH operation timed out to 100.72.181.32). No cells to evalu
 ### Fire 373 — 2026-07-05 05:15 PT — STOP — PaulLinux still offline, 362nd consecutive
 
 Worker unreachable (SSH operation timed out to 100.72.181.32). No cells to evaluate, no queue action. Next fire will retry.
+
+### Fire 384 — 2026-07-05 12:56 PT — STOP — PaulLinux still offline, 373rd consecutive
+
+Worker unreachable (SSH operation timed out to 100.72.181.32). No cells to evaluate, no queue action. Next fire will retry.
