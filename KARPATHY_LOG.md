@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 376 — 2026-07-05 7:24 AM PDT — STOP — PaulLinux still offline, 365th consecutive
+
+Worker unreachable (SSH to 100.72.181.32 timed out). Supabase project `zbqujavkizijhiveqoxv.supabase.co` returns NXDOMAIN via both Tailscale MagicDNS and Google 8.8.8.8 — project likely paused. No cells to evaluate, no queue action. Next fire will retry.
+
 ### Fire 375 — 2026-07-05 6:51 AM PDT — STOP — PaulLinux still offline, 364th consecutive
 
 Worker unreachable (SSH to 100.72.181.32 timed out). Additionally, Supabase project `zbqujavkizijhiveqoxv.supabase.co` returns NXDOMAIN via both local and Google DNS — project may be paused or deleted. No cells to evaluate, no queue action. Next fire will retry.
