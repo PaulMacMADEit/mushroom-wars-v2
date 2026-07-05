@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 358 — 2026-07-04 9:02 PM PDT — STOP — PaulLinux still offline, 347th consecutive
+
+Worker unreachable (SSH to 100.72.181.32 timed out). No cells to evaluate, no queue action. Next fire will retry.
+
 ### Fire 357 — 2026-07-04 8:29 PM PDT — STOP — PaulLinux still offline, 346th consecutive
 
 Worker unreachable (SSH to 100.72.181.32 timed out). Supabase DNS also unresolvable from Mac (curl returns 000). No cells to evaluate, no queue action. Next fire will retry.
