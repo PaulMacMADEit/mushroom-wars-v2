@@ -1,5 +1,13 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 390 — 2026-07-05 9:44 PM PDT — STOP — Supabase DNS down, karp timer inactive
+
+PaulLinux worker is **active** (SSH working again after 378 consecutive timeouts). However:
+1. Supabase DNS resolution fails from both Mac and PaulLinux (`zbqujavkizijhiveqoxv.supabase.co` → NXDOMAIN). Cannot query runs or queue cells.
+2. `mushroom-karp.timer` is **inactive** on PaulLinux — backstop not running.
+
+No queue action possible until Supabase resolves. Next fire will retry.
+
 ### Fire 389 — 2026-07-05 9:11 PM PDT — STOP — PaulLinux still offline, 378th consecutive
 
 Worker unreachable (SSH to 100.72.181.32 timed out). Additionally, Supabase project `zbqujavkizijhiveqoxv.supabase.co` returns NXDOMAIN on both Tailscale DNS (100.100.100.100) and Google DNS (8.8.8.8) — project may be paused/deleted for inactivity. No cells to evaluate, no queue action. Next fire will retry.
