@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 392 — 2026-07-05 10:47 PM PDT — STOP — Supabase DNS still down, karp timer still inactive
+
+PaulLinux worker **active**, `mushroom-karp.timer` **inactive**. Supabase `zbqujavkizijhiveqoxv.supabase.co` still returns no DNS records via Google 8.8.8.8. No queue action possible. Next fire will retry.
+
 ### Fire 391 — 2026-07-05 10:17 PM PDT — STOP — Supabase DNS still down, karp timer still inactive
 
 PaulLinux worker **active**, `mushroom-karp.timer` **inactive**. Supabase `zbqujavkizijhiveqoxv.supabase.co` still returns no DNS records via Google 8.8.8.8. No queue action possible. Next fire will retry.
