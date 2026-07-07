@@ -8272,3 +8272,7 @@ Worker unreachable (SSH operation timed out to 100.72.181.32). No cells to evalu
 ### Fire 408 — 2026-07-06 17:45 PT — STOP — Supabase DNS still down, worker back online
 
 Worker active on PaulLinux (SSH succeeded). Supabase pooler returns `ENOTFOUND tenant/user postgres.zbqujavkizijhiveqoxv not found` — can't query or queue. Karp timer inactive. Next fire will retry.
+
+### Fire 423 — 2026-07-07 02:11 PT — STOP — Supabase DNS still down, karp timer inactive
+
+Worker active on PaulLinux (SSH succeeded). Supabase `zbqujavkizijhiveqoxv.supabase.co` returns NXDOMAIN — can't query or queue. Karp timer inactive. Next fire will retry.
