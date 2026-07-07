@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 409 — 2026-07-06 6:16 PM PDT — STOP — Supabase DNS still down, karp timer inactive
+
+PaulLinux worker **active**, `mushroom-karp.timer` **inactive**. Supabase `zbqujavkizijhiveqoxv.supabase.co` still NXDOMAIN. 6th consecutive DNS-down fire (404-409). No queue action possible. Next fire will retry.
+
 ### Fire 407 — 2026-07-06 5:14 PM PDT — STOP — Supabase DNS still down, karp timer inactive
 
 PaulLinux worker **active**, `mushroom-karp.timer` **inactive**. Supabase `zbqujavkizijhiveqoxv.supabase.co` still NXDOMAIN via Google 8.8.8.8. No queue action possible. Next fire will retry.
