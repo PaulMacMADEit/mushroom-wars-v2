@@ -8212,3 +8212,7 @@ Worker unreachable (SSH operation timed out to 100.72.181.32). No cells to evalu
 ### Fire 388 — 2026-07-05 18:07 PT — STOP — PaulLinux still offline, 377th consecutive
 
 Worker unreachable (SSH operation timed out to 100.72.181.32). No cells to evaluate, no queue action. Next fire will retry.
+
+### Fire 408 — 2026-07-06 17:45 PT — STOP — Supabase DNS still down, worker back online
+
+Worker active on PaulLinux (SSH succeeded). Supabase pooler returns `ENOTFOUND tenant/user postgres.zbqujavkizijhiveqoxv not found` — can't query or queue. Karp timer inactive. Next fire will retry.
