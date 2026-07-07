@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 440 — 2026-07-07 4:09 PM PDT — STOP — Supabase DNS still down, karp timer inactive
+
+Supabase `zbqujavkizijhiveqoxv.supabase.co` still NXDOMAIN (Google 8.8.8.8). 51st consecutive DNS-down fire (390-440). Worker active on PaulLinux, karp timer inactive. No queue action possible. Next fire will retry.
+
 ### Fire 439 — 2026-07-07 3:38 PM PDT — STOP — Supabase DNS still down, karp timer inactive
 
 Supabase pooler returns `ENOTFOUND tenant/user postgres.zbqujavkizijhiveqoxv`. Worker active on PaulLinux, karp timer inactive. No queue action possible. Next fire will retry.
