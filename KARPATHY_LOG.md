@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 422 — 2026-07-07 1:40 AM PDT — STOP — Supabase DNS still down, karp timer inactive
+
+PaulLinux worker **active**, `mushroom-karp.timer` **inactive**. Supabase `zbqujavkizijhiveqoxv.supabase.co` still NXDOMAIN (Google 8.8.8.8). 33rd consecutive DNS-down fire (390-422). No queue action possible. Next fire will retry.
+
 ### Fire 421 — 2026-07-07 1:10 AM PDT — STOP — Supabase DNS still down, karp timer inactive
 
 PaulLinux worker **active**, `mushroom-karp.timer` **inactive**. Supabase `zbqujavkizijhiveqoxv.supabase.co` tenant not found (pooler FATAL ENOTFOUND). 32nd consecutive DNS-down fire (390-421). No queue action possible. Next fire will retry.
