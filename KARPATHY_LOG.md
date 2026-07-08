@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 453 — 2026-07-08 12:01 AM PDT — STOP — Supabase DNS still down, karp timer inactive
+
+Supabase `zbqujavkizijhiveqoxv.supabase.co` still NXDOMAIN (Google 8.8.8.8). 64th consecutive DNS-down fire (390-453). No queue action possible. Next fire will retry.
+
 ### Fire 452 — 2026-07-07 11:30 PM PDT — STOP — Supabase DNS still down, karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv.supabase.co` still NXDOMAIN (Google 8.8.8.8). 63rd consecutive DNS-down fire (390-452). No queue action possible. Next fire will retry.
