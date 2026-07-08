@@ -8372,3 +8372,7 @@ Worker active on PaulLinux (SSH succeeded). Supabase `zbqujavkizijhiveqoxv.supab
 ### Fire 424 — 2026-07-07 03:13 PT — STOP — Supabase DNS still down, karp timer inactive
 
 Worker active on PaulLinux (SSH succeeded). Supabase `zbqujavkizijhiveqoxv.supabase.co` returns NXDOMAIN — can't query or queue. Karp timer inactive. Next fire will retry.
+
+### Fire 446 — 2026-07-07 19:14 PT — STOP — Supabase DNS still down, karp timer inactive
+
+Worker active on PaulLinux (SSH succeeded). Supabase `zbqujavkizijhiveqoxv.supabase.co` returns NXDOMAIN from both Mac and PaulLinux — can't query or queue. Karp timer inactive. Next fire will retry.
