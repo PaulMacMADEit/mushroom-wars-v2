@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 460 — 2026-07-08 12:47 PM PDT — STOP — Supabase tenant gone, karp timer inactive
+
+Supabase `zbqujavkizijhiveqoxv.supabase.co` still NXDOMAIN. 71st consecutive DNS-down fire (390-460). No queue action possible. Next fire will retry.
+
 ### Fire 459 — 2026-07-08 12:16 PM PDT — STOP — Supabase tenant gone, karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv.supabase.co` still NXDOMAIN. 70th consecutive DNS-down fire (390-459). No queue action possible. Next fire will retry.
