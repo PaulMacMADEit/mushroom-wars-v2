@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 481 — 2026-07-09 08:39 AM PDT — STOP — Supabase tenant gone, karp timer inactive
+
+Supabase `zbqujavkizijhiveqoxv` pooler returning `ENOTFOUND tenant/user`. 91st consecutive down fire (390-481). Worker active on PaulLinux but no DB to queue against. Next fire will retry.
+
 ### Fire 480 — 2026-07-09 08:08 AM PDT — STOP — Supabase tenant gone, karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv.supabase.co` still NXDOMAIN (Google 8.8.8.8). 90th consecutive down fire (390-480). No queue action possible. Next fire will retry.
