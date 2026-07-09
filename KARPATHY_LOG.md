@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 483 — 2026-07-09 09:41 AM PDT — STOP — Supabase tenant gone, karp timer inactive
+
+Supabase `zbqujavkizijhiveqoxv` DNS unreachable (nodename nor servname). 93rd consecutive down fire (390-483). Worker active on PaulLinux but no DB to queue against. Next fire will retry.
+
 ### Fire 482 — 2026-07-09 09:10 AM PDT — STOP — Supabase tenant gone, karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv` DNS unreachable (ConnectError). 92nd consecutive down fire (390-482). Worker active on PaulLinux but no DB to queue against. Next fire will retry.
