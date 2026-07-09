@@ -8480,3 +8480,7 @@ Worker active on PaulLinux (SSH succeeded). Supabase `zbqujavkizijhiveqoxv.supab
 ### Fire 467 — 2026-07-08 22:58 PT — STOP — Supabase tenant gone, karp timer inactive
 
 Worker active on PaulLinux (SSH succeeded). Supabase `zbqujavkizijhiveqoxv.supabase.co` returns NXDOMAIN — can't query or queue. Karp timer inactive. Next fire will retry.
+
+### Fire 471 — 2026-07-09 02:55 PT — STOP — Supabase tenant gone, karp timer inactive
+
+Worker active on PaulLinux (SSH succeeded). Supabase pooler returns `ENOTFOUND tenant/user postgres.zbqujavkizijhiveqoxv not found` — can't query or queue. Karp timer inactive. Next fire will retry.
