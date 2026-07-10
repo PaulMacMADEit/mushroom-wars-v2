@@ -8628,3 +8628,7 @@ Supabase `zbqujavkizijhiveqoxv.supabase.co` DNS unresolvable (ConnectError). Kar
 ### Fire 498 — 2026-07-09 21:55 PT — STOP — Supabase tenant gone, karp timer inactive
 
 Supabase pooler `ENOTFOUND` for tenant `zbqujavkizijhiveqoxv`. Worker active on PaulLinux but DB unreachable — no runs can be queued or checked. Next fire will retry.
+
+### Fire 506 — 2026-07-10 13:40 PT — STOP — Supabase tenant gone + PaulLinux unreachable
+
+Supabase `zbqujavkizijhiveqoxv.supabase.co` DNS unresolvable (ConnectError: nodename nor servname provided). PaulLinux SSH timed out (100.72.181.32:22). Both blockers active — can't query, queue, or check worker. Next fire will retry.
