@@ -8592,3 +8592,7 @@ Worker active on PaulLinux (SSH succeeded). Supabase `zbqujavkizijhiveqoxv.supab
 ### Fire 494 — 2026-07-09 19:35 PT — STOP — Supabase tenant gone, karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv.supabase.co` DNS unresolvable (ConnectError). Karp timer inactive. Next fire will retry.
+
+### Fire 498 — 2026-07-09 21:55 PT — STOP — Supabase tenant gone, karp timer inactive
+
+Supabase pooler `ENOTFOUND` for tenant `zbqujavkizijhiveqoxv`. Worker active on PaulLinux but DB unreachable — no runs can be queued or checked. Next fire will retry.
