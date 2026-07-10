@@ -8632,3 +8632,7 @@ Supabase pooler `ENOTFOUND` for tenant `zbqujavkizijhiveqoxv`. Worker active on 
 ### Fire 506 — 2026-07-10 13:40 PT — STOP — Supabase tenant gone + PaulLinux unreachable
 
 Supabase `zbqujavkizijhiveqoxv.supabase.co` DNS unresolvable (ConnectError: nodename nor servname provided). PaulLinux SSH timed out (100.72.181.32:22). Both blockers active — can't query, queue, or check worker. Next fire will retry.
+
+### Fire 507 — 2026-07-10 15:54 PT — STOP — Supabase tenant gone + PaulLinux unreachable
+
+PaulLinux SSH timed out (100.72.181.32 and paullinux hostname both unreachable). Supabase tenant `zbqujavkizijhiveqoxv` still gone (NXDOMAIN persists). Both blockers active — can't query, queue, or check worker. Next fire will retry.
