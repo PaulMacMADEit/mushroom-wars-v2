@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 509 — 2026-07-10 11:42 PM PDT — STOP — Supabase tenant gone + PaulLinux unreachable
+
+Supabase `zbqujavkizijhiveqoxv` NXDOMAIN. PaulLinux SSH timed out. ~112th consecutive down fire. Next fire will retry.
+
 ### Fire 508 — 2026-07-10 11:12 PM PDT — STOP — Supabase tenant gone + PaulLinux unreachable
 
 Supabase `zbqujavkizijhiveqoxv` NXDOMAIN. ~111th consecutive down fire. Next fire will retry.
