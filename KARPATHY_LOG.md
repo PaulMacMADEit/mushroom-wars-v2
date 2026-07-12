@@ -8680,3 +8680,7 @@ Supabase `zbqujavkizijhiveqoxv.supabase.co` DNS unresolvable (ConnectError: node
 ### Fire 507 — 2026-07-10 15:54 PT — STOP — Supabase tenant gone + PaulLinux unreachable
 
 PaulLinux SSH timed out (100.72.181.32 and paullinux hostname both unreachable). Supabase tenant `zbqujavkizijhiveqoxv` still gone (NXDOMAIN persists). Both blockers active — can't query, queue, or check worker. Next fire will retry.
+
+### Fire 518 — 2026-07-12 13:23 PT — STOP — Supabase tenant gone + karp timer inactive
+
+Worker active on PaulLinux (SSH succeeded). Supabase `zbqujavkizijhiveqoxv.supabase.co` returns NXDOMAIN — tenant deleted/expired. Karp timer inactive. Can't query or queue. Next fire will retry.
