@@ -8740,3 +8740,7 @@ PaulLinux SSH timed out (100.72.181.32 and paullinux hostname both unreachable).
 ### Fire 518 — 2026-07-12 13:23 PT — STOP — Supabase tenant gone + karp timer inactive
 
 Worker active on PaulLinux (SSH succeeded). Supabase `zbqujavkizijhiveqoxv.supabase.co` returns NXDOMAIN — tenant deleted/expired. Karp timer inactive. Can't query or queue. Next fire will retry.
+
+### Fire 533 — 2026-08-06 12:22 PT — STOP — Supabase tenant gone + karp timer inactive
+
+Worker active on PaulLinux (SSH succeeded). Supabase `zbqujavkizijhiveqoxv.supabase.co` returns ConnectError (NXDOMAIN) — tenant deleted/expired. Karp timer inactive. Can't query or queue. Next fire will retry.
