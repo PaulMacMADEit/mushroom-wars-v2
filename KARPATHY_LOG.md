@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 530 — 2026-08-06 10:50 AM PDT — STOP — Supabase tenant gone + karp timer inactive
+
+Supabase `zbqujavkizijhiveqoxv` NXDOMAIN. ~133rd consecutive down fire. Next fire will retry.
+
 ### Fire 529 — 2026-07-12 8:04 PM PDT — STOP — Supabase tenant gone + karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv` NXDOMAIN. ~132nd consecutive down fire. Next fire will retry.
