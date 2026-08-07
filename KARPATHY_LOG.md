@@ -8908,3 +8908,7 @@ Worker active on PaulLinux (SSH succeeded). Supabase `zbqujavkizijhiveqoxv` pool
 ### Fire 561 — 2026-08-07 04:27 PT — STOP — Supabase tenant gone + karp timer inactive
 
 Worker active on PaulLinux (SSH succeeded). Supabase `zbqujavkizijhiveqoxv.supabase.co` returns ConnectError (NXDOMAIN) — tenant deleted/expired. Karp timer inactive. Can't query or queue. Next fire will retry.
+
+### Fire 573 — 2026-08-07 11:44 PT — STOP — Supabase tenant gone + karp timer inactive
+
+Supabase `zbqujavkizijhiveqoxv.supabase.co` returns ConnectError (nodename nor servname provided) — tenant still down. Can't query or queue. Next fire will retry.
