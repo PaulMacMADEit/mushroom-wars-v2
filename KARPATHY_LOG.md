@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 568 — 2026-08-07 9:08 AM PDT — STOP — Supabase tenant gone + karp timer inactive
+
+Worker active on PaulLinux (SSH succeeded). Supabase `zbqujavkizijhiveqoxv.supabase.co` returns ConnectError (NXDOMAIN) — tenant deleted/expired. Karp timer inactive. Can't query or queue. Next fire will retry.
+
 ### Fire 567 — 2026-08-07 8:37 AM PDT — STOP — Supabase tenant gone + karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv.supabase.co` NXDOMAIN (ConnectError). Worker active, karp timer inactive. Next fire will retry.
