@@ -8972,3 +8972,7 @@ Worker active on PaulLinux (SSH succeeded). Supabase `zbqujavkizijhiveqoxv.supab
 ### Fire 581 — 2026-08-07 15:52 PT — STOP — Supabase tenant gone + karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv.supabase.co` returns ConnectError (NXDOMAIN) — tenant deleted/expired. Can't query or queue. Next fire will retry.
+
+### Fire 589 — 2026-08-07 20:01 PT — STOP — Supabase tenant gone + karp timer inactive
+
+Supabase `zbqujavkizijhiveqoxv.supabase.co` returns NXDOMAIN — tenant deleted/expired. Karp timer inactive. Worker active but no DB. Can't query or queue. Next fire will retry.
