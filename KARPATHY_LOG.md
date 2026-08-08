@@ -9016,3 +9016,6 @@ Supabase `zbqujavkizijhiveqoxv.supabase.co` returns NXDOMAIN — tenant deleted/
 ### Fire 598 — 2026-08-08 00:42 PT — STOP — Supabase tenant gone + karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv` returns ENOTFOUND — tenant deleted/expired. Karp timer inactive. Worker active but no DB. Can't query or queue. Next fire will retry.
+
+### fire 599 — 2026-08-08 10:10 PT
+STOP — Supabase tenant gone (`zbqujavkizijhiveqoxv.supabase.co` DNS unresolvable) + karp timer inactive. Worker active. No change since fire 595–598.
