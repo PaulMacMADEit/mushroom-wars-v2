@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 654 — 2026-08-10 12:43 PM PDT — STOP — Supabase tenant gone + karp timer inactive
+
+Supabase `zbqujavkizijhiveqoxv` pooler returns `ENOTFOUND` (tenant not found). Worker active, karp timer inactive. Same as fires 649–653. Next fire will retry.
+
 ### Fire 653 — 2026-08-10 12:12 PM PDT — STOP — Supabase tenant gone + karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv` DNS unresolvable. Worker active, karp timer inactive. Next fire will retry.
