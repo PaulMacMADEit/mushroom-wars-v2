@@ -9191,3 +9191,7 @@ Supabase pooler returns `ENOTFOUND tenant/user postgres.zbqujavkizijhiveqoxv not
 ### Fire 620 — 2026-08-09 16:25 PT — STOP — Supabase tenant gone + karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv.supabase.co` returns ConnectError (NXDOMAIN) — tenant deleted/expired. Karp timer inactive. Worker active but no DB. Can't query or queue. Next fire will retry.
+
+### Fire 641 — 2026-08-10 04:17 PT — STOP — Supabase tenant gone + karp timer inactive
+
+Supabase `zbqujavkizijhiveqoxv.supabase.co` returns NXDOMAIN — tenant deleted/expired. Karp timer inactive. Worker active but no DB. Can't query or queue. Next fire will retry.
