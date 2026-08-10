@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 622 — 2026-08-09 5:27 PM PDT — STOP — Supabase tenant gone + karp timer inactive
+
+Supabase `zbqujavkizijhiveqoxv` ENOTFOUND (tenant not found). Worker active, karp timer inactive. Next fire will retry.
+
 ### Fire 621 — 2026-08-09 4:56 PM PDT — STOP — Supabase tenant gone + karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv` ENOTFOUND (tenant not found). Worker active, karp timer inactive. Next fire will retry.
