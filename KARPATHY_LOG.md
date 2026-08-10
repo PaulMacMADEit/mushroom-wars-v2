@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 651 — 2026-08-10 11:03 AM PDT — STOP — Supabase tenant gone + karp timer inactive
+
+Supabase `zbqujavkizijhiveqoxv` DNS unresolvable. Worker active, karp timer inactive. Next fire will retry.
+
 ### Fire 650 — 2026-08-10 10:01 AM PDT — STOP — Supabase tenant gone + karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv` DNS unresolvable. Worker active, karp timer inactive. Next fire will retry.
