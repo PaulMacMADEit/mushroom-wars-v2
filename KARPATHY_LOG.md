@@ -9351,3 +9351,7 @@ Supabase `zbqujavkizijhiveqoxv.supabase.co` returns ConnectError (NXDOMAIN) — 
 ### Fire 673 — 2026-08-11 12:18 PT — STOP — Supabase tenant gone + karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv.supabase.co` returns ConnectError (NXDOMAIN) — tenant gone. Karp timer inactive. Worker active but no DB. Can't query or queue. Next fire will retry.
+
+### Fire 678 — 2026-08-11 14:53 PT — STOP — Supabase tenant gone + karp timer inactive
+
+Supabase `zbqujavkizijhiveqoxv.supabase.co` returns ConnectError (NXDOMAIN) — tenant gone. Karp timer inactive. Worker active but no DB. Can't query or queue. Next fire will retry.
