@@ -1,5 +1,9 @@
 # Karpathy Loop — hyperparam sweep log
 
+### Fire 720 — 2026-08-13 11:21 PM PDT — STOP — Supabase tenant gone + karp timer inactive
+
+Supabase `zbqujavkizijhiveqoxv` DNS dead. Same as fires 552–719. Next fire will retry.
+
 ### Fire 719 — 2026-08-13 10:49 PM PDT — STOP — Supabase tenant gone + karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv` DNS dead. PaulLinux SSH timed out. Same as fires 552–718. Next fire will retry.
