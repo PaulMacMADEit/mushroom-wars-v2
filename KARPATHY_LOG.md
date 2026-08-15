@@ -1,5 +1,14 @@
 # Karpathy Loop — hyperparam sweep log
 
+### ESCALATED — Supabase tenant gone (zbqujavkizijhiveqoxv NXDOMAIN) | GitHub issue: PaulMacMADEit/mushroom-wars-v2#1
+
+- **First fire:** 552 (2026-08-06 22:44 PT)
+- **Last fire:** 723 (2026-08-15 03:13 PT)
+- **Count:** 172 consecutive STOPs
+- **Root cause:** Supabase tenant `zbqujavkizijhiveqoxv` deleted/expired — DNS returns NXDOMAIN. Loop cannot query or queue. Karp timer on PaulLinux also inactive.
+- **Human action required:** Provision new Supabase project, update `.env` + `configs/karpathy_loop.yaml`, re-install karp timer, run bootstrap cell.
+- **Worker:** active on PaulLinux (SSH OK, `mushroom-worker.service` active — only DB is dead)
+
 ### Fire 722 — 2026-08-15 03:11 AM PDT — STOP — Supabase tenant gone + karp timer inactive
 
 Supabase `zbqujavkizijhiveqoxv` DNS dead (ENOTFOUND). Worker active, karp timer inactive. Same as fires 552–721. Next fire will retry.
